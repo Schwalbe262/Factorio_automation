@@ -94,7 +94,7 @@ class DisposalOrderTests(unittest.TestCase):
         iron = furnace(unit=6, x=12, coal=5, **{"iron-ore": 10})
         state = dict(obs(0, copper, iron), inventory={"iron-ore": cs.allowance("iron-ore", CATALOG) + 60})
         action = self.surplus.step(state)
-        self.assertEqual((action["position"]["x"], action["inventory"], action["count"]), (12, "furnace_source", 40))
+        self.assertEqual((action["position"]["x"], action["inventory"], action["count"]), (12, "crafter_input", 40))
 
 
 class RetirementTripTests(unittest.TestCase):

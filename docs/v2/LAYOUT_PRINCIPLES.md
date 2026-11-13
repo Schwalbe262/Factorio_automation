@@ -22,6 +22,64 @@ Shape bounds (`cluster_audit`): at most `MAX_BELTS_PER_SLOT = 16` belts per
 built or reserved machine slot, and machine tiles (reserved slots counted) at
 least `MIN_DENSITY = 0.12` of the bounding box.
 
+## Belt lanes and bandwidth (`belt_flow.py`, `bandwidth_audit.py`)
+
+A belt is two lanes, each half the belt (yellow: 450 items/min per lane, 900 per belt). Where
+items join decides how many lanes they can use, so a plan's capacity is not "one belt" wherever
+a belt runs. Cause (owner, eval-4177156614, brick and steel blocks): raw and coal were each
+side-loaded onto one short belt and that belt entered a splitter, so each furnace row got half a
+lane of raw, a quarter belt: "splitting a half lane in half means only a quarter gets through".
+
+Rules of the flow model (`belt_flow.solve`, pure, on plan entities):
+
+| join | lanes |
+|---|---|
+| head-on (into the back of a belt, underground or splitter) | kept |
+| turn (a belt fed from one side and not from behind is a curve) | kept |
+| side-load (fed from a side while it has a back input, or from both sides) | both feeder lanes onto the target's near lane; straight traffic first, the side-load fills the rest |
+| underground pair | kept |
+| splitter | kept; per item even split between live outputs; a branch that takes less (declared demand x margin) leaves the rest to the other; an output with nothing behind it backs up; output priority fills first; a filter sends its item to the priority side |
+| inserter | picks from both lanes, drops on the far lane (`lanes.inserter_output_lane`) |
+| drill | drops on the near lane (prototype `vector_to_place_result`; unverified in game, irrelevant to capacity) |
+
+Not modelled, conservative: side-loading onto an underground (lane-filter trick) carries nothing
+and is reported `unmodelled_join`; belt loops are `belt_cycle`; a filtered item never overflows
+to the other side. The capacity is the steady state when every consumer draws at full speed.
+
+Findings (`bandwidth_findings`): `capacity_shortfall` / `single_lane_feed` (a consumer's line
+delivers less than its downstream demand x `MARGIN` 1.1; single lane when both lanes would
+have sufficed), `side_load_before_splitter` (a feeder with more than one lane of an item is
+side-loaded within `SIDE_LOAD_REACH` tiles before a splitter that splits it: half the feeder is
+lost and each branch gets half a lane), `lane_starvation` (the item reaches the consumer on
+neither lane), `unbalanced_lanes` (parallel belts of one flow). A side-load whose lane covers
+the demand is not a finding: one lane is all a consumer below half a belt needs.
+
+Audit (`bandwidth_audit.audit_root`, every plan with ports or consumers): furnace blocks and
+smelting banks (every furnace input inserter at full reserved growth: raw and coal per
+furnace), the bus with its taps (tap demand), produce rows and the green science cluster
+(their bus taps get the trunk from `trunk_side` when the trunk is not in their plan), mining
+banks with their trunk taps (serve-after taps pass the tap's `primary_demand` on first), the
+material-supply coal hub, the power coal feed and the wood feed. Input ports feed a full belt
+(the port's lane only when it declares one), drills their nominal rate. Results: the furnace
+plan record `bandwidth` (head choice, candidates, findings), the observe receipt
+`belt_bandwidth` (per block counts and findings, `counts_by_type`, `rework`) and the fleet
+report section "belt bandwidth findings" (count per block type).
+
+Generator (`planned_furnaces.head_choice`): the furnace block has two feed heads, the shared
+head of `smelting.paired_furnace_bank` and `split_feed_head` (raw split head-on first, each half
+side-loaded onto its row; coal likewise from the other side, one underground). Each is run
+through the flow model at full reserved growth and ranked by (shortfalls, wasted capacity,
+entities): the split head wins for steel (waste) and bricks (a row's six furnaces need the
+whole quarter belt, below the margin). Per row it delivers a full lane of raw and of coal.
+
+Existing blocks keep their head. Growth is guarded (`growth_evidence` ->
+`feed_head_bandwidth_below_next_slot_demand` when the flow model says the next slot would
+starve), and the receipt's `rework` lists built blocks below their demand (status `proposed`).
+Not built yet: the rework itself (republish the plan with the split head, build it beside the
+old head, move the feed, mine the old head while the rows keep their raw) and the smelting
+district banks, which use the same shared head (`smelting.paired_furnace_bank`; their
+iron/copper banks show the same finding at full growth).
+
 ## Rebuilding is allowed
 
 A built block is not frozen. Growth into reserved slots is the cheap default, but when the

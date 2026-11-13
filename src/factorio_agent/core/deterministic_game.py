@@ -718,7 +718,8 @@ if not e then return failure("target_missing") end
                 body += """
 local n=math.min(x.count or 1,inv.get_item_count(x.item))
 if n<=0 then return success{status="waiting",moved=0} end
-local dest=x.inventory and e.get_inventory(defines.inventory[x.inventory]) or nil
+-- an inventory name the game does not define (2.x renamed furnace_source to crafter_input) falls back to e.insert
+local dest=x.inventory and defines.inventory[x.inventory] and e.get_inventory(defines.inventory[x.inventory]) or nil
 local inserted=dest and dest.insert{name=x.item,count=n} or e.insert{name=x.item,count=n}
 if inserted>0 then inv.remove{name=x.item,count=inserted} end
 return success{status=inserted>0 and "succeeded" or "waiting",moved=inserted}
@@ -756,7 +757,7 @@ if e.type=="transport-belt" then
  return success{status=removed>0 and "succeeded" or "waiting",moved=removed}
 end
 local source=e.get_output_inventory()
-if x.inventory then source=e.get_inventory(defines.inventory[x.inventory]) end
+if x.inventory and defines.inventory[x.inventory] then source=e.get_inventory(defines.inventory[x.inventory]) end
 if not source then source=e.get_inventory(defines.inventory.chest) end
 if not source then return failure("no_output_inventory") end
 local removed=source.remove{name=x.item,count=n}

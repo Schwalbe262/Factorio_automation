@@ -28,6 +28,12 @@ furnace, i inserter, + pole, ``:`` reserved growth slot)::
     .......v.i..:..:..:..:..:.....
     .......>>>:::::::::::::::.....
 
+That is the shared feed head (raw and coal side-loaded onto one belt, then split: a quarter
+belt of raw per row). A new block takes the head the lane flow model rates best at full
+reserved growth (``head_choice``; ``split_feed_head`` splits raw and coal first and gives each
+row a full lane of both; docs/v2/LAYOUT_PRINCIPLES.md "Belt lanes and bandwidth"). Growth stops
+where the head cannot feed the next slot (``feed_shortfalls``).
+
 Site: one ``SiteService`` district block ``LENGTH`` along the bus by 12 deep
 (``returns_to_bus=True``: the product leaves at the downstream end on the bus
 edge, ready for a later steel bus lane), turned with ``site.fit.orientations``
@@ -76,7 +82,9 @@ from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 
 from . import planned_tap
-from .board import blocks_without_bus, hardware_conflicts, planned_unbuilt_hardware
+from .bandwidth_audit import SHORTFALL as BANDWIDTH_SHORTFALL
+from .bandwidth_audit import furnace_bank, rated_per_furnace
+from .board import blocks_without_bus, entity, hardware_conflicts, planned_unbuilt_hardware
 from .planning import overlap, preflight
 from .power_grid import plan_connection as power_connection
 from .site.fit import orientations
@@ -90,6 +98,7 @@ from .smelting import (
     merge_entities,
     native_feed_lanes,
     paired_furnace_bank,
+    port,
 )
 from .steel_production import IDLE_FURNACE_WITNESS_LUA, automatic_furnace_witness, smelting_rates
 from .transport import plan_connection, underground_proof, xy
@@ -123,12 +132,120 @@ KINDS = {
 GEOMETRY = FactoryBuilder.__new__(FactoryBuilder)
 
 
-def furnace_block(kind: Kind, x0: int, y0: int, per_row: int = START_PER_ROW) -> dict:
-    """Canonical block: the paired bank with ``kind``'s recipe and its reserved area (module doc)."""
+HEAD_COLUMNS = 8  # canonical columns x0 .. x0 + 7 hold the feed head; slot belts start at x0 + 8
+
+
+def _belt(x0, y0, x, y, direction):
+    return entity("transport-belt", x0 + x + 0.5, y0 + y + 0.5, direction)
+
+
+def split_feed_head(x0: int, y0: int) -> tuple[list, dict, list]:
+    """Feed head that halves each input once: ``(entities, coal port, underground pairs)``.
+
+    The shared head of ``paired_furnace_bank`` side-loads raw and coal onto one short belt
+    and then splits it, so each row gets half a lane of raw (a quarter belt). This head
+    splits the raw belt first (both lanes, head-on), then side-loads each half onto its
+    row's input belt (the near lane takes up to a full lane), and does the same with coal
+    from the other side; one underground carries the upper row's coal under the lower
+    input row. Canonical frame (R raw port, C coal port facing north, S splitter, U/u
+    underground in/out, row input belts continue at x0 + 8)::
+
+        R S > > > > > v
+        . S > > > v > >    <- upper input row: x0 + 6 stub, both side-loads at x0 + 7
+        . . . . . v > ^
+        . . . . . v ^ .
+        . . . . . v u .
+        . . . . > > > v    <- lower input row head: x0 + 4 stub, both side-loads at x0 + 5
+        . . . . . ^ . v
+        . . . . . ^ U v
+        . . . . . S S v
+        . . . . . ^ . v
+        . . . . . ^ . v
+        . . . . . C . >    -> lower input row (x0 + 8 ..)
+
+    Lanes match the shared head: raw on the left lane, coal on the right lane of both rows.
+    """
+    E, S, N = 4, 8, 0
+    tiles = [((0, 0), E), *(((x, 0), E) for x in range(2, 7)), ((7, 0), S)]  # raw port, branch A
+    tiles += [((2, 1), E), ((3, 1), E), ((4, 1), E), ((5, 1), S), ((5, 2), S), ((5, 3), S), ((5, 4), S)]  # branch B
+    tiles += [((6, 1), E), ((7, 1), E)]  # upper input row: stub, double side-load
+    tiles += [((4, 5), E), ((5, 5), E), ((6, 5), E), ((7, 5), S)]  # lower input row: stub, double side-load, curve
+    tiles += [((7, y), S) for y in range(6, 11)] + [((7, 11), E)]
+    tiles += [((5, 11), N), ((5, 10), N), ((5, 9), N), ((5, 7), N), ((5, 6), N)]  # coal port, coal to the lower row
+    tiles += [((6, 3), N), ((6, 2), E), ((7, 2), N)]  # coal to the upper row, after the underground
+    es = [_belt(x0, y0, x, y, d) for (x, y), d in tiles]
+    es += [
+        dict(entity("splitter", x0 + 1.5, y0 + 1.0, E), _width=2, _height=1),  # raw: tiles (1,0), (1,1)
+        dict(entity("splitter", x0 + 6.0, y0 + 8.5, N), _width=2, _height=1),  # coal: tiles (5,8), (6,8)
+        dict(entity("underground-belt", x0 + 6.5, y0 + 7.5, N), belt_to_ground_type="input"),
+        dict(entity("underground-belt", x0 + 6.5, y0 + 4.5, N), belt_to_ground_type="output"),
+    ]
+    pairs = [{"input": [x0 + 6.5, y0 + 7.5], "output": [x0 + 6.5, y0 + 4.5], "direction": N, "span": 3}]
+    return es, port("coal", x0 + 5.5, y0 + 11.5, N), pairs
+
+
+def furnace_block(kind: Kind, x0: int, y0: int, per_row: int = START_PER_ROW, head: str = "shared") -> dict:
+    """Canonical block: the paired bank with ``kind``'s recipe and its reserved area (module doc).
+
+    ``head`` "split" replaces the bank's shared feed head by ``split_feed_head``; which head
+    a new block gets is decided by the flow model (``head_choice``)."""
     bank = paired_furnace_bank(x0, y0, per_row, kind.raw, slots=SLOTS, length=LENGTH, product=kind.product)
+    if head == "split":
+        es, coal, pairs = split_feed_head(x0, y0)
+        kept = [
+            e
+            for e in bank["entities"]
+            if not (e["name"] in ("transport-belt", "splitter") and e["position"]["x"] < x0 + HEAD_COLUMNS)
+        ]
+        bank["entities"] = kept + es
+        bank["ports"] = [bank["ports"][0], coal, bank["ports"][2]]
+        bank["underground_pairs"] = pairs
+        bank["required_items"] = _plan(bank["entities"], [])["required_items"]
+    elif head != "shared":
+        raise ValueError(f"unknown furnace feed head {head!r}")
+    bank["feed_head"] = head
     bank["reserved_area"] = [[x0, y0], [x0 + LENGTH, y0 + BANK_DEPTH]]
     bank["kind"] = kind.name
     return bank
+
+
+def head_bandwidth(kind: Kind, rates: dict, head: str) -> dict:
+    """Flow-model audit of one feed head at full reserved growth (every slot built)."""
+    bank = furnace_block(kind, 0, 0, SLOTS, head)
+    count = max(1, int(rates.get("furnace_count") or 1))
+    return furnace_bank(
+        bank["entities"],
+        bank["ports"],
+        raw=kind.raw,
+        raw_per_furnace=float(rates["raw_per_minute"]) / count,
+        coal_per_furnace=float(rates.get("coal_per_minute_at_max_catalog_usage") or 0) / count,
+        product=kind.product,
+        product_per_furnace=float(rates.get("product_per_minute") or 0) / count,
+    )
+
+
+def head_choice(kind: Kind, rates: dict) -> dict:
+    """The feed head whose flow model meets the full block's demand x margin without waste.
+
+    Ranked by (shortfalls, wasted capacity findings, entities): the split head wins whenever
+    the shared head halves a lane twice; the shared head stays the choice only if the split
+    head is no better by the flow model.
+    """
+    rows = []
+    for head in ("shared", "split"):
+        audit = head_bandwidth(kind, rates, head)
+        counts = audit["counts"]
+        rows.append(
+            {
+                "head": head,
+                "shortfalls": sum(counts.get(k, 0) for k in BANDWIDTH_SHORTFALL),
+                "waste": counts.get("side_load_before_splitter", 0),
+                "entities": len(furnace_block(kind, 0, 0, START_PER_ROW, head)["entities"]),
+                "counts": counts,
+            }
+        )
+    best = min(rows, key=lambda r: (r["shortfalls"], r["waste"], r["entities"]))
+    return {"head": best["head"], "candidates": rows}
 
 
 def _taken(board: dict, position, owner: str) -> bool:
@@ -204,11 +321,32 @@ def growth_evidence(state: dict, obs: dict) -> dict:
         return {"grow": False, "reason": "raw_supply_not_backed_up"}
     if on_belt(out_port, product) >= BELT_BACKUP:
         return {"grow": False, "reason": "product_not_taken"}
+    short = feed_shortfalls(state, bank["per_side_count"] + 1)
+    if short:
+        # The head cannot feed one more furnace per row (belt_flow): rework the head first
+        # (observe receipt belt_bandwidth.rework) instead of building furnaces that would starve.
+        return {"grow": False, "reason": "feed_head_bandwidth_below_next_slot_demand", "findings": short[:4]}
     return {
         "grow": True,
         "reason": "busy_furnaces_backed_up_raw_and_taken_product",
         "per_row": bank["per_side_count"] + 1,
     }
+
+
+def feed_shortfalls(state: dict, per_row: int) -> list:
+    """Flow-model shortfalls of the saved block with ``per_row`` furnaces built per row."""
+    bank = grown_bank(state["bank"], min(per_row, state["bank"]["capacity_slots"]))
+    raw, coal, made = rated_per_furnace(state)
+    audit = furnace_bank(
+        bank["entities"],
+        bank["ports"],
+        raw=bank["resource"],
+        raw_per_furnace=raw,
+        coal_per_furnace=coal,
+        product=bank.get("product"),
+        product_per_furnace=made,
+    )
+    return [f for f in audit["findings"] if f["kind"] in BANDWIDTH_SHORTFALL]
 
 
 def furnace_rate(state: dict) -> float:
@@ -392,8 +530,10 @@ class PlannedFurnaces:
         others = blocks_without_bus(board)
         unbuilt = planned_unbuilt_hardware(GEOMETRY, obs, others, exclude=(kind.owner,))
 
+        choice = head_choice(kind, rates)  # by the flow model at full reserved growth (belt_flow)
+
         def build(x0, y0):
-            return furnace_block(kind, x0, y0)
+            return furnace_block(kind, x0, y0, head=choice["head"])
 
         failures = []
         for block in blocks:
@@ -419,13 +559,37 @@ class PlannedFurnaces:
                         i["amount"] for i in self.catalog.recipes[kind.product]["ingredients"] if i["name"] == kind.raw
                     ),
                     "per_row": START_PER_ROW,
+                    "bandwidth": {
+                        **choice,
+                        "findings": head_bandwidth(kind, rates, choice["head"])["findings"],
+                        "scope": "canonical block at full reserved growth through belt_flow",
+                    },
                     "phase": "planned",
                 }
         settle(self.site, obs["world_id"], kind.owner, None)
+        rows = [
+            {k: f[k] for k in ("allocation", "reason", "item", "detail", "port", "escape") if f.get(k) is not None}
+            for f in failures
+        ]
+        # One row per allocation and reason (both turns usually fail alike), so the
+        # job ledger shows which connection fails on every candidate.
+        distinct = [r for i, r in enumerate(rows) if r not in rows[:i]][:8]
         return self._fail(
             f"no_{kind.name}_furnace_block_with_complete_connections",
             candidates=len(blocks),
-            failures=[{k: f.get(k) for k in ("allocation", "reason", "item", "detail")} for f in failures[-6:]],
+            failures=distinct,
+            evidence={
+                "kind": kind.name,
+                "candidates": len(blocks),
+                "failures": distinct,
+                "sources": {
+                    role: {"key": key, **sources[role]["position"]}
+                    for role, key in (("raw", kind.raw_key), ("coal", kind.coal_key))
+                    if key is not None and role in sources
+                },
+                # Facts whose change can turn a failure into a plan (supervisor retry rule).
+                "retry_when": ["material source published or moved", "neighbour plan built", "free site"],
+            },
         )
 
     def _connect(self, obs, board, bus, block, bank, sources, span, rates, others, unbuilt) -> dict:
@@ -470,7 +634,7 @@ class PlannedFurnaces:
             raw_from = sources["raw"]
             raw_route = self.route(self.game, self.builder, obs, raw_from, raw_port, entities + keepouts)
             if not raw_route.get("ok"):
-                return {"ok": False, "reason": raw_route.get("reason", "route_failed"), "item": kind.raw}
+                return _route_failure(raw_route, kind.raw)
             entities = merge_entities(entities, raw_route["entities"])
             used["raw"] = _source_record(kind.raw_key, raw_from)
         routes.append(raw_route)
@@ -480,7 +644,7 @@ class PlannedFurnaces:
             self.game, self.builder, obs, coal_from, coal_port, entities + keepouts, ignored_units=tuple(ignored)
         )
         if not coal_route.get("ok"):
-            return {"ok": False, "reason": coal_route.get("reason", "route_failed"), "item": "coal"}
+            return _route_failure(coal_route, "coal")
         routes.append(coal_route)
         entities = merge_entities(entities, coal_route["entities"])
         connections.append(_connection("coal", coal_from, coal_port, kind.owner))
@@ -519,7 +683,7 @@ class PlannedFurnaces:
             entities,
             [raw_port, coal_port, out_port],
             reserved_area=bank["reserved_area"],
-            underground_pairs=pairs + planned_tap.tap_pairs(taps),
+            underground_pairs=pairs + planned_tap.tap_pairs(taps) + list(bank.get("underground_pairs", [])),
             layout_policy=LAYOUT_POLICY,
             recipe=kind.product,
             product=kind.product,
@@ -824,6 +988,15 @@ class PlannedFurnaces:
             "coal_on_port_belt": items["coal"],
             "scope": "registered coal outlet feeds the furnace block's coal port; no sustained rate",
         }
+
+
+def _route_failure(route: dict, item: str) -> dict:
+    """A failed route as a candidate failure row (reason, item and a sealed port's escape tile)."""
+    row = {"ok": False, "reason": route.get("reason", "route_failed"), "item": item}
+    for key in ("port", "escape"):
+        if route.get(key) is not None:
+            row[key] = route[key]
+    return row
 
 
 def _connection(item, source, destination, owner) -> dict:

@@ -8,6 +8,13 @@ from pathlib import Path
 import re
 from factorio_agent.core.deterministic_state import _atomic_json
 
+# Science pack -> the capability whose block supplies it to the labs automatically.
+PACK_PRODUCERS = {
+    "automation-science-pack": "automation_science",
+    "logistic-science-pack": "logistic_science",
+    "chemical-science-pack": "chemical_science",
+}
+
 
 def validate_parameters(parameters):
     if not isinstance(parameters, dict) or set(parameters) != {"technology"}:
@@ -106,11 +113,37 @@ class NormalResearch:
         if unsupported:
             # The pack's permanent factory is a later roadmap step; wait for it
             # instead of blocking (seed 4176033748: four research steps blocked
-            # before green science existed).
+            # before green science existed). The evidence names the missing
+            # producer block, so the stall says what has to be built.
+            missing = sorted(unsupported)
+            producers = {
+                "logistic-science-pack": getattr(self, "green", None),
+                "chemical-science-pack": getattr(self, "blue", None),
+            }
+            if any(not getattr(producers.get(p), "state", None) for p in missing):
+                # No block for the pack exists at all: the job yields the research lane
+                # (eval-4177156614: advanced-material-processing held it for an hour while
+                # no green block was even proposed). The supervisor retries it once the
+                # producer succeeds (RETRY_CLEARED_BY).
+                return {
+                    "status": "blocked",
+                    "reason": "research_pack_producer_missing",
+                    "packs": missing,
+                    "evidence": {
+                        "technology": name,
+                        "packs": missing,
+                        "producers": sorted({PACK_PRODUCERS.get(p, "unknown") for p in missing}),
+                    },
+                }
             return {
                 "status": "waiting",
                 "reason": "waiting_for_science_pack_supply",
-                "packs": sorted(unsupported),
+                "packs": missing,
+                "evidence": {
+                    "technology": name,
+                    "packs": missing,
+                    "producers": sorted({PACK_PRODUCERS.get(p, "unknown") for p in missing}),
+                },
             }
         supply = self.science.proof(obs)
         if not supply:

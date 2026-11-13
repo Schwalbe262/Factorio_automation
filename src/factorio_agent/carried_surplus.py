@@ -148,7 +148,7 @@ def consumers(obs, item, catalog, excluded=frozenset()) -> list[dict]:
                 continue  # smelting something else
             if any(n and k != ORE_PLATE[item] for k, n in (e.get("output_inventory") or {}).items()):
                 continue  # another product would block the output
-            rank, inventory, room = 0, "furnace_source", stack - int(held.get(item, 0))
+            rank, inventory, room = 0, "crafter_input", stack - int(held.get(item, 0))
         else:
             continue
         if room >= min(MIN_GIVE, stack):  # never trickle 1-2 items into a nearly full slot

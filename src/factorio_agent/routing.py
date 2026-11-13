@@ -7,6 +7,13 @@ from bisect import bisect_left
 
 
 VECTORS = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
+# Long-route fallback (route_trunks): routes at least LONG_ROUTE_DISTANCE tiles apart
+# (Manhattan) that no skeleton family fits may take the fewest-turn corridor with up to
+# LONG_ROUTE_TURNS turns; LONG_ROUTE_ALTERNATIVES corridors are offered to the validator.
+LONG_ROUTE_DISTANCE = 96
+LONG_ROUTE_TURNS = 10
+LONG_ROUTE_ALTERNATIVES = 6
+LONG_ROUTE_STATE_BUDGET = 400000
 
 
 def point(value):
@@ -43,6 +50,102 @@ def metrics(path):
         "manhattan_distance": direct,
         "detour_ratio": length / direct if direct else 1.0,
     }
+
+
+def _segments(path, start_direction, end_direction):
+    segments = []
+    for index, (x, y) in enumerate(path):
+        direction = end_direction
+        if index + 1 < len(path):
+            nx, ny = path[index + 1]
+            direction = next(d for d, v in VECTORS.items() if v == (round(nx - x), round(ny - y)))
+        elif direction is None:
+            direction = segments[-1]["direction"] if segments else start_direction or 0
+        segments.append({"position": {"x": x, "y": y}, "direction": direction})
+    return segments
+
+
+def _fewest_turns(a, b, blocked, limits, start_direction, end_direction, max_turns, max_length):
+    """One fewest-turn (then shortest) tile path from ``a`` to ``b`` over free cells, or None.
+
+    The first step leaves ``a`` along ``start_direction`` and the last step enters
+    ``b`` along ``end_direction`` (either may be None: any heading). No U-turns,
+    no repeated tile; at most ``max_turns`` turns and ``max_length`` steps.
+    """
+    import heapq
+
+    def free(n):
+        return n == b or (
+            n not in blocked
+            and limits["min_x"] <= n[0] <= limits["max_x"]
+            and limits["min_y"] <= n[1] <= limits["max_y"]
+        )
+
+    starts = [start_direction] if start_direction is not None else list(VECTORS)
+    heap, parent, cost, done = [], {}, {}, set()
+    for d in starts:
+        n = (a[0] + VECTORS[d][0], a[1] + VECTORS[d][1])
+        if free(n):
+            parent[(n, d)], cost[(n, d)] = None, (0, 1)
+            heapq.heappush(heap, (0, 1, n, d))
+    popped = 0
+    while heap:
+        turns, length, cell, d = heapq.heappop(heap)
+        if (cell, d) in done or cost[(cell, d)] != (turns, length):
+            continue
+        done.add((cell, d))
+        popped += 1
+        if popped > LONG_ROUTE_STATE_BUDGET:
+            return None
+        if cell == b:
+            if end_direction is not None and d != end_direction:
+                continue
+            path, state = [], (cell, d)
+            while state is not None:
+                path.append(state[0])
+                state = parent[state]
+            return [a] + path[::-1]
+        for nd, (vx, vy) in VECTORS.items():
+            if nd == (d + 8) % 16:
+                continue
+            t = turns + (nd != d)
+            n = (cell[0] + vx, cell[1] + vy)
+            if t > max_turns or length + 1 > max_length or (n, nd) in done or not free(n):
+                continue
+            if cost.get((n, nd), (math.inf, math.inf)) <= (t, length + 1):
+                continue
+            parent[(n, nd)], cost[(n, nd)] = (cell, d), (t, length + 1)
+            heapq.heappush(heap, (t, length + 1, n, nd))
+    return None
+
+
+def min_turn_paths(a, b, blocked, limits, start_direction, end_direction, max_turns, max_length):
+    """Up to ``LONG_ROUTE_ALTERNATIVES`` distinct fewest-turn corridors (generator).
+
+    After each corridor the middle tile of its longest straight run is closed,
+    so the next one takes another channel. Paths that revisit a tile are skipped.
+    """
+    closed = set(blocked)
+    for _ in range(LONG_ROUTE_ALTERNATIVES):
+        path = _fewest_turns(a, b, closed, limits, start_direction, end_direction, max_turns, max_length)
+        if path is None:
+            return
+        if len(set(path)) == len(path):
+            yield path
+        runs, start = [], 0
+        for i in range(1, len(path) - 1):
+            if (path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1]) != (
+                path[i][0] - path[i - 1][0],
+                path[i][1] - path[i - 1][1],
+            ):
+                runs.append((start, i))
+                start = i
+        runs.append((start, len(path) - 1))
+        lo, hi = max(runs, key=lambda r: r[1] - r[0])
+        middle = path[(lo + hi) // 2]
+        if middle in (a, b):
+            return
+        closed.add(middle)
 
 
 def clearance_lanes(blocked, a, b, limits):
@@ -332,6 +435,7 @@ def route_trunks(
     grid_pitch=8,
     candidate_validator=None,
     minimum_start_run=None,
+    long_route_turns=None,
 ):
     """Select whole straight trunk corridors, never incremental squiggles.
 
@@ -341,6 +445,10 @@ def route_trunks(
     Survey/clearance and underground-layer planning are separate responsibilities.
     minimum_start_run optionally rejects a short first straight segment before
     expansion; it grants no obstacle, heading, quality or budget exemption.
+    long_route_turns (opt-in, ``transport.plan_connection``): when no family fits a
+    route of at least LONG_ROUTE_DISTANCE tiles, the fewest-turn tile corridors
+    (``min_turn_paths``, at most that many turns, same detour bound) are offered to
+    the validator; a cross-base route can need more corners than seven segments.
     """
     failure = {"ok": False, "reason": "no_clean_trunk_corridor", "path": [], "segments": [], "visited": 0}
     try:
@@ -603,6 +711,28 @@ def route_trunks(
                             continue
                     valid.append(((m["turns"], m["length"], tuple(path)), path, m))
             if valid:
+                break
+        if not valid and long_route_turns is not None and direct >= LONG_ROUTE_DISTANCE and minimum_start_run is None:
+            # A long cross-base route can need more corners than the seven-segment
+            # skeleton families describe (stone bank north of the district, furnace
+            # block south of the bus: 7 turns). Fall back to the fewest-turn whole
+            # corridor; the same hard-obstacle, detour and crossing-layer gates apply.
+            for path in min_turn_paths(
+                a,
+                b,
+                blocked,
+                limits,
+                start_direction,
+                end_direction,
+                long_route_turns,
+                max_detour_ratio * direct + 4,
+            ):
+                m = metrics(path)
+                segments = _segments(path, start_direction, end_direction)
+                if candidate_validator and not candidate_validator({"ok": True, "segments": segments, "metrics": m}):
+                    rejected_skeletons += 1
+                    continue
+                valid.append(((m["turns"], m["length"], tuple(path)), path, m))
                 break
         if not valid:
             return {**failure, "visited": visited, "rejected_skeletons": rejected_skeletons}

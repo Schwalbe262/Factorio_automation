@@ -7,6 +7,12 @@ tuning = change the dataclass default and the test that pins it.
 ## Roadmap autopilot (`progression.py`)
 
 - `Supervisor._autopilot`: when < `LOW_QUEUE = 2` nodes pending/ready, <= `AUTOPILOT_LIMIT = 3` nodes (`supervisor.py:47`).
+  Nodes whose admission lane an active job holds do not count (`WorkQueue.queued_count(busy_lanes)`):
+  research nodes behind a waiting research job never hold the roadmap (eval-4177156614 froze 20+ min).
+- A research step whose technology needs a pack (other than red) whose producer
+  (`normal_research.PACK_PRODUCERS`, e.g. `logistic_science`) has no succeeded job is not
+  proposed (`progression._packs_unsupplied`); the producer is its own earlier step. A research
+  job that still waits names the packs and producers in its evidence.
 - Order inside `autopilot_nodes`: capacity nodes, then produce nodes, then the
   supply cell node, then `ROADMAP` steps; all count toward the limit.
 - Priorities: capacity `CAPACITY_PRIORITY = -50`, produce `PRODUCE_PRIORITY = -51`,
@@ -303,7 +309,7 @@ allowance(i)   coal: boiler_sizing target + FUEL_FETCH (one boiler fill + one bu
 surplus(i)     carried(i) - allowance(i); acts once >= SURPLUS_STACKS (1) catalog stacks
 upkeep         CarriedSurplus.step, first in starter_upkeep and after the boiler in idle_action: one paid action
   a consumer   insert up to the slot: fuel -> boiler, burner drill, smelting furnace (nearest within rank);
-               ore -> furnace_source of a fuelled furnace smelting that ore with no other product;
+               ore -> crafter_input of a fuelled furnace smelting that ore with no other product;
                never a retiring cell (StarterRetirement.cell_keys) or a stuck entity (STUCK statuses)
                wood: boiler (slot empty or wood) -> wood feed chest -> burner drill -> furnace
   b depot      deposit into a paid storage chest registered by InventoryStorage (inventory-storage.json)
