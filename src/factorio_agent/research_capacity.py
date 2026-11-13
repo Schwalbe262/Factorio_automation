@@ -272,10 +272,20 @@ def _add(cost: dict[str, float], extra: Mapping[str, float], times: float) -> No
             cost[name] = cost.get(name, 0.0) + times * value
 
 
+# Hand-gathered inputs (a tree gives 4 wood), as capacity_planning and throughput_growth price them.
+HAND_GATHERED_SECONDS = {"wood": 2.0}
+
+
 def _fund(cost: Mapping[str, float], evidence: Mapping) -> float:
     longest = 0.0
     for item, amount in cost.items():
         row = evidence.get(item)
+        if item in HAND_GATHERED_SECONDS:
+            # Wood has no producer: the actor gathers what the stock does not cover (a pole's wood made
+            # every science expansion "unfundable" once the carried wood had been burned).
+            stock = stock_on_hand(row) if isinstance(row, Mapping) else 0.0
+            longest = max(longest, max(0.0, amount - stock) * HAND_GATHERED_SECONDS[item])
+            continue
         if not isinstance(row, Mapping):
             return math.inf if amount > 0 else longest
         longest = max(longest, fund_seconds(amount, stock_on_hand(row), finite_number(row.get("produced_per_minute"))))
