@@ -32,13 +32,24 @@ Not yet: a later trunk on a reserved lane must pass under existing taps'
 splitter / branch tiles on that lane; ``planned_bus.trunk_plan`` only crosses
 plain belts, so building more lanes needs that rule first.
 
+Splitter priorities (``planned_bus.tap_priorities``): output priority to the
+branch, input priority none (one input). The side is derived from the
+splitter's facing and the tap port, so it holds for every bus direction and
+side. The consumer takes what its machines use, up to the whole lane; only the
+surplus continues down the bus. ``cutover`` configures each built tap splitter
+(``configure_splitter``, idempotent) before it returns None, also for taps
+built before this rule.
+
 Supply rule (``tap_budget``): a trunk carries the district's nominal plate
 supply; every tap records its consumer's declared ``demand_per_minute``. A
 new consumer may plan with ``max(nominal - sum(other taps' demand),
-nominal / 2)`` (an even splitter hands its branch at least half of what
-reaches it); it sizes its machine count down to that. With more than two
-taps per material declared demand can exceed the trunk; consumers then run
-below nameplate, which ``tools/report_run.py`` measures.
+nominal / 2)`` and sizes its machine count down to that. While declared
+demand stays within the trunk, branch priority hands every tap its full
+demand wherever it sits on the bus. The half floor is only an
+over-subscription allowance, not a guarantee: with branch priority the taps
+upstream are served first and a downstream consumer gets the rest (an even
+splitter, such as the district's green branch without a bus, does hand half).
+Consumers then run below nameplate, which ``tools/report_run.py`` measures.
 
 State: taps live in ``planned-main-bus.json`` ``taps`` (full records) and in
 ``board["shared_main_bus"]`` (``stations``, tap ``ports``, entities, pairs),
@@ -55,6 +66,7 @@ from pathlib import Path
 from .board import blocks_without_bus, entity, foreign_belts, surface_conflict
 from .core.deterministic_builder import _plan
 from .core.deterministic_state import _atomic_json
+from .planned_bus import branch_priorities, configure_action, tap_priorities
 from .site.busframe import Bus, compass_of, right_of
 from .smelting import merge_entities
 from .transport import compile_crossings, plan_connection, xy
@@ -103,7 +115,11 @@ def claimed(bus: dict, item: str, *, owner: str) -> float:
 
 
 def tap_budget(nominal: float, others: float) -> float:
-    """Plates/minute a new tap may plan with (module doc, supply rule)."""
+    """Plates/minute a new tap may plan with (module doc, supply rule).
+
+    ``nominal - others`` is what branch-priority taps guarantee; the half floor is
+    an over-subscription allowance (a guarantee only behind an even splitter).
+    """
     return max(nominal - others, nominal / 2)
 
 
@@ -264,6 +280,8 @@ def layout(view: BusView, item: str, side: str, along: int, *, span: int, foreig
         "facing": out,
         "direction": "output",
     }
+    # Same dict as in ``entities``: the spec carries the wanted native priorities.
+    splitter.update(branch_priorities(splitter, port["position"]))
     return {
         "ok": True,
         "item": item,
@@ -510,15 +528,17 @@ def cutover(root, builder, obs, taps, *, clear_obstacles=()) -> dict | None:
 
     Every new tap item is in the inventory before the first trunk belt is
     mined, so the trunk is interrupted only for the mine and build actions.
+    A built tap splitter then gets its native priorities (``configure``);
+    None only once every tap stands and is configured.
     """
     pending = [t for t in taps if not t.get("built")]
     if not pending:
-        return None
+        return configure(builder, obs, taps)
     if _present(obs, pending):
         for tap in pending:
             tap["built"] = True
         _mark_built(root, obs["world_id"], pending)
-        return None
+        return configure(builder, obs, taps)
     live = {(e["name"], *xy(e)): e for e in obs["entities"]}
     missing = Counter(e["name"] for tap in pending for e in tap["entities"] if (e["name"], *xy(e)) not in live)
     inventory = obs.get("inventory", {})
@@ -549,4 +569,9 @@ def cutover(root, builder, obs, taps, *, clear_obstacles=()) -> dict | None:
     for tap in pending:
         tap["built"] = True
     _mark_built(root, obs["world_id"], pending)
-    return None
+    return configure(builder, obs, taps)
+
+
+def configure(builder, obs, taps) -> dict | None:
+    """The next ``configure_splitter`` for a built tap splitter whose priorities differ (idempotent), else None."""
+    return configure_action(builder, obs, [(tap["splitter"], tap_priorities(tap)) for tap in taps])

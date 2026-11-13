@@ -11,12 +11,31 @@ reserved. Each trunk is fed from its district plate port: three tiles upstream
 of the port a splitter replaces the district belt and a five-belt branch
 leaves the district beside the port (the side opposite green science's
 branch), routed to the lane head with the `corridor:smelting->bus` guide. Red
-science keeps the port; the bus takes an ordinary splitter share. Phases:
+science keeps the port; the feed splitter gives the bus branch output
+priority, so the port gets what the bus does not take. Phases:
 build (everything but the splitters), splice (splitters go into the district
 plan, splitter stock first, the exact old belt is mined, splitter built),
-commission, verified. Proof: every planned belt as planned, native
-underground partners, each built trunk carries only its plate and its tail
-belt holds plates. `board["shared_main_bus"]` gets `template:
+commission (feed and tap splitters get their priorities), verified. Proof:
+every planned belt as planned, native underground partners, every feed and
+tap splitter with its wanted priorities, each built trunk carries only its
+plate and its tail belt holds plates.
+
+Splitter priorities (`planned_bus.feed_priorities`, `tap_priorities`):
+
+| Splitter | Input priority | Output priority |
+|---|---|---|
+| district feed | none (one input) | the bus branch |
+| tap | none (one input) | the consumer branch; the surplus continues down the bus |
+| merge onto a bus lane (lane injection, second lane of a material; not built yet) | the bus lane | none |
+
+Native left/right is relative to the splitter's facing; it is derived from
+the facing and a point on the branch (`splitter_side`), so every bus
+direction, tap side, rotated or mirrored district gets the right side. The
+specs carry `splitter_input_priority`/`splitter_output_priority`; the bus
+commission step and `planned_tap.cutover` issue `configure_splitter` (unit
+and world guarded) for each built splitter whose live priorities differ.
+That is idempotent and also configures splitters of a saved map built before
+the rule. `board["shared_main_bus"]` gets `template:
 planned_main_bus`, the bus frame, lanes (built/reserved/spare), trunks,
 per-material lane-band `reservations` over the whole bus length, head/tail
 `ports`, `entities`, `underground_pairs` and `sources`.
@@ -52,9 +71,12 @@ Supply rule (`planned_tap.tap_budget`, `plate_supply.bus_budget`): a trunk
 carries the district's nominal supply; each tap records its consumer's
 declared demand; a new consumer plans with `max(nominal - other taps'
 demand, nominal / 2)` and sizes its machine count down to it (red:
-`science.py`, green: `green_science.supply_sized_count`). The half floor is
-the even splitter; with more than two taps per material declared demand can
-exceed the trunk, measured by `tools/report_run.py`.
+`science.py`, green: `green_science.supply_sized_count`, `produce`). With
+branch priority every tap gets its full declared demand while the total stays
+within the trunk, wherever it sits on the bus. The half floor is only an
+over-subscription allowance: then the taps upstream are served first and a
+downstream consumer gets the rest (the district green branch without a bus
+is an even splitter and does hand half), measured by `tools/report_run.py`.
 
 Bus band: from the moment `site-plan.json` exists the whole bus rect is hard
 for every `transport.plan_connection` route except the bus's own feed
