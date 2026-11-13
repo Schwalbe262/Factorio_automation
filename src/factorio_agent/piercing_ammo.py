@@ -14,6 +14,7 @@ from .board import entity
 from .industrial import PlanningBudget
 from .planning import overlap, preflight, survey_slots
 from .power_grid import plan_connection as power_connection
+from .power_grid import supplied_networks
 from .radar_network import RADAR_POWER_LUA, planned_power_watts
 from .smelting import merge_entities
 from .transport import unbuilt_external_keepouts, xy
@@ -231,11 +232,7 @@ class PiercingAmmo:
                 return {"ok": False, "reason": "piercing_existing_productive_base_required"}
             budget = PlanningBudget(self.game)
             failures = []
-            networks = {
-                q.get("electric_network_id")
-                for q in obs["entities"]
-                if q["name"] == "steam-engine" and q.get("energy", 0) > 0
-            }
+            networks = supplied_networks(obs)
             supply = [
                 xy(q)
                 for q in obs["entities"]

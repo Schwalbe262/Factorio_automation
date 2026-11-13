@@ -185,6 +185,15 @@ def _missing(entity: Mapping, ingredients: list[tuple[str, float]]) -> list[str]
     return [min(ingredients, key=lambda row: float(held.get(row[0], 0) or 0) / max(row[1], 1e-9))[0]]
 
 
+def _holds_full_stack(entity: Mapping, product, catalog) -> bool:
+    """The machine holds at least one full stack of its own product (its result slot is full)."""
+    if not isinstance(product, str):
+        return False
+    stack = (_table(catalog, "items").get(product) or {}).get("stack_size")
+    held = (entity.get("inventory") or {}).get(product, 0)
+    return isinstance(stack, (int, float)) and stack > 0 and isinstance(held, (int, float)) and held >= stack
+
+
 def entity_rows(observation: Mapping, board: Mapping, catalog) -> list[dict]:
     """One row per production entity: group, block, product, kind, state, missing items."""
     index = block_index(board)
@@ -241,6 +250,12 @@ def entity_rows(observation: Mapping, board: Mapping, catalog) -> list[dict]:
             state = "starved"
         else:
             state = "other"
+        if state == "starved" and kind == "machine" and _holds_full_stack(e, product, catalog):
+            # eval-1575138435 (257 min): both brick furnaces "no_ingredients" while each held 100
+            # stone bricks (a full result stack, the output inserters waiting for space: nothing
+            # takes bricks yet). Their product is not taken, so they are full, not starved; the
+            # stone drills backing up behind them are no transport bottleneck.
+            state = "full"
         missing: list[str] = []
         if state == "starved":
             if status == "no_fuel":

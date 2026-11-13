@@ -815,11 +815,9 @@ class Board:
             return {"ok": False, "reason": "board_catalog_changed_requires_revalidation"}
         if "startup_science" in self.state["blocks"]:
             return deepcopy(self.state["blocks"]["startup_science"])
-        networks = {
-            e.get("electric_network_id")
-            for e in obs["entities"]
-            if e["name"] == "steam-engine" and e.get("energy", 0) > 0
-        }
+        from .power_grid import supplied_networks
+
+        networks = supplied_networks(obs)
         poles = [
             e
             for e in obs["entities"]

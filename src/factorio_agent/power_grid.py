@@ -109,10 +109,24 @@ def _zone_cost(costs, point) -> float:
     return sum(c for x0, y0, x1, y1, c in costs if x0 <= point[0] <= x1 and y0 <= point[1] <= y1)
 
 
+def generating(e) -> bool:
+    """A steam engine feeding its network now: buffered energy, or native status ``working``.
+
+    A network loaded to the plant's limit drains the engines' buffers every tick, so ``energy``
+    reads 0 while they generate at full output (eval-1575138435, 257 min: both engines
+    ``working`` with steam, energy 0; every power bridge failed ``no_supplied_pole_network`` and
+    steam expansion waited ``running_source_plant_required``, the very shortage it should fix).
+    """
+    return e.get("name") == "steam-engine" and (e.get("energy", 0) > 0 or e.get("status_name") == "working")
+
+
+def supplied_networks(obs) -> set:
+    """Electric network ids with a generating steam engine (:func:`generating`)."""
+    return {e.get("electric_network_id") for e in obs.get("entities", []) if generating(e)}
+
+
 def plan_connection(game, builder, obs, destination, reserved=()):
-    networks = {
-        e.get("electric_network_id") for e in obs["entities"] if e["name"] == "steam-engine" and e.get("energy", 0) > 0
-    }
+    networks = supplied_networks(obs)
     sources = [
         e for e in obs["entities"] if e["name"] == "small-electric-pole" and e.get("electric_network_id") in networks
     ]

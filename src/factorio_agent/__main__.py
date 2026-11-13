@@ -403,6 +403,18 @@ def execute(argv=None, services=None):
                     obs["mine_trunks"] = trunks
             except Exception as exc:  # a growth estimate must never break observe
                 obs["mine_trunks_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .power_growth import power_receipt
+
+            try:  # measured power demand vs capacity plus known loads (power_growth.power_growth_nodes)
+                queue_path = Path(root) / "work_queue.json"
+                queue = (
+                    json.loads(queue_path.read_text(encoding="utf-8")).get("nodes", []) if queue_path.exists() else []
+                )
+                obs["power_growth"] = power_receipt(
+                    obs, services.catalog(root, game), list(Ledger(root).data["jobs"].values()), queue
+                )
+            except Exception as exc:  # a growth estimate must never break observe
+                obs["power_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .trunk_return_feed import receipt as return_feed_receipt
 
             try:  # surplus trips vs a return feed on the patch trunk (trunk_return_feed.trunk_return_feed_nodes)

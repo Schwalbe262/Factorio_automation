@@ -182,7 +182,36 @@ def _surface(obs) -> dict:
     return tiles
 
 
-def trunk_segments(obs, port: dict, *, limit: int = MAX_TRACE) -> list[tuple[dict, list[dict]]]:
+def _undergrounds(obs) -> dict:
+    """Tile -> observed underground belt."""
+    return {_tile(e["position"]): e for e in obs.get("entities", []) if e.get("name") == "underground-belt"}
+
+
+def _underground_exit(undergrounds: dict, entry: dict, tile, facing: int, reach: int = 10):
+    """The output underground paired with input ``entry`` along ``facing`` (observed pair first), or None."""
+    pair = entry.get("underground_neighbour")
+    dx, dy = DIRECTIONS[FACING_LETTER[facing]]
+    for step in range(1, reach + 1):
+        spot = (tile[0] + dx * step, tile[1] + dy * step)
+        found = undergrounds.get(spot)
+        if found is None or found.get("direction", 0) != facing:
+            continue
+        if isinstance(pair, dict) and type(pair.get("unit_number")) is int:
+            if found.get("unit_number") == pair["unit_number"]:
+                return spot, found
+            continue
+        if found.get("belt_to_ground_type") == "output":
+            return spot, found
+        return None
+    return None
+
+
+UNDERGROUND_GAP = "underground-gap"  # placeholder row of a traced trunk between an underground pair
+
+
+def trunk_segments(
+    obs, port: dict, *, limit: int = MAX_TRACE, undergrounds: bool = False
+) -> list[tuple[dict, list[dict]]]:
     """The observed trunk from the output port as straight runs ``[(head, run)]``, following its turns.
 
     ``head`` is a port-like ``{"position", "facing"}`` on the run's first tile;
@@ -191,15 +220,43 @@ def trunk_segments(obs, port: dict, *, limit: int = MAX_TRACE) -> list[tuple[dic
     next tile facing sideways that nothing feeds from behind (a curve); a belt
     fed from behind is another line the trunk side-loads into, and the trace
     stops there, as it does at a gap, a reversed belt or ``limit`` tiles.
+
+    ``undergrounds``: the trace passes an underground pair of the run's facing
+    (a crossing under another line, eval-1575138435: the coal trunk dives under
+    a district feed 7 tiles after the port, so the tap search saw 7 tiles); the
+    pair and ``UNDERGROUND_GAP`` placeholders keep one row per tile, and no tap
+    row can be planned on them (they are no plain trunk belt).
     """
     facing = port.get("facing")
     if facing not in FACING_LETTER:
         return []
     tiles = _surface(obs)
+    dives = _undergrounds(obs) if undergrounds else {}
     x, y = _tile(port["position"])
     segments, run, head = [], [], {"position": dict(port["position"]), "facing": facing}
-    for _ in range(limit):
+    count = 0
+    while count < limit:
+        count += 1
         here = tiles.get((x, y))
+        entry = dives.get((x, y)) if here is None else None
+        if (
+            entry is not None
+            and entry.get("direction", 0) == facing
+            and entry.get("belt_to_ground_type") == "input"
+            and run
+        ):
+            found = _underground_exit(dives, entry, (x, y), facing)
+            if found is None:
+                break
+            (ex, ey), exit_belt = found
+            dx, dy = DIRECTIONS[FACING_LETTER[facing]]
+            run.append(entry)
+            for step in range(1, max(abs(ex - x), abs(ey - y))):
+                run.append({"name": UNDERGROUND_GAP, "position": {"x": x + dx * step + 0.5, "y": y + dy * step + 0.5}})
+            run.append(exit_belt)
+            count += max(abs(ex - x), abs(ey - y))
+            x, y = ex + dx, ey + dy
+            continue
         if here is None:
             break
         direction = here.get("direction", 0)
@@ -306,7 +363,7 @@ def plan_tap(bank, obs, *, owner, name, demand, serve="after", sides=("right", "
     if serve not in SERVES:
         raise ValueError("serve must be first or after")
     port = bank["plan"]["ports"][0]
-    segments = trunk_segments(obs, port)
+    segments = trunk_segments(obs, port, undergrounds=True)
     if not segments or FACING_LETTER.get(port.get("facing")) is None:
         return {"ok": False, "reason": "mine_trunk_not_observed"}
     found, rejected, tried = [], {}, set()

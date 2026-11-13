@@ -195,6 +195,61 @@ class SteamExpansionTests(unittest.TestCase):
         self.assertEqual(result["evidence"]["wait_for"], "running_source_plant_required")
         self.assertEqual(obj.state, {})
 
+    def test_a_plant_at_its_limit_generates_with_an_empty_buffer(self):
+        # eval-1575138435 (257 min): both engines "working" with 199 steam and energy 0 (the
+        # network drew every tick's output): the expansion waited for a running plant, and every
+        # power bridge failed no_supplied_pole_network, while the plant was simply overloaded.
+        from factorio_agent.power_grid import generating, supplied_networks
+
+        live = {
+            "name": "steam-engine",
+            "status_name": "working",
+            "energy": 0,
+            "electric_network_id": 1,
+            "fluids": {"steam": 199.25},
+        }
+        self.assertTrue(generating(live))
+        self.assertEqual(supplied_networks({"entities": [live]}), {1})
+        self.assertFalse(generating(dict(live, status_name="no_input_fluid")))
+        obj, bank, obs = self.fixture()
+        obj.state = {}
+        obs["entities"][0].update(energy=0, status_name="working")
+        with prepared(bank):
+            result = obj.prepare(obs)
+        self.assertNotEqual(result.get("reason"), "running_source_plant_required")
+
+    def test_coal_comes_from_the_coal_patch_trunk_before_a_dedicated_bank(self):
+        # eval-1575138435 (257 min): every free site's dedicated coal bank failed
+        # no_safe_bounded_mining_exit; a priority tap on the coal trunk (60/min) plans.
+        obj, bank, obs = self.fixture()
+        obj.state = {}
+        trunk = {"ready": True, "plan": {"resource": "coal", "ports": [port("coal", 47.5, 20.5, 4)], "entities": []}}
+        (obj.path.parent / "mining-outposts.json").write_text(json.dumps({"world_id": "w", "banks": [trunk]}))
+        (obj.path.parent / "pcb-board.json").write_text(json.dumps({"world_id": "w", "blocks": {}}))
+        obj.catalog.entities["boiler"] = {"energy_usage": 30000}
+        tap = {
+            "name": "steam:coal:1",
+            "trunk": "coal@47.5,20.5",
+            "entities": [entity("splitter", 51.5, 21, 4)],
+            "remove_units": [7],
+            "port": port("coal", 53.5, 22.5, 8, "output"),
+        }
+
+        def plan_tap(bank_, obs_, **kw):
+            self.assertEqual((kw["serve"], kw["owner"]), ("first", "steam_expansion"))
+            return {"ok": True, "taps": [tap]} if kw["accept"](dict(tap)) else {"ok": False}
+
+        with (
+            prepared(None) as (route, _),
+            patch("factorio_agent.mine_trunk.plan_tap", side_effect=plan_tap),
+            patch("factorio_agent.board.surface_conflict", return_value=None),
+        ):
+            result = obj.prepare(obs)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["coal_source"], "trunk_tap")
+        self.assertNotIn("bank", result)
+        self.assertEqual(route.call_args.args[3], tap["port"])  # the coal route starts at the tap port
+
     def test_prepare_then_step_to_thirty_second_proof(self):
         obj, bank, obs = self.fixture()
         obj.state = {}

@@ -130,11 +130,19 @@ def steam_expansion_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "steam_expansion")
     if early is not None:
         return early
-    return ex.steam_expansion.step(obs)
+    return ex._steam_stage(parameters).step(obs)
 
 
 def steam_expansion_proof(ex, obs, result, parameters):
-    return ex.steam_expansion.proof(obs)
+    return ex._steam_stage(parameters).proof(obs)
+
+
+def validate_steam_expansion(parameters):
+    from ..power_growth import stage_of
+
+    if not isinstance(parameters, dict):
+        raise ValueError("steam_expansion parameters must be an object")
+    stage_of(parameters)
 
 
 def steam_coal_reroute_step(ex, obs, parameters):
@@ -199,7 +207,7 @@ register(
     validate=validate_dedicated_materials,
 )
 register("chemical_coal_supply", step=chemical_coal_supply_step, proof=chemical_coal_supply_proof)
-register("steam_expansion", step=steam_expansion_step, proof=steam_expansion_proof)
+register("steam_expansion", step=steam_expansion_step, proof=steam_expansion_proof, validate=validate_steam_expansion)
 register("steam_coal_reroute", step=steam_coal_reroute_step, proof=steam_coal_reroute_proof)
 register("legacy_coal_cleanup", step=legacy_coal_cleanup_step, proof=legacy_coal_cleanup_proof)
 register("ore_transport_reroute", step=ore_transport_reroute_step, proof=ore_transport_reroute_proof)

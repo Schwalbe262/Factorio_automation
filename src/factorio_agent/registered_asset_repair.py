@@ -15,6 +15,7 @@ from .routing import VECTORS
 from .planning import overlap
 from .resource_policy import RESOURCE_CHECK_LUA, policy_specs, mining_reservations
 from .smelting import merge_entities
+from .power_grid import supplied_networks
 from .transport import PIPE_WITNESS_LUA, xy
 
 FILE = "registered-asset-repair.json"
@@ -165,9 +166,7 @@ def _adapter(entry, obs, catalog):
     fluid_nodes = [
         dict(q, unit_number=next(n["unit_number"] for n in nodes if _key(n) == _key(q))) for q in fluid["nodes"]
     ]
-    powered = {
-        q.get("electric_network_id") for q in obs["entities"] if q["name"] == "steam-engine" and q.get("energy", 0) > 0
-    }
+    powered = supplied_networks(obs)
     anchors = [
         dict(name=q["name"], position=q["position"], unit_number=q["unit_number"], network=q["electric_network_id"])
         for q in obs["entities"]

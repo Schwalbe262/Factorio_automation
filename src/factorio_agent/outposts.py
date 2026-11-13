@@ -614,6 +614,53 @@ class MiningOutposts:
             _atomic_json(self.path, self.state)
         return perimeter.ensure_coverage(obs, scope, areas)
 
+    def plan_growth(self, obs, resource, target, rate, active) -> dict:
+        """What ``step`` adds to the proven banks ``active`` (pure, no state write):
+        ``{"bank", "extension"}`` (grow one in place), ``{"connected"}`` (a new module on a trunk)
+        or ``{"failure"}``.
+
+        Every proven bank of the resource may grow in place before a new module is connected: a
+        connected extra module keeps its own reserved pairs (fleet all-1113-2332 seeds 677884616
+        and 3862808667: the first bank's pairs were all built, the extra module had 2 of 3 pairs
+        free, only the first bank was tried and the job blocked on a third module's trunk
+        connection)."""
+        first = None
+        for candidate in active:
+            count = sum(e["name"] == "electric-mining-drill" for e in candidate["plan"]["entities"])
+            per_drill = candidate["nominal_rate_per_minute"] / count
+            added = min(8, math.ceil((target - rate) / per_drill))
+            tried = self.prepare_extension(obs, candidate, added)
+            if first is None:
+                first = (candidate, tried, added)
+            if tried.get("ok"):
+                return {"bank": candidate, "extension": tried}
+        bank, extension, added = first  # no bank grows in place: a new module on a trunk
+        connected = {}
+        for primary in self._trunk_primaries(obs, resource, bank):
+            connected = self.prepare_connected_bank(obs, primary, added)
+            # Only a bank whose own trunk does not reach the consumer is skipped (cheap, before
+            # any site search): eval-1575138435 iron 300/min traced a proven extra bank whose
+            # output ends on the patch (saved_corridor_has_gap at its own port), not the trunk.
+            if connected.get("ok") or not str(connected.get("reason", "")).startswith("owned_ore_trunk"):
+                break
+        if not connected.get("ok"):
+            return {"failure": {**connected, "upstream_extension_failure": extension.get("reason")}}
+        return {"connected": connected}
+
+    def _trunk_primaries(self, obs, resource, first):
+        """Banks a new module may feed, the patch's trunk bank first (``mine_trunk.patch_bank``), then
+        ``first`` and every other proven bank of ``resource`` (no dedicated-material bank)."""
+        from .mine_trunk import patch_bank, patch_seed
+
+        banks = [
+            b
+            for b in self.state.get("banks", [])
+            if b["plan"]["resource"] == resource and b.get("ready") and not b.get("material_supply_id")
+        ]
+        trunk = patch_bank(banks, resource, patch_seed(obs, resource))
+        ordered = [b for b in (trunk, first) if b is not None] + banks
+        return [b for i, b in enumerate(ordered) if all(b is not o for o in ordered[:i])]
+
     def prepare_connected_bank(self, obs, primary, count):
         """Feed a paid extra module into an identity-bound same-item trunk T."""
         path = self.path.parent / "smelting-district.json"
@@ -1127,6 +1174,14 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             if bank.get("ready") and self.bank_proof(obs, bank) is None and not self.bank_powered(obs, effective):
                 return {"status": "waiting", "reason": "restore existing outpost power before adding capacity"}
         active_proofs = [(b, self.bank_proof(obs, b)) for b in banks if b.get("ready")]
+        for bank, proof in active_proofs:
+            # A proven bank whose quiet-start defense deferral lapsed (enemies or risk now near) has no
+            # proof until its turrets stand: arm it before counting it as missing capacity
+            # (eval-1575138435, 257 min: iron banks of 180 + 60/min unproven, the job planned a third module).
+            if proof is None and bank.get("defense_scope_id"):
+                coverage = self._construction_coverage(obs, bank)
+                if coverage is not None:
+                    return coverage
         active = [b for b, p in active_proofs if p]
         rate = sum(p["nominal_rate_per_minute"] for _, p in active_proofs if p)
         if rate >= target:
@@ -1141,34 +1196,17 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             bank = next((b for b in active if b.get("pending_extension") is not None), active[0])
             extension = bank.get("pending_extension")
             if extension is None:
-                # Every proven bank of the resource may grow in place before a new module is
-                # connected: a connected extra module keeps its own reserved pairs (fleet
-                # all-1113-2332 seeds 677884616 and 3862808667: the first bank's pairs were all
-                # built, the extra module had 2 of 3 pairs free, only the first bank was tried
-                # and the job blocked on a third module's trunk connection).
-                first = None
-                for candidate in active:
-                    count = sum(e["name"] == "electric-mining-drill" for e in candidate["plan"]["entities"])
-                    per_drill = candidate["nominal_rate_per_minute"] / count
-                    added = min(8, math.ceil((target - rate) / per_drill))
-                    tried = self.prepare_extension(obs, candidate, added)
-                    if first is None:
-                        first = (candidate, tried, added)
-                    if tried.get("ok"):
-                        bank, extension = candidate, tried
-                        break
-                if extension is None:  # no bank grows in place: a new module from the first bank's trunk
-                    bank, extension, added = first
-                if not extension.get("ok"):
-                    connected = self.prepare_connected_bank(obs, bank, added)
-                    if not connected.get("ok"):
-                        return {"status": "blocked", **connected, "upstream_extension_failure": extension.get("reason")}
-                    self.state["banks"].append(connected)
+                growth = self.plan_growth(obs, resource, target, rate, active)
+                if growth.get("failure"):
+                    return {"status": "blocked", **growth["failure"]}
+                if growth.get("connected"):
+                    self.state["banks"].append(growth["connected"])
                     _atomic_json(self.path, self.state)
                     return {
                         "status": "waiting",
                         "reason": "reserved extra mining module and same-item trunk connection",
                     }
+                bank, extension = growth["bank"], growth["extension"]
                 bank["pending_extension"] = extension
                 _atomic_json(self.path, self.state)
             reservation = self.publish_reservations(obs, resource)

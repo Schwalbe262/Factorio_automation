@@ -226,12 +226,24 @@ def _outpost_prepare(ex, obs, parameters):
     per_drill = meta.get("rate") if isinstance(meta, dict) else None
     if not isinstance(per_drill, (int, float)) or per_drill <= 0:
         return {"ok": False, "reason": "mining_rate_query_failed", "receipt": meta}
-    rate = 0.0
+    rate, active, pending = 0.0, [], False
     for bank in ex.outposts.state.get("banks", []):
-        if bank["plan"]["resource"] != resource or bank.get("material_supply_id") or not bank.get("ready"):
+        if bank["plan"]["resource"] != resource or bank.get("material_supply_id"):
+            continue
+        if not bank.get("ready"):
+            pending = True
             continue
         proof = ex.outposts.bank_proof(obs, bank)
         rate += proof["nominal_rate_per_minute"] if proof else 0
+        active += [bank] if proof else []
+    if active and not pending and rate < target and not any(b.get("pending_extension") for b in active):
+        # The step grows a proven bank in place or connects a new module to a trunk
+        # (MiningOutposts.plan_growth); a new standalone bank plan would fit where the step blocks.
+        growth = ex.outposts.plan_growth(obs, resource, target, rate, active)
+        if growth.get("failure"):
+            return dict(growth["failure"], ok=False, dry_run_active_rate=rate)
+        found = growth.get("connected") or growth.get("extension")
+        return dict(found, ok=True, dry_run_growth="connected" if growth.get("connected") else "extension")
     from .remedy import scaled_count  # the shrink rung of a what-if (remedy.what_if) applies here too
 
     count = scaled_count(max(1, min(8, math.ceil((target - rate) / per_drill))))
@@ -274,7 +286,8 @@ DRY_RUN = {
     # Engines and magazines are produce rows on a planned world (planned_products).
     "engine_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "ENGINE_ROW")),
     "ammo_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "AMMO_ROW")),
-    "steam_expansion": DryRun(lambda ex, obs, p: ex.steam_expansion.prepare(obs)),
+    "steam_expansion": DryRun(lambda ex, obs, p: ex._steam_stage(p).prepare(obs)),
+    "power_coal_tap": DryRun(lambda ex, obs, p: ex.power_coal_tap.prepare(obs)),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
     "oil_gathering": DryRun(
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).prepare(obs),

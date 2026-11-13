@@ -23,6 +23,7 @@ from pathlib import Path
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from .planning import preflight
+from .power_grid import generating
 from .power_grid import plan_connection as power_connection
 from .smelting import merge_entities
 from .paired_mining import prepare_new_bank, lane_evidence
@@ -30,6 +31,7 @@ from .steam_layout import rank_variants, reserved_area, water_connected
 from .steam_siting import board_areas, candidate_layouts, known_rows
 from .transport import plan_connection, xy, underground_proof
 
+TAP_ROUTE_ATTEMPTS = 4  # native routes from trunk tap rows to one stub variant
 LEGACY_TEMPLATE = "additional_shared_water_steam_pair"  # fixed development-map layout (old states only)
 TEMPLATE = "steam_bank_next_pair"
 BANK_PLAN_KEYS = (
@@ -67,27 +69,45 @@ def _merge_new(entities: list[dict], extra: list[dict]) -> list[dict]:
 
 
 class SteamExpansion:
-    def __init__(self, game, builder, catalog, outposts, site=None):
+    def __init__(self, game, builder, catalog, outposts, site=None, stage=1):
         self.game, self.builder, self.catalog, self.outposts = game, builder, catalog, outposts
         self.site = site
-        self.path = Path(game.cfg.runtime_dir) / "steam-expansion.json"
+        self.stage = stage  # power_growth: stage 1 is the roadmap's pair, stage k one more pair each
+        name = "steam-expansion.json" if stage == 1 else f"steam-expansion-{stage}.json"
+        self.path = Path(game.cfg.runtime_dir) / name
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
+    @property
+    def block(self) -> str:
+        stage = getattr(self, "stage", 1)
+        return "steam_expansion" if stage == 1 else f"steam_expansion_{stage}"
+
+    def _stage_states(self):
+        yield self.state
+        for path in sorted(self.path.parent.glob("steam-expansion-*.json")):
+            if path != self.path:
+                try:
+                    yield json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+
     def owns_burner(self, e, obs):
-        """The new boiler and its burner inserter belong to this job, not to starter fuel upkeep."""
-        return (
-            self.state.get("world_id") == obs["world_id"]
-            and e["name"] in ("boiler", "burner-inserter")
+        """The new boilers (every stage) and their burner inserters belong to steam growth, not to starter fuel upkeep."""
+        if e["name"] not in ("boiler", "burner-inserter"):
+            return False
+        return any(
+            state.get("world_id") == obs["world_id"]
             and any(
                 w["name"] == e["name"] and w["position"] == e["position"]
-                for w in self.state.get("core", {}).get("entities", [])
+                for w in state.get("core", {}).get("entities", [])
             )
+            for state in self._stage_states()
         )
 
     def prepare(self, obs):
         """Plan the pair, its paired coal bank, coal belt, water link and poles; no action."""
         engines = [e for e in obs["entities"] if e["name"] == "steam-engine"]
-        if not engines or not any(e.get("energy", 0) > 0 for e in engines):
+        if not engines or not any(generating(e) for e in engines):
             # A wait, not a planning failure (seed 1188507449: the boiler had run out of coal and
             # upkeep refuelled it in the same step); ``step`` reports it as waiting.
             return {"ok": False, "reason": "running_source_plant_required", "wait": True}
@@ -129,6 +149,121 @@ class SteamExpansion:
         }
 
     def _prepare_layout(self, obs, layout, board):
+        """One layout: coal from the coal patch trunk (a priority tap), else a dedicated coal bank."""
+        tapped = self._trunk_layout(obs, layout, board)
+        if tapped.get("ok"):
+            return tapped
+        banked = self._bank_layout(obs, layout, board)
+        if banked.get("ok") or tapped.get("reason") == "steam_coal_no_patch_trunk":
+            return banked
+        return dict(banked, trunk_failure={k: tapped.get(k) for k in ("reason", "rows_rejected", "failures")})
+
+    def _trunk_layout(self, obs, layout, board):
+        """Coal from a ``serve="first"`` tap on the coal patch's trunk (mine_trunk rule: one block per
+        patch, consumers on taps; eval-1575138435: every dedicated coal bank site failed
+        no_safe_bounded_mining_exit while the coal trunk ran 60/min past the base)."""
+        from . import mine_trunk
+        from .board import blocks_without_bus, surface_conflict
+        from .core.deterministic_builder import boiler_coal_per_minute
+
+        root = self.path.parent
+        mining_path = root / "mining-outposts.json"
+        mining = json.loads(mining_path.read_text(encoding="utf-8")) if mining_path.exists() else {}
+        if mining.get("world_id") != obs["world_id"]:
+            return {"ok": False, "reason": "steam_coal_no_patch_trunk"}
+        bank = mine_trunk.patch_bank(mining.get("banks"), "coal", mine_trunk.patch_seed(obs, "coal"))
+        if bank is None:
+            return {"ok": False, "reason": "steam_coal_no_patch_trunk"}
+        key = mine_trunk.trunk_key(bank)
+        name = f"steam:coal:{getattr(self, 'stage', 1)}"
+        blocks = blocks_without_bus(board)
+        failure = {"ok": False, "reason": "steam_coal_trunk_tap_unroutable", "failures": []}
+        for found in rank_variants(layout["variants"], bank["plan"]["ports"][0]["position"]):
+            core = _plan(
+                found["entities"],
+                [found["coal_port"]],
+                reserved_area=reserved_area(found["entities"]),
+                template=TEMPLATE,
+                layout=layout_record(layout, found),
+            )
+            chosen, attempts = {}, [0]
+
+            def accept(tap, core=core):
+                if chosen or attempts[0] >= TAP_ROUTE_ATTEMPTS:
+                    return False
+                if surface_conflict(self.builder, obs, blocks, tap["entities"]) is not None:
+                    return False
+                check = preflight(
+                    self.game, self.builder, obs, tap["entities"], ignored_units=tuple(tap["remove_units"])
+                )
+                if not check.get("ok"):
+                    return False
+                attempts[0] += 1
+                route = plan_connection(
+                    self.game, self.builder, obs, tap["port"], core["ports"][0], core["entities"] + tap["entities"]
+                )
+                if route.get("ok"):
+                    chosen.update(tap=tap, route=route)
+                    return True
+                failure["failures"] = (failure["failures"] + [route.get("reason")])[-4:]
+                return False
+
+            planned = mine_trunk.plan_tap(
+                bank,
+                obs,
+                owner="steam_expansion",
+                name=name,
+                demand=boiler_coal_per_minute(self.catalog),
+                serve="first",
+                stations=mine_trunk.stations(root, obs["world_id"], key, exclude=name),
+                accept=accept,
+            )
+            if not chosen:
+                failure["rows_rejected"] = planned.get("rows_rejected")
+                continue
+            result = self._finish_tap(obs, layout, found, core, chosen["tap"], chosen["route"], board)
+            if result.get("ok"):
+                return result
+            failure = dict(failure, reason=result.get("reason", failure["reason"]))
+        return failure
+
+    def _finish_tap(self, obs, layout, found, core, tap, route, board):
+        """Poles, water audit and preflight for a trunk-fed variant (the tap itself is preflighted)."""
+        es = merge_entities(core["entities"], route["entities"])
+        pole = next(p for p in found["bank"]["ports"] if p["item"] == "electricity")
+        power = power_connection(
+            self.game,
+            self.builder,
+            obs,
+            pole["position"],
+            [e for e in es if e["name"] != "small-electric-pole"] + list(tap["entities"]),
+        )
+        if not power.get("ok"):
+            return {**power, "reason": power.get("reason", "steam_pair_power_unavailable")}
+        es = _merge_new(es, power["entities"])
+        if not water_connected(known_rows(self.builder, board) + es, layout["old_boiler"], found["boiler"]):
+            return {"ok": False, "reason": "steam_new_boiler_water_not_on_old_network"}
+        check = preflight(self.game, self.builder, obs, es)
+        if not check.get("ok"):
+            return check
+        plan = _plan(
+            es,
+            core["ports"],
+            underground_pairs=route["underground_pairs"],
+            clear_obstacles=check["clear_obstacles"],
+            clearance_world_id=obs["world_id"],
+            layout_policy="pcb-additive-steam-v2",
+        )
+        return {
+            "ok": True,
+            "core": core,
+            "coal_source": "trunk_tap",
+            "tap": tap,
+            "plan": plan,
+            "power_wire_hops": power.get("wire_hops"),
+        }
+
+    def _bank_layout(self, obs, layout, board):
         """One layout: coal bank, then stub variants in coal-facing order until one routes."""
         union = [e for found in layout["variants"] for e in found["entities"]]
         reservations = board_areas(board) + [reserved_area(union)]
@@ -210,16 +345,22 @@ class SteamExpansion:
         board = json.loads(path.read_text(encoding="utf-8"))
         if board.get("world_id") != obs["world_id"]:
             return {"status": "blocked", "reason": "steam_expansion_board_world_changed"}
-        if "steam_expansion" not in board["blocks"]:
+        if self.block not in board["blocks"]:
             core = self.state["core"]
             if core.get("template") == LEGACY_TEMPLATE and "startup_science" in board["blocks"]:
                 # The old fixed layout borrowed the startup cell's eastern edge.
                 area = board["blocks"]["startup_science"]["reserved_area"]
                 area[1][0] = min(area[1][0], core["reserved_area"][0][0])
-            board["blocks"]["steam_expansion"] = dict(
-                self.state["plan"], reserved_area=self.state["core"]["reserved_area"]
-            )
+            board["blocks"][self.block] = dict(self.state["plan"], reserved_area=self.state["core"]["reserved_area"])
             _atomic_json(path, board)
+        if self.state.get("coal_source") == "trunk_tap":
+            pending = self._cut_over_tap(obs)
+            if pending is not None:
+                return pending
+            result = self.builder.ensure_plan(obs, self.state["plan"])
+            if result.get("status") != "succeeded":
+                return result
+            return self._sample_to_proof(obs)
         bank = self.state["bank"]
         if bank.get("layout_contract"):
             # Publish the mining-only growth area separately from its clear exit.
@@ -251,6 +392,33 @@ class SteamExpansion:
         result = self.builder.ensure_plan(obs, self.state["plan"])
         if result.get("status") != "succeeded":
             return result
+        return self._sample_to_proof(obs)
+
+    def _cut_over_tap(self, obs):
+        """Record the coal trunk tap (its demand grows the coal bank), release and replace the trunk belt."""
+        from . import mine_trunk
+
+        root = self.path.parent
+        tap = self.state["tap"]
+        mining_path = root / "mining-outposts.json"
+        mining = json.loads(mining_path.read_text(encoding="utf-8")) if mining_path.exists() else {}
+        bank = mine_trunk.find_bank(mining.get("banks"), tap["trunk"])
+        if bank is None or not bank.get("ready"):
+            return {"status": "blocked", "reason": "mine_trunk_patch_bank_missing", "trunk": tap["trunk"]}
+        area = mine_trunk.tap_area([e for e in tap["entities"] if e["name"] != "splitter"] or tap["entities"])
+        block = (self.block + "_coal_tap", dict(mine_trunk.tap_plan(tap), reserved_area=area, owner=self.block))
+        result = mine_trunk.record_tap(root, obs["world_id"], tap, block=block)
+        if result:
+            return result
+        if mine_trunk.release_trunk_belts(root, obs["world_id"], tap) and self.outposts is not None:
+            self.outposts.state = json.loads(mining_path.read_text(encoding="utf-8"))
+        action = mine_trunk.cutover(self.builder, obs, tap)
+        if tap.get("built"):
+            mine_trunk.record_tap(root, obs["world_id"], tap)
+        _atomic_json(self.path, self.state)
+        return action
+
+    def _sample_to_proof(self, obs):
         sample = self.sample(obs)
         if not sample or not sample.get("ok"):
             self.state["samples"] = []
@@ -278,6 +446,12 @@ class SteamExpansion:
             return {
                 "status": "waiting",
                 "reason": "sampling native generation from the new engine pair for thirty game seconds",
+            }
+        if self.state.get("coal_source") == "trunk_tap":
+            return {
+                "status": "succeeded",
+                "reason": "paid additive steam generation has coal from a priority coal trunk tap and shared water",
+                "evidence": proof,
             }
         bank = self.state["bank"]
         bank["ready"] = True
@@ -308,9 +482,15 @@ class SteamExpansion:
                     return None
             elif wanted["name"] not in ("pipe", "small-electric-pole") and e["direction"] != wanted.get("direction", 0):
                 return None
-        bank = lane_evidence(self.game, obs, self.state["bank"])
-        if not bank.get("ok"):
-            return None
+        if self.state.get("coal_source") == "trunk_tap":
+            from .mine_trunk import tap_standing
+
+            if not tap_standing(obs, self.state["tap"]):
+                return None
+        else:
+            bank = lane_evidence(self.game, obs, self.state["bank"])
+            if not bank.get("ok"):
+                return None
         payload = json.dumps(json.dumps(self.state["core"], separators=(",", ":")))
         return self.game.query(
             """
@@ -360,7 +540,8 @@ return result
             "to_tick": history[-1]["tick"],
             "added_nominal_kw": self.state["added_nominal_kw"],
             "latest_native_sample": fresh,
-            "dedicated_coal_nominal_per_minute": self.state["bank"]["nominal_rate_per_minute"],
+            "dedicated_coal_nominal_per_minute": (self.state.get("bank") or {}).get("nominal_rate_per_minute"),
+            "coal_source": self.state.get("coal_source", "dedicated_bank"),
             "layout": self.state.get("core", {}).get("layout") or {"kind": "legacy_fixed_layout", "degraded": False},
             "scope": "native generation from both new engines over thirty-second sampled window; nominal added capacity is not a full-load stress test",
         }
