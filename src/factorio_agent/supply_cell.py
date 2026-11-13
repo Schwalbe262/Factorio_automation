@@ -1095,10 +1095,10 @@ class SupplyCell:
         if not state or state.get("phase") in ("retiring", "retired"):
             return None
         chest = self._chest_name(state)
-        contested = self.contested_plates(obs) if demand is None else set()
+        contested = self.contested_plates(obs) if demand is None or collect else set()
         research = self.research_plates(obs)
         for deficit, item, position in self.feed_targets(
-            obs, state, minimum=minimum, demand=demand, contested=contested
+            obs, state, minimum=minimum, demand=demand, contested=contested if demand is None else set()
         ):
             if item in research:
                 continue
@@ -1129,11 +1129,21 @@ class SupplyCell:
         return self.feed_action(obs, reserve=FEED_RESERVE)
 
     def idle_feed(self, obs):
-        """Idle lane: may also collect furnace plates (batched) to feed the cell."""
+        """Idle lane: may also collect furnace plates (batched) to feed the cell, for the bill in flight only.
+
+        The cell is the transitional layer: an idle pass feeds it only for the
+        hardware of the steps whose jobs are active (``current_demand``, a named
+        shortfall of the build bill), never for the DEMAND_HORIZON pre-production.
+        On eval-4177156614 the idle lane made 75 feeds and 36 plate collections in
+        the 18 minutes the bus waited for plates (taken off its trunk).
+        """
         state = self._live(obs)
         if state.get("phase") != "verified":
             return None
-        return self.feed_action(obs, reserve=0, collect=True)
+        current = {item: count for item, count in self.current_demand(obs).items() if count > 0}
+        if not current:
+            return None
+        return self.feed_action(obs, reserve=0, collect=True, demand=current)
 
     # construction stock hook
     def stock(self, obs, item):

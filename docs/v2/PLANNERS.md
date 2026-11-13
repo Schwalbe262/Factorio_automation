@@ -642,7 +642,9 @@ built from starter furnace plates while the iron outpost's ore waited).
 Transitional layer (`progression.capacity_nodes`): no `starter_capacity` node for a resource
 whose `mining_outpost` job is active once `electric-mining-drill` is researched (the permanent
 replacement is planned and buildable; eval-4177156614 added 5 coal cells 0.2 min before the
-coal outpost succeeded).
+coal outpost succeeded). The idle lane feeds the supply cell only for `current_demand` (the
+hardware of steps whose jobs are active), not for the `DEMAND_HORIZON` pre-production
+(`SupplyCell.idle_feed`; 75 idle feeds and 36 collections while the bus waited on that map).
 
 ## Early start (`early_start.py`, "pre-build")
 
