@@ -356,5 +356,37 @@ class ElectricCoalEvidenceTests(unittest.TestCase):
             self.assertEqual(result["evidence"]["entity"], "wooden-chest")
 
 
+class BridgeInsideOwnReservationTests(unittest.TestCase):
+    def test_bridge_keeps_out_of_the_reserved_columns_except_future_pole_slots(self):
+        # Seed 2874201674: a bridge pole inside the copper bank's own reserved
+        # columns had no mining annotation; the preflight refused it and the map stopped.
+        from factorio_agent.mining_layout_policy import _adopt_growth_poles, _reserved_tiles
+
+        area = [[2, 67], [6, 70]]
+        keep = {"x": 2.5, "y": 68.5}
+        slot = {"x": 4.5, "y": 68.5}
+        tiles = {(e["position"]["x"], e["position"]["y"]) for e in _reserved_tiles(area, keep, [slot])}
+        self.assertEqual(len(tiles), 4 * 3 - 2)
+        self.assertNotIn((2.5, 68.5), tiles)
+        self.assertNotIn((4.5, 68.5), tiles)
+        future = {
+            "entities": [
+                {
+                    "name": "small-electric-pole",
+                    "position": dict(slot),
+                    "mining_resource": "copper-ore",
+                    "mining_footprint": area,
+                }
+            ]
+        }
+        bridge = [
+            {"name": "small-electric-pole", "position": dict(slot)},
+            {"name": "small-electric-pole", "position": {"x": 9.5, "y": 68.5}},
+        ]
+        _adopt_growth_poles(bridge, future)
+        self.assertEqual(bridge[0]["mining_resource"], "copper-ore")
+        self.assertNotIn("mining_resource", bridge[1])
+
+
 if __name__ == "__main__":
     unittest.main()

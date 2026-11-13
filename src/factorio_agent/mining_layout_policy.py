@@ -797,6 +797,46 @@ def prepare_extension(game, builder, obs, bank, added_drills):
         return {"ok": False, "reason": "invalid_mining_extension_contract", "detail": str(exc)}
 
 
+def _reserved_tiles(area, keep, allowed=()):
+    """One-tile keep-outs for every tile of ``area`` except ``keep`` and ``allowed`` (routing only, never built).
+
+    ``allowed`` are the bank's own future pole slots: a bridge pole may stand
+    there because the growth plan puts an annotated pole on that very tile
+    (:func:`_adopt_growth_poles` copies the annotation).
+
+    The power bridge must not put a hop pole inside the bank's own reserved
+    columns: such a pole has no mining annotation and the build preflight
+    refuses it (seed 2874201674: the copper bank blocked with
+    new_entity_over_resource_or_mining_reservation and the map stopped).
+    """
+    (x0, y0), (x1, y1) = area
+    free = {(keep["x"], keep["y"])} | {(p["x"], p["y"]) for p in allowed}
+    tiles = []
+    for x in range(math.floor(x0), math.ceil(x1)):
+        for y in range(math.floor(y0), math.ceil(y1)):
+            if (x + 0.5, y + 0.5) not in free:
+                tiles.append(entity("transport-belt", x + 0.5, y + 0.5, 0))
+    return tiles
+
+
+def _future_poles(future) -> dict:
+    """``{(x, y): pole spec}`` of the annotated poles the bank's growth plan holds."""
+    return {
+        (e["position"]["x"], e["position"]["y"]): e
+        for e in future["entities"]
+        if e["name"] == "small-electric-pole" and e.get("mining_resource")
+    }
+
+
+def _adopt_growth_poles(entities, future) -> None:
+    """Give bridge poles standing on a future pole slot that slot's mining annotation (in place)."""
+    slots = _future_poles(future)
+    for e in entities:
+        slot = slots.get((e["position"]["x"], e["position"]["y"])) if e["name"] == "small-electric-pole" else None
+        if slot is not None and not e.get("mining_resource"):
+            e.update({k: slot[k] for k in ("mining_resource", "mining_footprint") if k in slot})
+
+
 def prepare_new_bank(
     game, builder, obs, resource, count, reservations, *, policy=None, site_exit=None, registered=(), planned=None
 ):
@@ -885,10 +925,13 @@ def prepare_new_bank(
             reserve = merge_entities(reserve, [e for e in core["entities"] if e["name"] == "transport-belt"])
             facing = exit_plan["port"]["facing"]
             reserve += [entity("transport-belt", p["x"], p["y"], facing) for p in contract["output_access"]]
+            slots = [dict(x=x, y=y) for x, y in _future_poles(future)]
+            reserve += _reserved_tiles(future["mining_footprint"], contract["fixed_power_port"], slots)
             bridge = power_connection(planning, builder, obs, contract["fixed_power_port"], reserve)
             if not bridge.get("ok"):
                 failures.append(bridge.get("reason"))
                 continue
+            _adopt_growth_poles(bridge["entities"], future)
             es = merge_entities(core["entities"], bridge["entities"])
             future_with_power = merge_entities(
                 future["entities"], core["entities"], bridge["entities"], exit_plan["output_access"]

@@ -20,6 +20,7 @@ from .mining_site import alternative_exits, guide_tuple, site_exit
 RESOURCES = {"iron-ore", "copper-ore", "coal", "stone"}
 # The builder's reason when a planned entity cannot be placed (deterministic_builder.ensure_plan).
 OBSTRUCTED = "reserved block placement is obstructed"
+IN_RESERVATION = "new_entity_over_resource_or_mining_reservation"
 # A bank re-plans its power bridge around new obstructions at most this often.
 MAX_BRIDGE_REPLANS = 2
 # Other plans' unbuilt tiles a new bank avoids lie within this many tiles of
@@ -707,10 +708,16 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
           hash and recomputes by itself; retirement authorities exist only for
           ready banks.
         """
-        if result.get("status") != "blocked" or result.get("reason") != OBSTRUCTED or bank.get("ready"):
+        reason = result.get("reason")
+        if result.get("status") != "blocked" or reason not in (OBSTRUCTED, IN_RESERVATION) or bank.get("ready"):
             return None
         evidence = result.get("evidence") or {}
         blocked = evidence.get("entity")
+        if reason == IN_RESERVATION and isinstance(blocked, str) and isinstance(evidence.get("position"), dict):
+            # The preflight names the entity and its position separately. A bridge
+            # pole planned inside the bank's own reserved columns (plans saved
+            # before the planner kept bridges out of them) is re-planned the same way.
+            blocked = {"name": blocked, "position": evidence["position"]}
         if not isinstance(blocked, dict) or blocked.get("name") != "small-electric-pole":
             return None
         bridge = bridge_poles(bank)
@@ -725,12 +732,19 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             and _key(e) != _key(blocked)
             and self.builder._occupied_by_plan([e]) & tiles
         ]
-        if not obstruction:
+        if not obstruction and reason == OBSTRUCTED:
             return None
         count = bank.get("power_bridge_replans", 0)
         if count >= MAX_BRIDGE_REPLANS:
             return None
-        names = sorted({e["name"] for e in obstruction})
+        if reason == IN_RESERVATION and self._adopt_growth_pole(bank, blocked):
+            bank["power_bridge_replans"] = count + 1
+            _atomic_json(self.path, self.state)
+            reservation = self.publish_reservations(obs, bank["plan"]["resource"])
+            if reservation:
+                return reservation
+            return self.builder.ensure_plan(obs, bank["plan"], **({"defer": defer} if defer else {}))
+        names = sorted({e["name"] for e in obstruction}) or ["mining reservation"]
         failure = self._replan_bridge(obs, bank, bridge, blocked, names)
         if failure is not None:
             return dict(result, evidence=dict(evidence, power_bridge_replan=failure))
@@ -740,6 +754,35 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
         if reservation:
             return reservation
         return self.builder.ensure_plan(obs, bank["plan"], **({"defer": defer} if defer else {}))
+
+    def _adopt_growth_pole(self, bank, blocked) -> bool:
+        """Turn a bridge pole that stands on one of the bank's own future pole slots into that slot's pole.
+
+        The growth plan already puts an annotated pole on that tile, so the
+        bridge pole only lacked the mining annotation the preflight requires.
+        True when the plan entity was annotated.
+        """
+        from .mining_layout_policy import oriented_pair_core
+
+        plan = bank["plan"]
+        contract = bank.get("layout_contract") or plan.get("layout_contract")
+        try:
+            future = oriented_pair_core(
+                contract["collector_port"]["position"],
+                contract["reserved_pair_slots"],
+                plan["resource"],
+                contract["policy"]["flow"],
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        slot = next(
+            (e for e in future["entities"] if e["name"] == "small-electric-pole" and _key(e) == _key(blocked)), None
+        )
+        mine = next((e for e in plan["entities"] if _key(e) == _key(blocked)), None)
+        if slot is None or mine is None or not slot.get("mining_resource"):
+            return False
+        mine.update({k: slot[k] for k in ("mining_resource", "mining_footprint") if k in slot})
+        return True
 
     def _replan_bridge(self, obs, bank, bridge, blocked, obstruction):
         """Replace ``bank["plan"]``'s unbuilt bridge in memory; a failure reason, or None on success."""
@@ -761,7 +804,11 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             return "power_bridge_replan_contract_invalid"
         # The same keep-outs as at prepare time: future drills/belts, the
         # bank's own belts and the reserved output access cells.
+        from .mining_layout_policy import _future_poles, _reserved_tiles
+
         reserved = [e for e in future["entities"] + plan["entities"] if e["name"] != "small-electric-pole"] + access
+        slots = [dict(x=x, y=y) for x, y in _future_poles(future)]
+        reserved += _reserved_tiles(future["mining_footprint"], contract["fixed_power_port"], slots)
         replanned = replan_power_bridge(
             self.game,
             self.builder,
