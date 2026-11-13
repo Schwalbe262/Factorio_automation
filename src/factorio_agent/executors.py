@@ -158,9 +158,17 @@ class StarterExecutors:
         self.science_retirement = StartupScienceRetirement(game, catalog, self.storage)
         from .material_supply import DedicatedMaterials
 
-        self.material_supply = DedicatedMaterials(game, self.builder, catalog, self.outposts, perimeter=self.perimeter)
+        self.material_supply = DedicatedMaterials(
+            game, self.builder, catalog, self.outposts, perimeter=self.perimeter, smelting=self.smelting
+        )
         self.chemical_coal = DedicatedMaterials(
-            game, self.builder, catalog, self.outposts, perimeter=self.perimeter, purpose="chemistry"
+            game,
+            self.builder,
+            catalog,
+            self.outposts,
+            perimeter=self.perimeter,
+            purpose="chemistry",
+            smelting=self.smelting,
         )
         from .resource_reroute import SteamCoalReroute
 

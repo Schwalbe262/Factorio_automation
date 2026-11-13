@@ -252141,3 +252141,12 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: new site/nature.py (ranked/tiebreak, CLEARANCE_BATCH, batches); free_sites drops MAX_CLEARABLE and the per-tree distance penalty; search_bus drops clear_weight from the score (tie-break only); caps removed in planning.preflight (96), transport corridor (64), starter coal corridor (128); V2FactoryBuilder clears clear_obstacles in 96-obstacle batches, one paid mine per step, cleared batches memoised per world.
 - metrics: tests/test_v2_site_nature.py (8); bus/strips identical with a dense forest on the bus (old code moved the bus 24 tiles).
 - next action: live fleet in a forested seed to confirm clearing time and inventory (wood) headroom.
+- next action: fleet run, check job-events for "put carried surplus" / "put retiring coal" and inventory coal over time.
+
+## 2026-11-13 mine output trunk (worker)
+- part: one mining block per patch; consumers tap the patch bank's trunk.
+- cause (eval-2874201674 coal patch): power_coal_feed/electric_coal single drill + belt east (boiler), mining_outpost coal pair exit south (smelting fuel; district "existing power feed remains separate"), dedicated_materials coal = independent pair planned with all banks as keep-outs (brick/steel coal hub). Three groups, crossing belts.
+- actions: mine_trunk.py (patch_bank, trunk_bus over planned_tap.layout, serve first/after priorities, hub, ledger mine-trunks.json, release_trunk_belts republishes owner plans before the mine, cutover, lane_count/balancer_plan, trunk_receipt + mine_trunk_nodes -> mining_outpost growth); material_supply TRUNK_MODE; tests/test_v2_mine_trunk.py; LAYOUT_PRINCIPLES "Mine output trunk".
+- result: gate run; unmeasured live.
+- failure reason / open: power feed not a tap yet and not retired; second lane not built; fallback to an independent pair when no tap site (recorded second_group_reason).
+- next action: fleet run with bricks; check material-supply.json mode trunk_tap, mine-trunks.json, no new coal bank.
