@@ -252208,3 +252208,12 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: tests/test_v2_mining_border.py 14 pass; mining/outpost lupa set 176 pass.
 - not yet: building border lanes (native ore rule + resource_survey must accept a declared mixed area), whole mixed-zone sorter, site-plan zones still bbox.
 - next: live check of reserved_rects publish and the edge turn on a map with touching patches.
+
+## 2026-11-13 23:30 Part 49 - science growth frame, live machine limit, declared growth draw (worktree agent-aab90b78)
+- goal: live research slow; eval-4177156614 block could not grow (machine_slots 2, machine_limit 2 frozen at plan time).
+- hypothesis: the reservation was sized from the requested rate and the limit from plan-time plates; the row's square and belts already hold six slots.
+- actions: science.prepare reserves the frame (research_capacity on 12 technologies ahead, funding free, bounded by 6); growth_decision limit = min(frame_capacity, live plate_limit); science.grow widens a legacy reservation (extended_state, preflight, state then board republished by fingerprint) before building; frame full -> beyond_frame (second_block_k / AM2 rebuild / wait, receipt only); undeclared_plate_draw feeds the throughput_growth tap rate; step_bill adds green cluster and steam pair bills to the lookahead; startup cell stops growing once the bus science takes over.
+- metrics: live state read-only: frame 6, extension adds 16 entities, no plan overlap; growth to 3 declares +12 iron +6 copper/min.
+- result: offline only; nothing proven live.
+- failure reason / open: second block and AM2 rebuild are decisions only (no capability); green science is one cluster (no slot frame).
+- next action: live map: science_growth {labs 2, machines 3} widens the frame and builds; then labs 2 -> 4.

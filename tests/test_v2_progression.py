@@ -370,6 +370,31 @@ class LookaheadDemandTests(unittest.TestCase):
         # automation_science has builds (its labs and machines), so start after it
         self.assertEqual(pg.lookahead_demand(FakeCatalog(), done_through("automation_science"), {}, horizon=3), {})
 
+    def test_plan_fixed_bills_of_steps_without_builds(self):
+        steam = next(step for step in pg.ROADMAP if step.capability == "steam_expansion")
+        bill = pg.step_bill(FakeCatalog(), steam)
+        self.assertEqual((bill["boiler"], bill["steam-engine"]), (1, 2))
+        self.assertEqual(bill["electric-mining-drill"], pg.MINING_OUTPOST_BUILDS["electric-mining-drill"])
+        green = next(step for step in pg.ROADMAP if step.capability == "logistic_science")
+        self.assertEqual(pg.step_bill(FakeCatalog(), green), {})  # no recipe tree: nothing guessed
+        defense = next(step for step in pg.ROADMAP if step.capability == "defense_perimeter")
+        self.assertEqual(pg.step_bill(FakeCatalog(), defense), {})  # threat-sized: not derived
+        science = next(step for step in pg.ROADMAP if step.capability == "automation_science")
+        self.assertIs(pg.step_bill(FakeCatalog(), science), science.builds)
+
+    @unittest.skipUnless(REAL_CATALOG.exists(), "live catalog not present")
+    def test_logistic_science_bill_comes_from_its_cluster_plan(self):
+        from factorio_agent.core.world_catalog import WorldCatalog
+
+        catalog = WorldCatalog.from_dict(json.loads(REAL_CATALOG.read_text(encoding="utf-8")))
+        green = next(step for step in pg.ROADMAP if step.capability == "logistic_science")
+        bill = pg.step_bill(catalog, green)
+        self.assertGreaterEqual(bill.get("assembling-machine-1", 0), 2)
+        self.assertGreater(bill.get("inserter", 0), 0)
+        jobs = done_through("research_fast_inserter")
+        demand = pg.lookahead_demand(catalog, jobs, {}, horizon=1)
+        self.assertGreater(demand.get("iron-plate", 0), 0)
+
     @unittest.skipUnless(REAL_CATALOG.exists(), "live catalog not present")
     def test_real_catalog_is_sane(self):
         from factorio_agent.core.world_catalog import WorldCatalog
