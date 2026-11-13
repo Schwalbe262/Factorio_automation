@@ -262,6 +262,28 @@ class RocketBillTests(unittest.TestCase):
             bill(minutes=0)
 
 
+class BusLaneTests(unittest.TestCase):
+    def test_the_planned_bus_reserves_the_bills_shared_items_with_spare_lanes(self):
+        result = bill()
+        base = ("iron-plate", "copper-plate")
+        order = rp.bus_lane_order(result, base, capacity=20)
+        self.assertEqual(order[: len(base)], base)
+        for row in result["bus"]:
+            if row["item"] not in result["raw"]:
+                self.assertGreaterEqual(order.count(row["item"]), min(row["lanes_needed"], 1), row["item"])
+        tight = rp.bus_lane_order(result, base, capacity=len(base) + rp.SPARE_LANES)
+        self.assertEqual(tight, base)  # never eats the spare lanes
+
+    def test_site_config_falls_back_without_a_rocket_bill(self):
+        from types import SimpleNamespace
+
+        from factorio_agent.site.planmodel import SiteConfig
+
+        self.assertEqual(rp.site_config(SimpleNamespace(fingerprint="none")), SiteConfig())
+        config = rp.site_config(space_age_catalog())
+        self.assertEqual(config.lane_order[: len(SiteConfig().lane_order)], SiteConfig().lane_order)
+
+
 class RocketTailTests(unittest.TestCase):
     def tail(self, **kwargs):
         return rp.tail(bill(**kwargs), existing=[s.id for s in pg.ROADMAP], researched_by=rp.roadmap_research())

@@ -1093,6 +1093,53 @@ def _inputs(bill: Mapping, row: Mapping) -> list[str]:
     return [r["item"] for r in bill["items"] if recipe and recipe in r["consumers"]]
 
 
+# ----- bus lanes from the bill -------------------------------------------------------------
+SPARE_LANES = 2  # lanes the planned bus keeps free beyond the bill's demand
+
+
+def bus_lane_order(bill: Mapping, base: Iterable[str], capacity: int) -> tuple[str, ...]:
+    """``base`` plus one lane per missing belt of every shared bus item the bill makes (not raw ore:
+    ores stay on their mine trunks), keeping ``SPARE_LANES`` of ``capacity`` free."""
+    order = list(base)
+    raw = {r["item"] for r in bill["items"] if r["producer"]["kind"] == "raw"}
+    for row in sorted(bill["bus"], key=lambda r: (-r["rate_per_minute"], r["item"])):
+        if row["item"] in raw:
+            continue
+        have = order.count(row["item"])
+        for _ in range(max(0, row["lanes_needed"] - have)):
+            if len(order) >= capacity - SPARE_LANES:
+                return tuple(order)
+            order.append(row["item"])
+    return tuple(order)
+
+
+_SITE_CONFIGS: dict[str, Any] = {}
+
+
+def site_config(catalog):
+    """``SiteConfig`` whose bus ``lane_order`` reserves the rocket bill's shared items at plan time
+    (``bus_lane_order``); the default config when the catalog has no rocket bill. Only a new site
+    plan uses it: a saved ``site-plan.json`` keeps its lanes (``tools/rocket_plan.py`` reports the
+    shortfall of an existing map)."""
+    from dataclasses import replace
+
+    from .site.busframe import lane_table
+    from .site.planmodel import SiteConfig
+
+    base = SiteConfig()
+    key = getattr(catalog, "fingerprint", None)
+    if key in _SITE_CONFIGS:
+        return _SITE_CONFIGS[key]
+    try:
+        bill = rocket_bill(catalog, researched=(), bus_lanes=base.lane_order)
+    except Exception:  # noqa: BLE001 - a catalog without a rocket bill plans the default bus
+        return base
+    capacity = len(lane_table(base.bus_width, base.lane_order, base.lane_group, base.lane_group_gap))
+    config = replace(base, lane_order=bus_lane_order(bill, base.lane_order, capacity))
+    _SITE_CONFIGS[key] = config
+    return config
+
+
 # ----- observe receipt ------------------------------------------------------------------
 
 _CACHE: dict[tuple, dict] = {}
