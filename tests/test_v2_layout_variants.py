@@ -204,6 +204,8 @@ class LibraryTests(unittest.TestCase):
         checked = 0
         for path in files:
             doc = json.loads(path.read_text(encoding="utf-8"))
+            if doc.get("item") in ("mining-patch", "smelting-bank"):
+                continue  # another family's library (tests/test_v2_mine_layout.py, test_v2_smelting_layout.py)
             self.assertEqual(doc["generator"], variants.GENERATOR_VERSION, path.name)
             if c.recipe_for_product(doc["item"]) is None:
                 continue  # the fake catalog does not know this item

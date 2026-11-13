@@ -210,6 +210,10 @@ class PatchGridOnNewBank(unittest.TestCase):
             (port["x"] - 2, port["y"] - 2), {(row["anchor"]["x"], row["anchor"]["y"]) for row in grid["rows"]}
         )
         self.assertIsNone(grid["fallback"])
+        # The mine layout family's record (mine_layout.choose_bank): the buildable simple genome.
+        layout = bank["layout"]
+        self.assertEqual(layout["variant"], "mine-simple-E-sat-s1")
+        self.assertEqual((layout["built_pairs"], layout["explored"], layout["verified_tick"]), (1, False, None))
 
     def test_a_thin_output_edge_still_gives_a_grid_bank(self):
         cells = {(x, y) for x in range(0, 40) for y in range(0, 14)}

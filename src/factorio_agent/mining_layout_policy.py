@@ -1187,6 +1187,35 @@ def _adopt_growth_poles(entities, future) -> None:
             e.update({k: slot[k] for k in ("mining_resource", "mining_footprint") if k in slot})
 
 
+def _layout_choice(game, catalog, snapshot, reservations, forbidden, flow, count, obs):
+    """The mine layout family's choice for a new bank (``mine_layout.choose_bank``), or None.
+
+    Only buildable genomes on the planned edge are options; the start size changes only when
+    exploration (``layout-settings.json`` of the runtime) picked the build-ahead option.
+    """
+    from .mine_layout import choose_bank
+
+    root = getattr(getattr(game, "cfg", None), "runtime_dir", None)
+    try:
+        return choose_bank(
+            catalog,
+            snapshot,
+            reservations,
+            flow=flow,
+            pairs=max(1, min(MAX_PAIRS, math.ceil(count / 2))),
+            root=root,
+            forbidden=forbidden,
+            tick=obs.get("tick"),
+        )
+    except (AttributeError, KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None  # the family is a record and an exploration lever, never a reason to block a bank
+
+
+def _bank_layout(layout, pairs) -> dict:
+    """The saved ``layout`` record; ``built_pairs`` says what the bank really starts with (a relaxation may build fewer)."""
+    return dict(deepcopy(layout["record"]), built_pairs=pairs, verified_tick=None)
+
+
 def _attempts(snapshot, selected, count, reservations, site_exit, policy, grid=None):
     """``(sites, policy, relaxed, on_grid)`` to evaluate in order: grid rows first, then the lattice.
 
@@ -1310,23 +1339,28 @@ def prepare_new_bank(
             return snapshot
         grid = None
         mixed_record = None
+        layout = None
         if policy is None:
             # Whole-patch grid (patch_grid): its lattice becomes the bank's policy grid, so this
             # bank is one row pair of it; a bank already on the patch fixes the lattice.
             fixed = (
                 grid_origin if isinstance(grid_origin, dict) and grid_origin.get("flow") == selected["flow"] else None
             )
+            forbidden = forbidden_tiles(planning, obs, area)
             planned_grid = patch_grid(
                 snapshot,
                 selected,
                 reservations,
-                forbidden=forbidden_tiles(planning, obs, area),
+                forbidden=forbidden,
                 origin=fixed["origin"] if fixed else None,
                 filter_ready=bool((obs.get("technologies") or {}).get(FILTER_RESEARCH)),
             )
             mixed_record = planned_grid.get("mixed_ore_zone")
             if planned_grid.get("ok"):
                 grid = planned_grid
+            layout = _layout_choice(game, catalog, snapshot, reservations, forbidden, selected["flow"], count, obs)
+            if layout and layout["record"].get("explored"):
+                count = min(2 * MAX_PAIRS, 2 * layout["start_pairs"])  # exploration: a larger staged start
         failures = []
         product = catalog.entities[resource]["mining_products"]
         if len(product) != 1 or product[0]["name"] != resource:
@@ -1464,6 +1498,7 @@ def prepare_new_bank(
                     reserved_area=area,
                     reserved_rects=rects,
                     **({"patch_frame": deepcopy(grid["frame_rects"])} if grid and grid.get("frame_rects") else {}),
+                    **({"layout": _bank_layout(layout, core["pair_count"])} if layout else {}),
                     mining_reserved_area=future["mining_footprint"],
                     nominal_rate_per_minute=profile["collector_ceiling_per_minute"],
                     remaining_resource_survey=live_resources["unique_remaining_resource"],

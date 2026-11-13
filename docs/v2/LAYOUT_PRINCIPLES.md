@@ -458,6 +458,48 @@ footprint is not a board reservation of its own (the ore rule already keeps othe
 it), and the next row pair is placed by `prepare_connected_bank`'s search, not picked from the
 grid record.
 
+Mining patch family (`mine_layout.py`, library `data/layouts/mining-patch.json`,
+`python -B tools/layouts.py show mining-patch`). The whole-patch frame is a genome family like the
+produce rows and science blocks: `MineGenome` = `spacing` (`simple`: the paired bank above, pole in
+each drill gap, one service tile between pairs; `compact`: drills touching, one pole per two
+columns on the collector with an underground pair under it, no service lane; `sparse`: drills
+spaced so mining areas tile without overlap), `edge` (output flow), `merge` (`saturate`: a
+collector joins a trunk belt head-on or side-loads onto its near lane while that lane has room,
+else opens the next belt: 2 belts = the 2-2 splitter, more reserved; `single`: one trunk belt,
+the rest clipped), `start_pairs`, `drill` (electric; the big drill only on request, its raw cost
+is not comparable yet; never the burner drill). `frame` rebuilds the frame on the patch survey
+(lattice shift searched per spacing; a collector tile on water, other ore or a reservation cuts
+off the drills behind it), `audit` is hard (tiles unique, clean drill areas, nothing on forbidden
+/ foreign / reserved tiles, every drop on its collector, every drill powered and each row's poles
+one chain, collectors continuous to the port, trunk lanes within capacity), `describe` gives ore
+covered / unreachable, drills, rate now / full (lane- and trunk-capped), belts / undergrounds /
+poles, raw now / full, kW and pollution now / full, `frame_rects`, off-ore frame tiles (the area
+term: ore is no other block's ground), trunk belts and balancer, growth steps. The plates and
+build terms count the start stage (the frame grows only on demand). A test checks that the
+`simple` frame's drills are exactly `patch_grid`'s.
+
+Only `simple` / `saturate` / electric is `buildable` (what the bank builder lays out); the rest is
+ranked offline. `prepare_new_bank` calls `mine_layout.choose_bank` after the grid: options are the
+buildable genomes on the planned edge with the requested start or one pair more (build-ahead),
+scored by `layout_selection.score` with `demand_for(count x drill rate)`; the start size changes
+only when exploration picked the other option. The bank keeps `layout` (variant, genome,
+descriptor, terms, runner-ups, `built_pairs`, `chosen_tick`, `verified_tick`; the fleet report
+takes the proof from the bank's `ready` / `output_evidence`). Ragged 40 x 24 reference patch, real
+catalog, per start pair 60/min:
+
+| candidate | drills full | rate full /min | trunk | start raw | start entities |
+|---|---|---|---|---|---|
+| `mine-simple-E-sat-s1` | 69 | 2070 | 4 belts (reserved 4-4) | 71 | 14 |
+| `mine-compact-E-sat-s1` | 105 | 3150 | 4 belts | 101.5 | 14 |
+| `mine-sparse-E-sat-s1` | 45 | 1350 | 3 belts | 72.5 | 15 |
+| `mine-simple-E-sin-s1` | 69 | 750 (one belt) | 1 belt | 71 | 14 |
+
+Selection there: consumer E 60/min -> `mine-sparse-E-sat-s1` 74.95 overall, buildable
+`mine-simple-E-sat-s1` 77.45; consumer S, horizon 600/min -> sparse S 70.5, buildable simple S
+85.5; consumer W behind the patch, 120/min -> sparse W s2 88.15, buildable simple W s2 92.55 (two
+pairs now: one pair is short). Sparse leads offline on fewer off-ore frame tiles; building it needs
+the bank builder, contract and extension rule for its pitch (not done).
+
 Patch frame and neighbouring patches (`mining_border.py`). Cause on eval-4177156614: a stone
 patch touches the iron patch's lower-left side. Every mine record was a rectangle: the bank's
 `reserved_area` was the box of its growth footprint, exit path and output access (iron: a

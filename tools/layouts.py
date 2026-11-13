@@ -3,6 +3,7 @@
 Usage:
     python -B tools/layouts.py show <item> [--rate R] [--catalog PATH] [--no-pictures]
     python -B tools/layouts.py show science-block [--frame N] [--rate R]   (the red science block family)
+    python -B tools/layouts.py show mining-patch   (the mining patch family on a reference patch)
     python -B tools/layouts.py build [<item> ...] [--catalog PATH]
     python -B tools/layouts.py evidence <runtime dir> [...]   (merge fleet results into the library)
 
@@ -205,8 +206,101 @@ def show_science(catalog, rate: float, frame: int = SCIENCE_FRAME, *, pictures: 
     return cands
 
 
+MINE = "mining-patch"  # ``show mining-patch``: the mining patch family (mine_layout)
+
+
+def mine_picture(candidate) -> str:
+    """The frame drawn in the canonical EAST frame: ``D`` start drills, ``:`` reserved drills, ``+`` poles,
+    ``>`` collectors, ``u`` undergrounds, ``O`` ports."""
+    from factorio_agent import mine_layout as mine
+
+    built = candidate["line"]
+    d = candidate["descriptor"]
+    start = {
+        (e["position"]["x"], e["position"]["y"])
+        for e in mine.stage_entities(built, d["start_row"], d["start_pairs"])
+        if e["name"] == d["drill"]
+    }
+    size = mine.pitches(d["spacing"], d["drill"])["size"]
+    cells = {}
+    for e in built["entities"]:
+        x, y = e["position"]["x"], e["position"]["y"]
+        if e["name"] == d["drill"]:
+            for t in mine._tiles(x, y, size):
+                cells[t] = "D" if (x, y) in start else ":"
+        else:
+            cells[(x, y)] = {"small-electric-pole": "+", "transport-belt": ">", "underground-belt": "u"}[e["name"]]
+    for row in built["rows"]:
+        cells[row["port"]] = "O"
+    xs = sorted({t[0] for t in cells})
+    ys = sorted({t[1] for t in cells})
+    lines = []
+    y = ys[0]
+    while y <= ys[-1]:
+        x, line = xs[0], []
+        while x <= xs[-1]:
+            line.append(cells.get((x, y), "."))
+            x += 1
+        lines.append("".join(line))
+        y += 1
+    return "\n".join(lines)
+
+
+def describe_mine(d: dict) -> str:
+    c, f, t = d["counts"], d["counts_full"], d["trunk"]
+    pollution = "-" if d["pollution_per_min"] is None else f"{d['pollution_per_min']:g}"
+    return (
+        f"edge {d['edge']}, {d['rows']} rows, {d['drills_full']} drills at the full frame "
+        f"(ore {d['ore_covered_tiles']} tiles, {d['ore_unreachable_tiles']} unreachable); start {d['start_pairs']} pair(s) "
+        f"{c['entities']} entities, raw {d['raw_start']:g} now / {d['raw_full']:g} full; rate {d['rate_now']:g}/min now, "
+        f"{d['rate_full']:g} full; belts {f['belts']}, undergrounds {f['undergrounds']}, poles {f['poles']} full; "
+        f"trunk {t['belts']} belt(s), {t['balancer']}, clipped {t['clipped_per_minute']:g}/min; "
+        f"power {d['power_kw']:g} kW now / {d['power_kw_full']:g} full; pollution {pollution}/min; "
+        f"off-ore frame tiles {d['area']}; growth steps {d['growth_steps']}; "
+        f"{'buildable' if d['buildable'] else 'not buildable yet'}"
+    )
+
+
+def show_mine(catalog, *, ragged: bool = True, pictures: bool = True, out=print) -> list[dict]:
+    from factorio_agent import mine_layout as mine
+
+    snapshot = mine.reference_snapshot(ragged=ragged)
+    found = mine.candidates(catalog, snapshot, tiers=tuple(mine.DRILLS))
+    shown = found["candidates"]
+    cands = [c for c in shown if c["genome"].drill == mine.ELECTRIC]  # ranked: the early-game tier
+    out(
+        f"mining patch ({'ragged ' if ragged else ''}reference 40 x 24): {len(cands)} candidates from "
+        f"{found['generated']} genomes; library {found['library'] or '-'}; skipped {len(found['skipped'])}"
+    )
+    for c in shown:
+        d = c["descriptor"]
+        if d["edge"] != "E" or d["merge"] != "saturate" or d["start_pairs"] != 1:
+            continue  # the other edges, merges and starts are the same frame turned / staged differently
+        out(f"\n[{d['id']}] niche {c['niche']} ({c['source']})")
+        out("  " + describe_mine(d))
+        if pictures:
+            out("\n".join("    " + line for line in mine_picture(c).splitlines()))
+    out("\nselection (every candidate; runtime options are the buildable ones on the planned edge):")
+    for name, side, now, horizon in mine.contexts():
+        demand = mine.demand_for(now, horizon=horizon, tick=0)
+        ranked = mine.rank(cands, demand, mine.consumer_point(snapshot, side))
+        top = ", ".join(f"{o['id']} {o['score']:g}" for o in ranked[:3]) or "nothing fits"
+        built = next((o for o in ranked if o["buildable"]), None)
+        out(f"  {name.ljust(42)} {top}; buildable: {built['id'] + ' ' + format(built['score'], 'g') if built else '-'}")
+    return cands
+
+
 def build(catalog, items: list[str], directory: Path | None = None, out=print) -> None:
     for item in items:
+        if item == MINE:
+            from factorio_agent import mine_layout as mine
+
+            path = mine.library_path(directory)
+            doc = mine.build_library(catalog, mine.reference_snapshot(), previous=mine.load_library(directory))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+            out(f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}: {len(doc['entries'])} entries")
+            continue
         rate = TYPICAL_RATES.get(item, 10)
         request = variants.library_request(catalog, item, rate, PLATES)
         path = variants.library_path(item, directory)
@@ -297,10 +391,12 @@ def main(argv=None) -> int:
     catalog = load(find_catalog(args.catalog))
     if args.command == "show" and args.item == SCIENCE:
         show_science(catalog, args.rate or 6, args.frame or SCIENCE_FRAME, pictures=not args.no_pictures)
+    elif args.command == "show" and args.item == MINE:
+        show_mine(catalog, pictures=not args.no_pictures)
     elif args.command == "show":
         show(catalog, args.item, args.rate or TYPICAL_RATES.get(args.item, 10), pictures=not args.no_pictures)
     else:
-        build(catalog, args.items or sorted(TYPICAL_RATES))
+        build(catalog, args.items or sorted(TYPICAL_RATES) + [MINE])
     return 0
 
 

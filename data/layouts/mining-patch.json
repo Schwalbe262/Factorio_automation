@@ -1,0 +1,467 @@
+{
+ "catalog_fingerprint": "284d4776bc3ab0b4cab69291afd367fac84c46ea17689a20010eb68de609f26d",
+ "entries": {
+  "compact/saturate/electric": {
+   "descriptor": {
+    "buildable": false,
+    "counts": {
+     "belts": 3,
+     "drills": 2,
+     "entities": 7,
+     "poles": 1,
+     "undergrounds": 1
+    },
+    "counts_full": {
+     "belts": 154,
+     "drills": 110,
+     "poles": 28,
+     "undergrounds": 56
+    },
+    "drill": "electric-mining-drill",
+    "drills_full": 110,
+    "edge": "E",
+    "footprint": [
+     43,
+     28
+    ],
+    "form": "mine",
+    "growth": {
+     "kind": "in_place",
+     "limit": "patch",
+     "max_rate_in_place": 3300.0,
+     "slots": 55
+    },
+    "growth_steps": [
+     2,
+     26,
+     28,
+     28,
+     26
+    ],
+    "id": "mine-compact-E-sat-s1",
+    "merge": "saturate",
+    "ore_covered_tiles": 960,
+    "ore_unreachable_tiles": 0,
+    "pollution_per_min": 20.0,
+    "pollution_per_min_full": 1100.0,
+    "power_kw": 180.0,
+    "power_kw_full": 9900.0,
+    "rate_full": 3300.0,
+    "rate_now": 60.0,
+    "raw_start": 69.2,
+    "raw_total": 69.2,
+    "rows": 4,
+    "spacing": "compact",
+    "start_pairs": 1,
+    "trunk": {
+     "balancer": "reserved 4-4",
+     "belts": 4,
+     "clipped_per_minute": 0.0
+    }
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "drill": "electric-mining-drill",
+    "edge": "west_to_east",
+    "form": "mine",
+    "merge": "saturate",
+    "modules": {},
+    "spacing": "compact",
+    "start_pairs": 1
+   },
+   "scores": {
+    "archive_cost": [
+     69.2,
+     348
+    ]
+   }
+  },
+  "compact/single/electric": {
+   "descriptor": {
+    "buildable": false,
+    "counts": {
+     "belts": 3,
+     "drills": 2,
+     "entities": 7,
+     "poles": 1,
+     "undergrounds": 1
+    },
+    "counts_full": {
+     "belts": 88,
+     "drills": 110,
+     "poles": 28,
+     "undergrounds": 56
+    },
+    "drill": "electric-mining-drill",
+    "drills_full": 110,
+    "edge": "E",
+    "footprint": [
+     43,
+     28
+    ],
+    "form": "mine",
+    "growth": {
+     "kind": "in_place",
+     "limit": "trunk_single_belt",
+     "max_rate_in_place": 870.0,
+     "slots": 55
+    },
+    "growth_steps": [
+     2,
+     26,
+     28,
+     28,
+     26
+    ],
+    "id": "mine-compact-E-sin-s1",
+    "merge": "single",
+    "ore_covered_tiles": 960,
+    "ore_unreachable_tiles": 0,
+    "pollution_per_min": 20.0,
+    "pollution_per_min_full": 1100.0,
+    "power_kw": 180.0,
+    "power_kw_full": 9900.0,
+    "rate_full": 870.0,
+    "rate_now": 60.0,
+    "raw_start": 69.2,
+    "raw_total": 69.2,
+    "rows": 4,
+    "spacing": "compact",
+    "start_pairs": 1,
+    "trunk": {
+     "balancer": "none",
+     "belts": 1,
+     "clipped_per_minute": 2430.0
+    }
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "drill": "electric-mining-drill",
+    "edge": "west_to_east",
+    "form": "mine",
+    "merge": "single",
+    "modules": {},
+    "spacing": "compact",
+    "start_pairs": 1
+   },
+   "scores": {
+    "archive_cost": [
+     69.2,
+     282
+    ]
+   }
+  },
+  "simple/saturate/electric": {
+   "descriptor": {
+    "buildable": true,
+    "counts": {
+     "belts": 4,
+     "drills": 2,
+     "entities": 10,
+     "poles": 4,
+     "undergrounds": 0
+    },
+    "counts_full": {
+     "belts": 247,
+     "drills": 75,
+     "poles": 75,
+     "undergrounds": 0
+    },
+    "drill": "electric-mining-drill",
+    "drills_full": 75,
+    "edge": "E",
+    "footprint": [
+     44,
+     28
+    ],
+    "form": "mine",
+    "growth": {
+     "kind": "in_place",
+     "limit": "patch",
+     "max_rate_in_place": 2250.0,
+     "slots": 41
+    },
+    "growth_steps": [
+     2,
+     20,
+     22,
+     22,
+     9
+    ],
+    "id": "mine-simple-E-sat-s1",
+    "merge": "saturate",
+    "ore_covered_tiles": 960,
+    "ore_unreachable_tiles": 0,
+    "pollution_per_min": 20.0,
+    "pollution_per_min_full": 750.0,
+    "power_kw": 180.0,
+    "power_kw_full": 6750.0,
+    "rate_full": 2250.0,
+    "rate_now": 60.0,
+    "raw_start": 65.0,
+    "raw_total": 65.0,
+    "rows": 4,
+    "spacing": "simple",
+    "start_pairs": 1,
+    "trunk": {
+     "balancer": "reserved 4-4",
+     "belts": 4,
+     "clipped_per_minute": 0.0
+    }
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "drill": "electric-mining-drill",
+    "edge": "west_to_east",
+    "form": "mine",
+    "merge": "saturate",
+    "modules": {},
+    "spacing": "simple",
+    "start_pairs": 1
+   },
+   "scores": {
+    "archive_cost": [
+     65.0,
+     397
+    ]
+   }
+  },
+  "simple/single/electric": {
+   "descriptor": {
+    "buildable": false,
+    "counts": {
+     "belts": 4,
+     "drills": 2,
+     "entities": 10,
+     "poles": 4,
+     "undergrounds": 0
+    },
+    "counts_full": {
+     "belts": 172,
+     "drills": 75,
+     "poles": 75,
+     "undergrounds": 0
+    },
+    "drill": "electric-mining-drill",
+    "drills_full": 75,
+    "edge": "E",
+    "footprint": [
+     44,
+     28
+    ],
+    "form": "mine",
+    "growth": {
+     "kind": "in_place",
+     "limit": "trunk_single_belt",
+     "max_rate_in_place": 780.0,
+     "slots": 41
+    },
+    "growth_steps": [
+     2,
+     20,
+     22,
+     22,
+     9
+    ],
+    "id": "mine-simple-E-sin-s1",
+    "merge": "single",
+    "ore_covered_tiles": 960,
+    "ore_unreachable_tiles": 0,
+    "pollution_per_min": 20.0,
+    "pollution_per_min_full": 750.0,
+    "power_kw": 180.0,
+    "power_kw_full": 6750.0,
+    "rate_full": 780.0,
+    "rate_now": 60.0,
+    "raw_start": 65.0,
+    "raw_total": 65.0,
+    "rows": 4,
+    "spacing": "simple",
+    "start_pairs": 1,
+    "trunk": {
+     "balancer": "none",
+     "belts": 1,
+     "clipped_per_minute": 1470.0
+    }
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "drill": "electric-mining-drill",
+    "edge": "west_to_east",
+    "form": "mine",
+    "merge": "single",
+    "modules": {},
+    "spacing": "simple",
+    "start_pairs": 1
+   },
+   "scores": {
+    "archive_cost": [
+     65.0,
+     322
+    ]
+   }
+  },
+  "sparse/saturate/electric": {
+   "descriptor": {
+    "buildable": false,
+    "counts": {
+     "belts": 4,
+     "drills": 2,
+     "entities": 10,
+     "poles": 4,
+     "undergrounds": 0
+    },
+    "counts_full": {
+     "belts": 155,
+     "drills": 48,
+     "poles": 48,
+     "undergrounds": 0
+    },
+    "drill": "electric-mining-drill",
+    "drills_full": 48,
+    "edge": "E",
+    "footprint": [
+     39,
+     25
+    ],
+    "form": "mine",
+    "growth": {
+     "kind": "in_place",
+     "limit": "patch",
+     "max_rate_in_place": 1440.0,
+     "slots": 23
+    },
+    "growth_steps": [
+     2,
+     14,
+     16,
+     16
+    ],
+    "id": "mine-sparse-E-sat-s1",
+    "merge": "saturate",
+    "ore_covered_tiles": 960,
+    "ore_unreachable_tiles": 0,
+    "pollution_per_min": 20.0,
+    "pollution_per_min_full": 480.0,
+    "power_kw": 180.0,
+    "power_kw_full": 4320.0,
+    "rate_full": 1440.0,
+    "rate_now": 60.0,
+    "raw_start": 65.0,
+    "raw_total": 65.0,
+    "rows": 3,
+    "spacing": "sparse",
+    "start_pairs": 1,
+    "trunk": {
+     "balancer": "reserved 3-3",
+     "belts": 3,
+     "clipped_per_minute": 0.0
+    }
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "drill": "electric-mining-drill",
+    "edge": "west_to_east",
+    "form": "mine",
+    "merge": "saturate",
+    "modules": {},
+    "spacing": "sparse",
+    "start_pairs": 1
+   },
+   "scores": {
+    "archive_cost": [
+     65.0,
+     251
+    ]
+   }
+  },
+  "sparse/single/electric": {
+   "descriptor": {
+    "buildable": false,
+    "counts": {
+     "belts": 4,
+     "drills": 2,
+     "entities": 10,
+     "poles": 4,
+     "undergrounds": 0
+    },
+    "counts_full": {
+     "belts": 117,
+     "drills": 48,
+     "poles": 48,
+     "undergrounds": 0
+    },
+    "drill": "electric-mining-drill",
+    "drills_full": 48,
+    "edge": "E",
+    "footprint": [
+     39,
+     25
+    ],
+    "form": "mine",
+    "growth": {
+     "kind": "in_place",
+     "limit": "trunk_single_belt",
+     "max_rate_in_place": 690.0,
+     "slots": 23
+    },
+    "growth_steps": [
+     2,
+     14,
+     16,
+     16
+    ],
+    "id": "mine-sparse-E-sin-s1",
+    "merge": "single",
+    "ore_covered_tiles": 960,
+    "ore_unreachable_tiles": 0,
+    "pollution_per_min": 20.0,
+    "pollution_per_min_full": 480.0,
+    "power_kw": 180.0,
+    "power_kw_full": 4320.0,
+    "rate_full": 690.0,
+    "rate_now": 60.0,
+    "raw_start": 65.0,
+    "raw_total": 65.0,
+    "rows": 3,
+    "spacing": "sparse",
+    "start_pairs": 1,
+    "trunk": {
+     "balancer": "none",
+     "belts": 1,
+     "clipped_per_minute": 750.0
+    }
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "drill": "electric-mining-drill",
+    "edge": "west_to_east",
+    "form": "mine",
+    "merge": "single",
+    "modules": {},
+    "spacing": "sparse",
+    "start_pairs": 1
+   },
+   "scores": {
+    "archive_cost": [
+     65.0,
+     213
+    ]
+   }
+  }
+ },
+ "format": "factorio-agent-layout-library",
+ "generator": "mine-patch-v1",
+ "item": "mining-patch",
+ "request": {
+  "edge": "E",
+  "patch": "reference rectangle 40 x 24 (tools/layouts.py)",
+  "start_pairs": 1
+ }
+}
