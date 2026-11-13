@@ -434,9 +434,9 @@ def _block_matches(b) -> bool:
 def block_options(b, observation, state) -> list[dict]:
     """``block_growth.growth_options`` for the advanced-circuit block (``state["root"]``: runtime dir).
 
-    A built block has reserved slots but no in-place extension: the option is the slot unit as a
-    rebuild, infeasible until the controller extends in place; without a block it is a new block
-    sized by ``rate_per_minute``."""
+    A verified block with a reserved slot grows in place (``advanced_circuit_production`` at one
+    machine's rate more; the controller regenerates its core at the same anchor); without a slot it
+    is an infeasible rebuild; without a block it is a new block sized by ``rate_per_minute``."""
     from .block_growth import growth_options as block_growth
 
     root = state.get("root")
@@ -456,13 +456,46 @@ def block_options(b, observation, state) -> list[dict]:
             )
         ]
     row = rows[0]
+    action = row.get("action")
+    if row["kind"] == "in_place" and action:
+        # One machine more in a reserved slot: the same capability at the higher rate (controller extends in place).
+        from .progression import PRODUCE_PRIORITY
+
+        parameters = action["parameters"]
+        node = {
+            "id": f"auto_advanced_circuit_production_{int(parameters['rate_per_minute'] * 10)}",
+            "capability": action["capability"],
+            "parameters": parameters,
+            "priority": PRODUCE_PRIORITY,
+            "depends_on": [],
+            "reason": f"bottleneck: advanced circuits at capacity; extend in place to {parameters['rate_per_minute']:g}/min",
+        }
+        stalled = any(
+            j.get("capability") == action["capability"]
+            and j.get("parameters") == parameters
+            and j.get("status") in TERMINAL - {"succeeded"}
+            for j in state.get("jobs") or ()
+        )
+        return [
+            _option(
+                "blocks",
+                kind="in_place",
+                capability=action["capability"],
+                parameters=parameters,
+                nodes=[] if stalled else [node],
+                feasible=not stalled,
+                reason=("in-place extension stalled before" if stalled else node["reason"]),
+                gain_per_minute=row["step_rate"],
+                cost=row["cost"]["items"],
+            )
+        ]
     return [
         _option(
             "blocks",
             kind="rebuild",
             capability="advanced_circuit_production",
             feasible=False,
-            reason=f"{row['slots']} reserved red slot(s); {row['beyond']}",
+            reason=f"{row['slots']} reserved red slot(s) ({row['limit']}); {row['beyond']}",
             gain_per_minute=row["step_rate"],
             cost=row["cost"]["items"],
         )

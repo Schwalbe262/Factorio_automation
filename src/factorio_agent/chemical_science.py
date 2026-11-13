@@ -27,6 +27,7 @@ from .transport import VECTORS, plan_connection, surface_pipe_proof, underground
 
 SCOPE_ID = "chemical-science-production"
 PRODUCT = "chemical-science-pack"
+OWNER = "chemical_science_production"  # board block and site allocation owner
 
 
 def chemical_science_rates(catalog, count=2):
@@ -299,6 +300,32 @@ def blue_lab_extension(labs):
     )
 
 
+class _BeltRowSource:
+    """A verified belt-output ``produce`` row seen as a blue ingredient producer (``state``, ``proof``)."""
+
+    def __init__(self, row, out, fingerprint):
+        self.state = dict(row, catalog_fingerprint=row.get("catalog_fingerprint", fingerprint))
+        self.out = out
+        self.last_proof_failure = None
+
+    def proof(self, obs):
+        live = next(
+            (
+                e
+                for e in obs["entities"]
+                if e["name"] == "transport-belt" and e.get("position") == self.out.get("position")
+            ),
+            None,
+        )
+        if live is None or type(live.get("unit_number")) is not int:
+            self.last_proof_failure = {"reason": "engine_row_output_belt_missing"}
+            return None
+        port = dict(self.out, direction="output", world_id=obs["world_id"], unit_number=live["unit_number"])
+        port.setdefault("kind", "item")
+        port.setdefault("item", "engine-unit")
+        return {"output": port}
+
+
 class ChemicalScience:
     def __init__(
         self,
@@ -313,8 +340,10 @@ class ChemicalScience:
         science=None,
         green=None,
         bus_factory=None,
+        site=None,
     ):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
+        self.site = site  # planned world: the block from the master plan (block_sites)
         self.science = science if science is not None else AutomaticScience(game, builder, catalog)
         self.chemical = chemical if chemical is not None else ChemicalProduction(game, builder, catalog, perimeter)
         self.engine = (
@@ -355,9 +384,25 @@ class ChemicalScience:
     def _save(self):
         _atomic_json(self.path, self.state)
 
+    def _engine_component(self):
+        """The engine-unit producer: the fixed engine block (development map) or, on a planned world, the
+        engine-unit belt ``produce`` row (``rocket_produce_engine_unit_belt``, ``production-row-engine-unit__belt``).
+        """
+        if self.engine.state.get("phase") == "verified":
+            return self.engine
+        path = self.path.parent / "production-row-engine-unit__belt.json"
+        try:
+            row = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, ValueError):
+            row = {}
+        out = (row.get("line") or {}).get("output") if isinstance(row, dict) else None
+        if row.get("phase") != "verified" or not isinstance(out, dict) or not isinstance(row.get("plan"), dict):
+            return self.engine
+        return _BeltRowSource(row, out, self.catalog.fingerprint)
+
     def _source_plans(self):
         return {
-            "engine-unit": self.engine.state.get("plan"),
+            "engine-unit": self._engine_component().state.get("plan"),
             "advanced-circuit": self.advanced.state.get("plan"),
             "sulfur": self.chemical.state.get("products", {}).get("sulfur", {}).get("plan"),
         }
@@ -365,7 +410,7 @@ class ChemicalScience:
     def _sources(self, obs):
         sources = {}
         producers = [
-            ("engine-unit", self.engine, None),
+            ("engine-unit", self._engine_component(), None),
             ("advanced-circuit", self.advanced, None),
             ("sulfur", self.chemical, {"product": "sulfur"}),
         ]
@@ -481,12 +526,24 @@ class ChemicalScience:
         try:
             rated = chemical_science_rates(self.catalog, self.count)
             board = lab["board"]
-            red = self.advanced.state["core"]["reserved_area"]
-            engine = self.engine.state["core"]["reserved_area"]
-            # Adjacent finite rows around actual producer reservations, not map waypoints.
-            x = math.ceil(max(red[1][0], engine[1][0])) + 6.5
-            y = math.floor(min(red[0][1], engine[0][1])) + 16.5
-            anchors = [(x + dx, y + dy) for dx, dy in ((0, 0), (0, 16), (0, -16), (32, 0), (32, 16), (32, -16))]
+            from . import block_sites
+
+            # Planned world: district blocks from the master plan; the producer-relative rows only without one.
+            sited = block_sites.anchors(
+                self.site, obs, OWNER, lambda ax, ay: chemical_science_core(self.catalog, ax, ay, self.count)
+            )
+            self._allocations = dict(sited or ())
+            if sited is not None:
+                anchors = list(self._allocations)
+                if not anchors:
+                    return {"ok": False, "reason": "blue_science_no_site_allocation", "candidate_failures": []}
+            else:
+                red = self.advanced.state["core"]["reserved_area"]
+                engine = self.engine.state["core"]["reserved_area"]
+                # Adjacent finite rows around actual producer reservations, not map waypoints.
+                x = math.ceil(max(red[1][0], engine[1][0])) + 6.5
+                y = math.floor(min(red[0][1], engine[0][1])) + 16.5
+                anchors = [(x + dx, y + dy) for dx, dy in ((0, 0), (0, 16), (0, -16), (32, 0), (32, 16), (32, -16))]
             cores = [chemical_science_core(self.catalog, a, b, self.count) for a, b in anchors]
             for core in cores:
                 audit = audit_chemical_science_core(core, self.catalog)
@@ -510,6 +567,7 @@ class ChemicalScience:
                 )
             ]
             if not cores:
+                block_sites.keep(self.site, obs, OWNER, None)
                 return {"ok": False, "reason": "no_blue_science_site_clear_of_reserved_and_unbuilt_external_plans"}
         except (KeyError, TypeError, ValueError) as exc:
             return {"ok": False, "reason": "blue_science_planning_context_incompatible", "detail": str(exc)}
@@ -617,7 +675,11 @@ end;return {ok=true}""")
                 "route_attempts": attempts,
                 "defense_preview": coverage,
                 "prepared_tick": obs.get("tick"),
+                "site_allocation": getattr(self, "_allocations", {}).get(xy({"position": core["anchor"]})),
             }
+        from . import block_sites
+
+        block_sites.keep(self.site, obs, OWNER, None)
         return {
             "ok": False,
             "reason": "no_chemical_science_site_with_complete_owned_lab_connection",
@@ -714,7 +776,81 @@ end;return {ok=true}""")
         self._save()
         return None
 
+    # ----- in-place growth into core.growth_slots ------------------------------------
+    def built_count(self) -> int:
+        return len((self.state.get("core") or {}).get("machines") or ())
+
+    def plan_growth(self, obs, parameters=None):
+        """Pure: the block regenerated with ``self.count`` machines at its anchor (``block_sites.extended``).
+
+        The old core must be a subset of the new one; the new core is re-audited and its added
+        entities preflighted. ``{"ok", "core", "plan", "added", "rated", "count"}`` or a failure.
+        """
+        from . import block_sites
+
+        s = self.state
+        if not s or not self._identity(obs, s) or not s.get("core", {}).get("anchor"):
+            return {"ok": False, "reason": "blue_growth_requires_a_built_block"}
+        count = min(4, int((parameters or {}).get("machines") or self.count))
+        if count <= self.built_count():
+            return {"ok": False, "reason": "blue_growth_nothing_to_add", "built": self.built_count()}
+        try:
+            anchor = s["core"]["anchor"]
+            core = chemical_science_core(self.catalog, anchor["x"], anchor["y"], count)
+            audit = audit_chemical_science_core(core, self.catalog)
+        except (KeyError, TypeError, ValueError) as exc:
+            return {"ok": False, "reason": "blue_growth_core_invalid", "detail": str(exc)}
+        if not audit["ok"]:
+            return {"ok": False, "reason": "blue_growth_core_audit_failed", "evidence": audit}
+        grown = block_sites.extended(s, core)
+        if not grown["ok"]:
+            return grown
+        check = preflight(self.game, self.builder, obs, grown["added"])
+        if not check.get("ok"):
+            return {"ok": False, "reason": "blue_growth_slot_preflight_failed", "evidence": check}
+        grown["plan"]["clear_obstacles"] = list(grown["plan"].get("clear_obstacles") or []) + list(
+            check.get("clear_obstacles") or []
+        )
+        return dict(grown, core=core, audit=audit, rated=chemical_science_rates(self.catalog, count), count=count)
+
+    def _grow_in_place(self, obs):
+        """Commit a planned extension: republish the plan, then build it like a new block (phase build)."""
+        grown = self.plan_growth(obs)
+        if not grown.get("ok"):
+            return {"status": "blocked", **grown}
+        path = self.path.parent / "pcb-board.json"
+        board = json.loads(path.read_text(encoding="utf-8"))
+        if not self._identity(obs, board):
+            return {"status": "blocked", "reason": "blue_board_identity_changed"}
+        name = "chemical_science_production"
+        if board["blocks"].get(name) not in (None, self.state["plan"]):
+            return {"status": "blocked", "reason": "blue_registered_plan_changed"}
+        board["blocks"][name] = grown["plan"]
+        self.state.update(
+            core=grown["core"], plan=grown["plan"], audit=grown["audit"], rated=grown["rated"], phase="build"
+        )
+        self.state.pop("commissioning_proof", None)
+        self._save()
+        _atomic_json(path, board)
+        return None
+
+    def grow(self, obs, parameters):
+        """``science_growth {pack: chemical-science-pack, machines}``: extend into reserved slots, then build."""
+        machines = min(4, int(parameters["machines"]))
+        if machines <= self.built_count() and self.state.get("phase") == "verified":
+            return {"status": "succeeded", "reason": "blue_block_already_has_the_machines", "evidence": self.proof(obs)}
+        self.count = max(self.count, machines)
+        return self.step(obs)
+
+    def growth_proof(self, obs, parameters):
+        machines = min(4, int(parameters["machines"]))
+        return self.proof(obs) if self.built_count() >= machines else None
+
     def step(self, obs):
+        if self.state and self.state.get("phase") == "verified" and self.count > self.built_count():
+            grown = self._grow_in_place(obs)
+            if grown is not None:
+                return grown
         if not self.state:
             ready = self.prepare(obs)
             if not ready.get("ok"):
@@ -725,6 +861,10 @@ end;return {ok=true}""")
                 }
             self.state = ready
             self._save()
+            if ready.get("site_allocation"):
+                from . import block_sites
+
+                block_sites.keep(self.site, obs, OWNER, ready["site_allocation"])
         if not self._identity(obs, self.state):
             return {"status": "blocked", "reason": "blue_science_world_or_catalog_changed"}
         if {item: _hash(plan) for item, plan in self._source_plans().items()} != self.state["source_plan_revisions"]:

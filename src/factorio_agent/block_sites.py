@@ -25,6 +25,7 @@ from __future__ import annotations
 import math
 
 CANDIDATES = 6
+CANDIDATES_MAX = 12  # hard maximum of the site:more_blocks remedy rung
 KIND = "production"
 
 
@@ -44,6 +45,12 @@ def blocks(site, obs, owner: str, build, *, count: int = CANDIDATES, returns_to_
     """``anchors`` with the allocation objects: ``[((x, y), allocation), ...]`` (side and along range for taps)."""
     if site is None:
         return None
+    from . import remedy
+
+    # Remedy rung "site:more_blocks" (remedy.SITE_MORE_BLOCKS): more district blocks probed, hard maximum.
+    wider = remedy.option("block_site_candidates", None)
+    if isinstance(wider, int) and wider > count:
+        count = min(wider, CANDIDATES_MAX)
     width, height, dx, dy = footprint(build)
     try:
         found = site.allocate_candidates(
@@ -106,6 +113,86 @@ def own_entities(entities, taps) -> list[dict]:
 
     tapped = {(e["name"], *xy(e)) for tap in taps or () for e in tap.get("entities", [])}
     return [e for e in entities if (e["name"], *xy(e)) not in tapped]
+
+
+def extended(state: dict, new_core: dict) -> dict:
+    """In-place growth of a fixed core into its reserved slots (same anchor, larger machine count).
+
+    ``new_core`` is the core rebuilt at ``state["core"]["anchor"]`` with more machines. Every
+    entity of the built core must stand unchanged in the new one (``growth_changes_built_core``
+    otherwise); the result is the saved plan plus the new core's added entities and underground
+    pairs (routes, power and ports kept), ready to republish and build.
+    """
+    from copy import deepcopy
+
+    from .core.deterministic_builder import _plan
+    from .transport import xy
+
+    def key(e):
+        return (e["name"], *xy(e), e.get("direction", 0), e.get("recipe"))
+
+    old_core = state["core"]
+    if new_core.get("anchor") != old_core.get("anchor"):
+        return {"ok": False, "reason": "growth_anchor_changed"}
+    old = {key(e) for e in old_core["entities"]}
+    new = {key(e) for e in new_core["entities"]}
+    if not old <= new:
+        return {"ok": False, "reason": "growth_changes_built_core", "missing": len(old - new)}
+    added = [deepcopy(e) for e in new_core["entities"] if key(e) not in old]
+    plan = state["plan"]
+    pairs = list(plan.get("underground_pairs") or [])
+    pairs += [p for p in new_core.get("underground_pairs") or () if p not in pairs]
+    extra = {k: v for k, v in plan.items() if k not in ("ok", "reason", "entities", "ports", "required_items")}
+    extra["underground_pairs"] = pairs
+    return {"ok": True, "added": added, "plan": _plan(list(plan["entities"]) + added, plan["ports"], **extra)}
+
+
+def planned_tiles(builder, obs, root, board, *, exclude=()) -> dict:
+    """``{tile: {"block", "name", "position"}}`` of every unbuilt planned entity a source attachment must keep off.
+
+    Board blocks, the planned bus (published beside the blocks) and the plans no board block
+    holds (``board.unboarded_plans``: power feeds, pole chains, pending starter cells); the
+    caller's own blocks in ``exclude`` are skipped (``board.planned_unbuilt_hardware``).
+    """
+    from .board import planned_unbuilt_hardware, unboarded_plans
+
+    blocks = dict(board.get("blocks") or {})
+    if isinstance(board.get("shared_main_bus"), dict):
+        blocks.setdefault("shared_main_bus", board["shared_main_bus"])
+    try:
+        blocks.update(unboarded_plans(root, obs))
+    except (OSError, ValueError, TypeError):
+        pass
+    return planned_unbuilt_hardware(builder, obs, blocks, exclude=tuple(exclude))
+
+
+def first_clash(builder, entities, tiles: dict) -> dict | None:
+    """The first planned entity of another block on a tile ``entities`` would occupy, or None."""
+    if not tiles:
+        return None
+    for tile in sorted(builder._occupied_by_plan(list(entities))):
+        if tile in tiles:
+            return dict(tiles[tile])
+    return None
+
+
+def header_needs(owner: str, reason: str, source: dict, failures) -> dict:
+    """``plan_needs`` (kind ``site``) of a source-attached header that fits at no candidate offset."""
+    from . import plan_needs
+
+    rows = [f for f in failures if isinstance(f, dict)]
+    blockers = [f["blocker"] for f in rows if isinstance(f.get("blocker"), dict)]
+    return plan_needs.make(
+        "site",
+        reason,
+        block=owner,
+        item=source.get("item"),
+        at=source.get("position"),
+        tried=len(failures) or None,
+        rejected_by=plan_needs._counts(failures),
+        blockers=blockers,
+        change=f"a free header spot beside the {source.get('item')} outlet, clear of planned blocks",
+    )
 
 
 def tap_needs(owner: str, failure: dict) -> dict:

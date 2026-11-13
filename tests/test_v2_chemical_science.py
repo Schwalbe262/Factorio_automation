@@ -247,6 +247,76 @@ class BlueControllerTests(unittest.TestCase):
         self.assertEqual(result["sources"], self.sources)
         self.builder.ensure_plan.assert_not_called()
 
+    def test_a_site_service_supplies_the_block_without_producer_core_offsets(self):
+        from factorio_agent import block_sites
+        from factorio_agent.chemical_science import chemical_science_core
+        from factorio_agent.site.geometry import Rect
+
+        _, _, dx, dy = block_sites.footprint(lambda x, y: chemical_science_core(self.cat, x, y))
+        kept = []
+
+        class Site:
+            def allocate_candidates(self, kind, w, h, *, name, count, returns_to_bus, world_id):
+                return [SimpleNamespace(name=name + "#0", rect=Rect(150, -40, 150 + w, -40 + h))]
+
+            def keep_only(self, prefix, keep, world_id=None):
+                kept.append((prefix, keep))
+
+        self.c.site = Site()
+        del self.components["engine-unit"].state["core"]  # a planned world's engine row has no fixed core
+        ready = self.c.prepare(self.obs)
+        self.assertTrue(ready["ok"], ready)
+        self.assertEqual(ready["core"]["anchor"], {"x": 150 + dx, "y": -40 + dy})
+        self.assertEqual(ready["site_allocation"], "chemical_science_production#0")
+        self.c.step(self.obs)
+        self.assertIn(("chemical_science_production#", "chemical_science_production#0"), kept)
+
+    def test_a_verified_block_extends_in_place_into_its_reserved_slots(self):
+        from factorio_agent import pack_growth, postmortem
+
+        self.install()
+        self.c.state["phase"] = "verified"
+        self.c._save()
+        board = json.loads((self.root / "pcb-board.json").read_text(encoding="utf-8"))
+        board["blocks"]["chemical_science_production"] = self.c.state["plan"]
+        (self.root / "pcb-board.json").write_text(json.dumps(board))
+        old = {(e["name"], *xy(e)) for e in self.c.state["plan"]["entities"]}
+        view = pack_growth.block_view(self.c.state, PRODUCT)
+        self.assertEqual((view["machines"], len(view["slots"])), (2, 2))
+        # Pure plan first (the science_growth dry run), then the step commits it.
+        ex = SimpleNamespace(blue=self.c)
+        dry = postmortem.DRY_RUN["science_growth"].prepare(ex, self.obs, {"pack": PRODUCT, "machines": 3})
+        self.assertTrue(dry["ok"], dry)
+        self.assertEqual(len(dry["core"]["machines"]), 3)
+        self.assertIsNone(self.c.growth_proof(self.obs, {"pack": PRODUCT, "machines": 3}))
+        result = self.c.grow(self.obs, {"pack": PRODUCT, "machines": 3})
+        self.assertEqual(result["recipe"], "assembling-machine-1")  # the builder builds the grown plan
+        s = self.c.state
+        self.assertEqual((self.c.built_count(), s["phase"]), (3, "build"))
+        new = {(e["name"], *xy(e)) for e in s["plan"]["entities"]}
+        self.assertLess(old, new)
+        published = json.loads((self.root / "pcb-board.json").read_text(encoding="utf-8"))
+        self.assertEqual(published["blocks"]["chemical_science_production"], s["plan"])
+        self.assertEqual(len(s["core"]["growth_slots"]), 1)
+
+    def test_a_planned_world_engine_belt_row_is_the_engine_source(self):
+        self.components["engine-unit"].state = {}  # no fixed engine block on a planned world
+        self.assertEqual(self.c._sources(self.obs)["item"], "engine-unit")
+        out = {k: v for k, v in self.sources["engine-unit"].items() if k not in ("unit_number", "world_id", "name")}
+        row = {"world_id": "w", "phase": "verified", "line": {"output": out}, "plan": {"entities": []}}
+        (self.root / "production-row-engine-unit__belt.json").write_text(json.dumps(row))
+        ready = self.c._sources(self.obs)
+        self.assertTrue(ready["ok"], ready)
+        self.assertEqual(ready["sources"]["engine-unit"]["unit_number"], self.sources["engine-unit"]["unit_number"])
+
+    def test_no_site_block_is_a_named_site_failure(self):
+        from factorio_agent import plan_needs
+
+        self.c.site = SimpleNamespace(allocate_candidates=lambda *a, **k: [], keep_only=lambda *a, **k: None)
+        failed = self.c.prepare(self.obs)
+        self.assertEqual(failed["reason"], "blue_science_no_site_allocation")
+        self.assertEqual(plan_needs.from_result("chemical_science", failed)["kind"], "site")
+
     def test_missing_natural_technology_or_each_uncommissioned_source_gates_all_cost(self):
         self.assertEqual(
             self.c.prepare({**self.obs, "technologies": {}})["reason"],

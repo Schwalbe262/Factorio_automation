@@ -241,6 +241,7 @@ def chemical_core(catalog, product, x, y):
         output_access=access,
         rated=rates,
         reserved_area=[[x - 6.5, y - 6.5], [x + 11.5, y + 4.5]],
+        anchor={"x": x, "y": y},
         expansion_slots=[{"position": {"x": x + 6, "y": y}, "built": False}],
         expansion_keepouts=[entity("chemical-plant", x + 6, y)],
         layout_policy="fixed-typed-chemistry-cell-v1",
@@ -853,8 +854,11 @@ def _handoff(game, catalog, obs, consumer_id, fluid, source, neighbor, *, bind=F
 
 
 class ChemicalProduction:
-    def __init__(self, game, builder, catalog, perimeter, *, gas_source=None, coal_source=None, water_source=None):
+    def __init__(
+        self, game, builder, catalog, perimeter, *, gas_source=None, coal_source=None, water_source=None, site=None
+    ):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
+        self.site = site  # planned world: cell anchors from the master plan (block_sites)
         self.overrides = {"petroleum-gas": gas_source, "coal": coal_source, "water": water_source}
         self.path = Path(game.cfg.runtime_dir) / "chemical-production.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
@@ -862,6 +866,11 @@ class ChemicalProduction:
 
     def _save(self):
         _atomic_json(self.path, self.state)
+
+    @staticmethod
+    def owner(product) -> str:
+        """Site allocation owner of one product's cell (``block_sites``)."""
+        return "chemical_production_" + product
 
     def _sources(self, obs, product):
         result = {}
@@ -1021,6 +1030,22 @@ end;return {ok=true,snapshots=snapshots}"""
                 (22, -42),
             )
         ]
+        from . import block_sites
+
+        # Planned world: anchors from the master plan; the source-relative ones only without a site service.
+        sited = block_sites.anchors(
+            self.site, obs, self.owner(product), lambda ax, ay: chemical_core(self.catalog, product, ax, ay)
+        )
+        allocations = dict(sited or ())
+        if sited is not None:
+            anchors = list(allocations)
+            if not anchors:
+                return {
+                    "ok": False,
+                    "reason": "chemical_no_site_allocation",
+                    "product": product,
+                    "candidate_failures": [],
+                }
         reservations = [b["reserved_area"] for b in board["blocks"].values() if b.get("reserved_area")]
         reservations += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
         future_hard = unbuilt_external_keepouts(self.builder, obs, board["blocks"])
@@ -1218,6 +1243,7 @@ end;return {ok=true,snapshots=snapshots}"""
                 "defense_preview": defense,
                 "blue_demand": blue_chemistry_demand(self.catalog),
                 "rated": core["rated"],
+                "site_allocation": allocations.get((x, y)),
                 "planning_evidence": {
                     "candidate": candidate,
                     "attempted_candidates": attempts,
@@ -1237,6 +1263,7 @@ end;return {ok=true,snapshots=snapshots}"""
             "budget_exhausted": now > deadline,
             "candidate_failures": failures[-6:],
         }
+        block_sites.keep(self.site, obs, self.owner(product), None)
         return {
             "ok": False,
             "reason": "no_permanent_chemical_site_with_complete_typed_inputs",
@@ -1285,6 +1312,9 @@ end;return {ok=true,snapshots=snapshots}"""
                 }
             self.state["products"][product] = entry
             self._save()
+            from . import block_sites
+
+            block_sites.keep(self.site, obs, self.owner(product), entry.get("site_allocation"))
         sources = self._sources(obs, product)
         if not sources.get("ok") or sources.get("sources") != entry["sources"]:
             return {

@@ -252307,3 +252307,9 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: build ahead keeps the waiting craft's ingredients (craft_reserve); startup cell start floor 2 labs + the machines they feed (industry.start_floor); power_coal_feed held until district and bus succeeded (rule 3a); fleet report "pace vs target"; waste_report critical chain section.
 - expected: producer ~19 (from 25.6/22.9), district ~22.5-23.5, bus ~25-26 medians; 0/12 under 20 until the plate cap moves.
 - next: fleet 12 x 45 min on this commit; read pace line + critical chain; owner decision on iron cells beyond 6 (payback 9 iron in 36 s, ~250 plates each before retirement).
+
+## 2026-11-14 late fluids on the planned world (worker, worktree agent-a751cb3c666fd66f6)
+- goal: oil/chemistry tail plannable on a fresh planned-bus world (no bus-factory, no fixed engine block).
+- actions: acid iron + advanced-circuit plates from planned-bus taps (block_sites.bus_taps, publish/cutover before ensure_plan); SiteService siting for chemical_production / chemical_science; in-place growth (block_sites.extended) for advanced circuits and blue, blue in PACK_STATES; gas/fluid headers checked against unbuilt plans with plan_needs site; dry runs + remedy rungs (site:more_blocks, waypoints); test_v2_planned_world_tail.
+- result: offline only (fake router/survey); gate passed. failure reason: none offline; live proof pending.
+- next: rocket_plan tail ordering (engine belt row after chemical_science deadlocks blue on a planned world); fleet on a fresh map.

@@ -167,6 +167,10 @@ return{ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototype
         snapshot = self._source_snapshot(budget.game, source)
         if not snapshot.get("ok"):
             return snapshot
+        from . import block_sites
+
+        # Source-relative header (a manifold at its outlet), checked against every unbuilt external plan.
+        planned = block_sites.planned_tiles(self.builder, obs, self.path.parent, board, exclude=(self.block_id,))
         for dx, dy, side in (
             (8, 0, -1),
             (12, -12, -1),
@@ -179,7 +183,9 @@ return{ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototype
             if budget.expired():
                 return budget.failure(candidate_failures=failures[-5:])
             core = manifold_core(sx + dx, sy + dy, source["item"], self.aliases, side)
+            at = {"x": sx + dx, "y": sy + dy}
             if any(overlap(core["reserved_area"], b["reserved_area"]) for b in blocks):
+                failures.append({"reason": "manifold_area_meets_reserved_block", "at": at})
                 continue
             if any(
                 overlap([[p["x"] - 0.49, p["y"] - 0.49], [p["x"] + 0.49, p["y"] + 0.49]], b["reserved_area"])
@@ -187,13 +193,23 @@ return{ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototype
                 for p in path
                 for b in blocks
             ):
+                failures.append({"reason": "manifold_access_meets_reserved_block", "at": at})
+                continue
+            clash = block_sites.first_clash(self.builder, core["entities"] + core["output_access"], planned)
+            if clash is not None:
+                failures.append({"reason": "manifold_meets_unbuilt_external_plan", "at": at, "blocker": clash})
                 continue
             land = survey_slots(budget.game, [[core["reserved_area"]]])
             if not land.get("ok") or 1 not in land.get("legal", []):
+                failures.append({"reason": "manifold_area_not_buildable", "at": at})
                 continue
             route = plan_typed_fluid_connection(budget.game, self.builder, obs, source, core["inlet"], core, [])
             if not route.get("ok"):
-                failures.append(route.get("reason"))
+                failures.append({"reason": route.get("reason"), "at": at})
+                continue
+            clash = block_sites.first_clash(self.builder, route["entities"], planned)
+            if clash is not None:
+                failures.append({"reason": "manifold_route_meets_unbuilt_external_plan", "at": at, "blocker": clash})
                 continue
             landing = {xy(e): e for e in route["entities"]}.get(xy(core["inlet"]))
             own = [
@@ -251,7 +267,12 @@ return{ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototype
                 defense_scope_id=scope,
                 prepared_tick=obs["tick"],
             )
-        return dict(ok=False, reason="no_isolated_same_fluid_manifold", candidate_failures=failures[-5:])
+        return dict(
+            ok=False,
+            reason="no_isolated_same_fluid_manifold",
+            candidate_failures=failures[-5:],
+            plan_needs=block_sites.header_needs(self.block_id, "no_isolated_same_fluid_manifold", source, failures),
+        )
 
     def _reserve(self, obs):
         path = self.path.parent / "pcb-board.json"

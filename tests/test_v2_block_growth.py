@@ -72,6 +72,16 @@ class GrowthOptionTests(unittest.TestCase):
         self.assertEqual((option["capability"], option["kind"], option["slots"]), ("chemical_science", "rebuild", 2))
         self.assertEqual(option["cost"]["items"]["assembling-machine-1"], 1)
         self.assertAlmostEqual(option["max_rate_in_place"], 2 * option["rate_now"], 3)
+        # A verified block extends in place: the same capability at one machine's rate more.
+        state["phase"] = "verified"
+        (self.root / "chemical-science.json").write_text(json.dumps(state), encoding="utf-8")
+        (option,) = growth_options(self.root, "w")
+        self.assertEqual((option["kind"], option["limit"]), ("in_place", "reserved_slots"))
+        rate = option["action"]["parameters"]["rate_per_minute"]
+        self.assertEqual(option["action"]["capability"], "chemical_science")
+        from factorio_agent.chemical_science import count_for_rate
+
+        self.assertEqual(count_for_rate(BLUE_CATALOG, rate), 3)
 
 
 @unittest.skipIf(BLUE_CATALOG is None, "real catalog not available")
@@ -118,6 +128,13 @@ class ProviderTests(unittest.TestCase):
             (option,) = provider({"block": "advanced_circuit_production"}, {"world_id": "w"}, {"root": tmp})
         self.assertEqual((option["kind"], option["feasible"], option["gain_per_minute"]), ("rebuild", False, 2.0))
         self.assertEqual(option["cost"], {"assembling-machine-1": 1})
+        with tempfile.TemporaryDirectory() as tmp:
+            state = dict(state, plan={"entities": [{}]}, phase="verified")
+            (Path(tmp) / "advanced-circuits.json").write_text(json.dumps(state), encoding="utf-8")
+            (option,) = provider({"block": "advanced_circuit_production"}, {"world_id": "w"}, {"root": tmp, "jobs": []})
+        self.assertEqual((option["kind"], option["feasible"]), ("in_place", True))
+        self.assertEqual(option["nodes"][0]["capability"], "advanced_circuit_production")
+        self.assertEqual(option["parameters"], {"rate_per_minute": 6.0})
 
 
 class RootWiringTests(unittest.TestCase):

@@ -95,6 +95,13 @@ ROUTE_WAYPOINTS = Rung(
     kinds=("route", "site", "tap", "plan"),
     note="a cross-base route as two legs through a waypoint (transport.waypoint_connection)",
 )
+SITE_MORE_BLOCKS = Rung(
+    "site:more_blocks",
+    "site",
+    {"block_site_candidates": 12},  # block_sites.CANDIDATES_MAX
+    kinds=("site", "tap", "route", "preflight", "plan"),
+    note="twelve district blocks probed for a fixed oil/chemistry core instead of six (block_sites)",
+)
 
 # Declared per planner (ADDING_A_CAPABILITY.md: every new planner declares its relaxations).
 RELAXATIONS: dict[str, tuple[Rung, ...]] = {
@@ -191,10 +198,18 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     # rocket_feed.RocketParts.prepare_feed routes with transport.plan_connection (route_relax).
     "rocket_parts": (ROUTE_RELAX_1, ROUTE_RELAX_2),
     # Late fluids: their typed pipe routes (chemical_production.plan_typed_fluid_connection) read route_relax.
-    "advanced_petroleum": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    "advanced_petroleum": (SITE_MORE_BLOCKS, ROUTE_RELAX_1, ROUTE_RELAX_2),
     # The acid cell's iron belt from its planned-bus tap is a transport.plan_connection route (waypoints apply).
-    "fluid_product": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
+    "fluid_product": (SITE_MORE_BLOCKS, ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "fluid_distribution": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    # The gas header's inlet is a typed pipe route (plan_typed_fluid_connection reads route_relax).
+    "gas_distribution": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    # advanced_circuits: SiteService block, plastic belt and planned-bus tap routes (transport.plan_connection).
+    "advanced_circuit_production": (SITE_MORE_BLOCKS, ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
+    # Plastic/sulfur cells: SiteService block, typed pipes (route_relax) and the plastic coal belt (waypoints).
+    "chemical_production": (SITE_MORE_BLOCKS, ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
+    # Blue science: SiteService block and four belt routes (engine, red circuit, sulfur, lab).
+    "chemical_science": (SITE_MORE_BLOCKS, ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
 }
 
 

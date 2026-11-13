@@ -120,7 +120,9 @@ def science_growth_step(ex, obs, parameters):
     if result.get("status") != "succeeded":
         return result
     if (parameters or {}).get("pack"):  # another pack block's reserved slots (pack_growth.py)
-        return ex.green.grow(obs, parameters)
+        from ..pack_growth import PACK_CONTROLLERS
+
+        return getattr(ex, PACK_CONTROLLERS[parameters["pack"]]).grow(obs, parameters)
     retirement = getattr(ex, "science_retirement", None)  # move the startup cell's labs, do not craft new ones
     held = retirement.holds_for_growth(obs) if retirement is not None else None
     if held is not None:
@@ -130,7 +132,9 @@ def science_growth_step(ex, obs, parameters):
 
 def science_growth_proof(ex, obs, result, parameters):
     if (parameters or {}).get("pack"):
-        return ex.green.growth_proof(obs, parameters)
+        from ..pack_growth import PACK_CONTROLLERS
+
+        return getattr(ex, PACK_CONTROLLERS[parameters["pack"]]).growth_proof(obs, parameters)
     return ex.science.growth_proof(obs, parameters)
 
 

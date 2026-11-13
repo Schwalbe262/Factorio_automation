@@ -327,6 +327,26 @@ class AdvancedControllerTests(unittest.TestCase):
         self.builder.ensure_plan.assert_not_called()
         self.assertTrue(all(e in self.preflight.call_args.args[3] for e in result["second_added_entities"]))
 
+    def test_a_verified_block_extends_in_place_at_its_anchor(self):
+        self.install()
+        s = self.c.state
+        s["phase"] = "verified"
+        self.board["blocks"]["advanced_circuit_production"] = s["plan"]
+        (self.root / "pcb-board.json").write_text(json.dumps(self.board))
+        for count, wires in ((3, 2), (4, 2)):
+            grown = self.c.plan_growth(self.obs, {"machines": count})
+            self.assertTrue(grown["ok"], grown)
+            self.assertEqual((len(grown["core"]["red_machines"]), len(grown["core"]["wire_machines"])), (count, wires))
+            self.assertEqual(grown["core"]["anchor"], s["core"]["anchor"])
+            keys = {(e["name"], *xy(e)) for e in grown["plan"]["entities"]}
+            self.assertTrue({(e["name"], *xy(e)) for e in s["plan"]["entities"]} < keys)
+        self.c.count = 3
+        with patch("factorio_agent.advanced_circuits._atomic_json") as write:
+            self.c._grow_in_place(self.obs)
+        self.assertEqual(write.call_count, 2)  # state, then the republished board plan
+        self.assertEqual((self.c.built_count(), self.c.state["phase"]), (3, "build"))
+        self.assertEqual(self.c.plan_growth(self.obs)["reason"], "advanced_growth_nothing_to_add")
+
     def test_natural_technology_missing_plastic_and_unfinished_bus_fail_before_cost(self):
         self.assertEqual(
             self.c.prepare({**self.obs, "technologies": {}})["reason"],
@@ -686,6 +706,164 @@ function splitter(q)q.force=f;q.surface=s;q.splitter_input_priority="left";q.spl
             self.c._mixer_cleanup(self.obs)["evidence"]["reason"],
             "advanced_mixer_incompatible_held_stack_requires_guarded_manual_recovery",
         )
+
+
+class PlannedSite:
+    """One district block east of the planned bus (side right), as the master plan would give."""
+
+    def __init__(self, x0=60, y0=-90):
+        self.x0, self.y0, self.kept = x0, y0, []
+
+    def allocate_candidates(self, kind, w, h, *, name, count, returns_to_bus, world_id):
+        from factorio_agent.site.geometry import Rect
+
+        rect = Rect(self.x0, self.y0, self.x0 + w, self.y0 + h)
+        return [SimpleNamespace(name=name + "#0", rect=rect, side="right", along0=20, along1=50)]
+
+    def keep_only(self, prefix, keep, world_id=None):
+        self.kept.append((prefix, keep))
+
+
+def tap_route(game, builder, obs, source, destination, reserved, **kwargs):
+    ends = [entity("transport-belt", **p["position"], direction=p["facing"]) for p in (source, destination)]
+    return {"ok": True, "entities": ends, "underground_pairs": [], "clear_obstacles": [], "route_metrics": {}}
+
+
+class PlannedWorldAdvancedTests(unittest.TestCase):
+    """A planned world: SiteService block, iron and copper from planned-bus taps (no bus-factory)."""
+
+    def setUp(self):
+        import test_v2_planned_tap as tapfix
+
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.harness = tapfix.Harness(self.root)
+        board = self.harness.board()
+        board["catalog_fingerprint"] = "c"
+        (self.root / "pcb-board.json").write_text(json.dumps(board))
+        self.game = SimpleNamespace(
+            cfg=SimpleNamespace(runtime_dir=self.root), query=Mock(return_value={"ok": True, "pole_index": 1})
+        )
+        self.builder = SimpleNamespace(
+            _occupied_by_plan=FactoryBuilder.__new__(FactoryBuilder)._occupied_by_plan,
+            ensure_plan=Mock(return_value={"status": "succeeded"}),
+        )
+        self.defense = SimpleNamespace(
+            prepare_coverage=Mock(return_value={"ok": True}),
+            ensure_coverage=Mock(return_value=None),
+            coverage_proof=Mock(return_value={"complete": True}),
+        )
+        plastic = dict(
+            port("plastic-bar", 120.5, -60.5, 4, direction="output"),
+            name="transport-belt",
+            unit_number=700,
+            world_id="w",
+        )
+        chemical = SimpleNamespace(
+            state={
+                "world_id": "w",
+                "catalog_fingerprint": "c",
+                "products": {"plastic-bar": {"phase": "verified", "plan": {"entities": []}}},
+            },
+            proof=Mock(return_value={"source": plastic}),
+        )
+        self.site = PlannedSite()
+        self.c = AdvancedCircuitProduction(
+            self.game, self.builder, catalog(), self.defense, chemical=chemical, site=self.site
+        )
+        self.c.tap = SimpleNamespace(state={}, _documents=Mock(side_effect=AssertionError("bus-factory read")))
+        self.obs = {
+            "ok": True,
+            "world_id": "w",
+            "tick": 10,
+            "technologies": {"advanced-circuit": True},
+            "enabled_recipes": {
+                name: True
+                for name in (
+                    "advanced-circuit",
+                    "electronic-circuit",
+                    "copper-cable",
+                    "assembling-machine-1",
+                    "fast-inserter",
+                    "inserter",
+                    "long-handed-inserter",
+                    "underground-belt",
+                    "splitter",
+                )
+            },
+            "entities": list(self.harness.entities) + [dict(plastic, direction=4)],
+        }
+        for target, value in (
+            ("factorio_agent.planned_tap.max_span", 5),
+            ("factorio_agent.advanced_circuits.survey_slots", {"ok": True, "legal": [1]}),
+            ("factorio_agent.advanced_circuits.preflight", {"ok": True, "clear_obstacles": []}),
+            ("factorio_agent.advanced_circuits.connect_power_groups", {"ok": True, "entities": []}),
+        ):
+            patch(target, return_value=value).start()
+        patch("factorio_agent.advanced_circuits.plan_connection", side_effect=tap_route).start()
+        patch("factorio_agent.transport.plan_connection", side_effect=tap_route).start()
+        self.addCleanup(patch.stopall)
+
+    def test_prepare_sites_the_block_and_taps_both_plates_from_the_planned_bus(self):
+        ready = self.c.prepare(self.obs)
+        self.assertTrue(ready["ok"], ready)
+        self.assertEqual((ready["bus_kind"], ready["phase"]), ("planned", "build"))
+        self.assertEqual(ready["site_allocation"], "advanced_circuit_production#0")
+        self.assertEqual(
+            sorted((t["item"], t["owner"], t["side"]) for t in ready["taps"]),
+            [
+                ("copper-plate", "advanced_circuit_production", "right"),
+                ("iron-plate", "advanced_circuit_production", "right"),
+            ],
+        )
+        rated = advanced_circuit_rates(catalog(), 2)
+        demand = {t["item"]: t["demand_per_minute"] for t in ready["taps"]}
+        self.assertEqual(demand, {"iron-plate": rated["iron_per_minute"], "copper-plate": rated["copper_per_minute"]})
+        tapped = {(e["name"], *xy(e)) for t in ready["taps"] for e in t["entities"]}
+        self.assertFalse(tapped & {(e["name"], *xy(e)) for e in ready["plan"]["entities"]})
+        self.assertFalse(self.c.path.exists())
+
+    def test_step_cuts_the_taps_over_before_the_block_and_settles_the_site(self):
+        cut = {"type": "mine", "name": "transport-belt"}
+        with patch("factorio_agent.planned_tap.cutover", return_value=cut) as cutover:
+            self.assertEqual(self.c.step(self.obs), cut)
+        cutover.assert_called_once()
+        self.builder.ensure_plan.assert_not_called()
+        self.assertEqual(self.site.kept, [("advanced_circuit_production#", "advanced_circuit_production#0")])
+        state = json.loads((self.root / "planned-main-bus.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            sorted(t["name"] for t in state["taps"]),
+            ["advanced_circuit_production:copper-plate", "advanced_circuit_production:iron-plate"],
+        )
+        # Proof bus authority reads the planned bus: unbuilt taps are not a finished block.
+        self.assertEqual(self.c._planned_bus_proof(self.obs), "advanced_circuit_registered_tap_contract_changed")
+
+    def test_site_rung_widens_the_block_search_and_a_dry_run_exists(self):
+        from factorio_agent import block_sites, postmortem, remedy
+
+        asked = []
+        site = SimpleNamespace(allocate_candidates=lambda *a, count, **k: asked.append(count) or [])
+        build = lambda x, y: advanced_circuit_core(catalog(), x, y)  # noqa: E731
+        self.assertEqual(block_sites.blocks(site, self.obs, "o", build), [])
+        with remedy.applied(remedy.SITE_MORE_BLOCKS.options):
+            block_sites.blocks(site, self.obs, "o", build)
+        self.assertEqual(asked, [block_sites.CANDIDATES, block_sites.CANDIDATES_MAX])
+        self.assertIn(remedy.SITE_MORE_BLOCKS, remedy.ladder("advanced_circuit_production"))
+        self.assertIn("advanced_circuit_production", postmortem.DRY_RUN)
+        ex = SimpleNamespace(catalog=catalog(), advanced_circuits=self.c)
+        self.assertEqual(postmortem.DRY_RUN["advanced_circuit_production"].prepare(ex, self.obs, {})["phase"], "build")
+
+    def test_no_tap_row_returns_tap_needs(self):
+        from factorio_agent import plan_needs
+
+        self.obs["entities"] = [
+            e for e in self.obs["entities"] if e["name"] != "transport-belt" or e["unit_number"] == 700
+        ]
+        failed = self.c.prepare(self.obs)
+        self.assertFalse(failed["ok"])
+        self.assertEqual(plan_needs.from_result("advanced_circuit_production", failed)["kind"], "tap")
+        self.site.kept.clear()
 
 
 if __name__ == "__main__":

@@ -283,7 +283,7 @@ class StarterExecutors:
         )
         from .chemical_production import ChemicalProduction
 
-        self.chemicals = ChemicalProduction(game, self.builder, catalog, self.perimeter)
+        self.chemicals = ChemicalProduction(game, self.builder, catalog, self.perimeter, site=self.site)
         from .gas_distribution import GasDistribution
 
         self.gas_distribution = GasDistribution(
@@ -304,6 +304,7 @@ class StarterExecutors:
             science=self.science,
             green=self.green,
             chemical=self.chemicals,
+            site=self.site,
         )
         from .chemical_science import ChemicalScience
 
@@ -318,6 +319,7 @@ class StarterExecutors:
             science=self.science,
             green=self.green,
             bus_factory=self.bus_factory,
+            site=self.site,
         )
         from .normal_research import NormalResearch
 
