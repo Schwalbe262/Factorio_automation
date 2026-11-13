@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 
+from factorio_agent.core.deterministic_bootstrap import SURVEY_LAYOUT_TICKS
 from factorio_agent.core.deterministic_state import _atomic_json
 
 
@@ -177,7 +178,7 @@ class LegacyCoalCleanup:
         stack_size = self.catalog.items.get("coal", {}).get("stack_size")
         if type(stack_size) is not int or stack_size < 1:
             return {"ok": False, "reason": "catalog_normal_coal_stack_size_required"}
-        survey = self.bootstrap._existing_cells("coal")
+        survey = self.bootstrap._existing_cells("coal", max_age_ticks=SURVEY_LAYOUT_TICKS)
         if not survey.get("ok"):
             return {"ok": False, "reason": "legacy_coal_cell_survey_failed"}
         cells = [

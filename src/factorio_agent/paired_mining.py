@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from factorio_agent.core.deterministic_bootstrap import SURVEY_LAYOUT_TICKS
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
@@ -233,7 +234,7 @@ class PairedMining:
         specs = [e for b in selected for e in b["plan"]["entities"]]
         legacy = []
         for resource in ("iron-ore", "copper-ore"):
-            survey = self.bootstrap._existing_cells(resource)
+            survey = self.bootstrap._existing_cells(resource, max_age_ticks=SURVEY_LAYOUT_TICKS)
             if not survey.get("ok"):
                 return survey
             for cell in survey["cells"]:

@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from factorio_agent.legacy_coal_cleanup import LegacyCoalCleanup, LEGACY_CACHE_PROBE_LUA
+from factorio_agent.core.deterministic_bootstrap import SURVEY_LAYOUT_TICKS
 
 
 class LegacyCoalCleanupTests(unittest.TestCase):
@@ -171,7 +172,7 @@ class LegacyCoalCleanupTests(unittest.TestCase):
         self.assertEqual(prepared["receiver"]["unit_number"], 1342)
         self.assertEqual(self.steam.state, before)
         self.assertFalse(self.controller.path.exists())
-        self.bootstrap._existing_cells.assert_called_once_with("coal")
+        self.bootstrap._existing_cells.assert_called_once_with("coal", max_age_ticks=SURVEY_LAYOUT_TICKS)
 
     def test_emitter_is_mined_first_and_800_coal_cache_requires_eighteen_free_slots(self):
         mine = self.warm()

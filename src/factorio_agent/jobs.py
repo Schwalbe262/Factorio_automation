@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import contextlib
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -1009,6 +1010,20 @@ def _save_if_due(game) -> None:
         game.save()
 
 
+def _survey_slice(executors):
+    """The executors' survey reuse scope for one slice (``executors.survey_slice``), if any."""
+    scope = getattr(executors, "survey_slice", None)
+    return scope() if callable(scope) else contextlib.nullcontext()
+
+
+def _begin_survey_pass(executors, obs: dict) -> None:
+    # Every pass plans against a new observation: reused surveys are bound to
+    # its world and tick (deterministic_bootstrap.SURVEY_SAME_PASS).
+    begin = getattr(executors, "begin_survey_pass", None)
+    if callable(begin):
+        begin(obs)
+
+
 def _validate_slice_seconds(seconds) -> None:
     if not isinstance(seconds, (int, float)) or not 0 < seconds <= 50:
         raise ValueError("slice duration must be greater than zero and at most 50 seconds")
@@ -1016,7 +1031,7 @@ def _validate_slice_seconds(seconds) -> None:
 
 def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> dict:
     _validate_slice_seconds(seconds)
-    with RunLock(root / "writer.lock"):
+    with RunLock(root / "writer.lock"), _survey_slice(executors):
         ledger = Ledger(root)
         if key not in ledger.data["jobs"]:
             raise ValueError("unknown job key")
@@ -1025,6 +1040,7 @@ def run_slice(root: Path, game, executors, key: str, *, seconds: float = 25) -> 
         while True:
             obs = game.observe()
             ledger.sync(obs)
+            _begin_survey_pass(executors, obs)
             outcome, result = _advance_job(root, game, executors, ledger, key, obs)
             if outcome in ("inactive", "stopped", "terminal"):
                 return job
@@ -1137,7 +1153,7 @@ def run_jobs(root: Path, game, executors, *, seconds: float = 25) -> dict:
     action is counted in ``idle_actions`` and also starts a new pass.
     """
     _validate_slice_seconds(seconds)
-    with RunLock(root / "writer.lock"):
+    with RunLock(root / "writer.lock"), _survey_slice(executors):
         ledger = Ledger(root)
         deadline = time.monotonic() + seconds
         last_results: dict[str, dict] = {}
@@ -1172,6 +1188,7 @@ def run_jobs(root: Path, game, executors, *, seconds: float = 25) -> dict:
         while True:
             obs = game.observe()
             ledger.sync(obs)
+            _begin_survey_pass(executors, obs)
             order = _active_in_priority_order(ledger)
             if not order:
                 return finished()

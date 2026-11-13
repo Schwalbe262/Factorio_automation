@@ -190,6 +190,28 @@ class ReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.assertIsNone(fleet.git_commit(directory))
 
+    def test_the_report_prints_the_median_rcon_query_load(self):
+        import report_run
+
+        kernel = {
+            "commands": {"run": {"count": 36, "seconds": 900.0}, "observe": {"count": 10, "seconds": 60.0}},
+            "queries": {"count": 27715, "seconds": 433.0},
+        }
+        load = report_run.query_load(kernel, 866)
+        self.assertEqual(load["per_slice"], 769.9)
+        self.assertEqual(load["share_percent"], 45.1)
+        self.assertEqual(load["queries_per_minute"], 1732.2)
+        self.assertEqual(load["ms_per_action"], 500)
+        self.assertIsNone(report_run.query_load(None, 3))
+        rows = [
+            dict(seed=s, alive=True, game_minutes=30.0, milestones={}, furthest=None, query_load=load) for s in (1, 2)
+        ]
+        lines = fleet.format_report(dict(name="f"), rows, fleet.aggregate(rows), window_text="0-30")
+        self.assertIn("rcon query median: 1732.2/min, 45.1% of command time, 769.9/slice, 500.0 ms/action", lines)
+        quiet = [dict(seed=1, alive=True, game_minutes=30.0, milestones={}, furthest=None)]
+        lines = fleet.format_report(dict(name="f"), quiet, fleet.aggregate(quiet), window_text="0-30")
+        self.assertFalse(any(line.startswith("rcon query") for line in lines))
+
     def test_sixteen_runs_fit_in_sixty_lines(self):
         rows = [
             dict(seed=i, alive=True, game_minutes=30.0, milestones={"power": 10.0 + i}, furthest=None)

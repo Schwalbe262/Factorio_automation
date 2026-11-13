@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from factorio_agent.core.deterministic_bootstrap import SURVEY_LAYOUT_TICKS
 from factorio_agent.core.deterministic_state import _atomic_json
 from .construction_supply import FUELS, FUEL_SKIP_STOCK
 
@@ -50,7 +51,7 @@ class StarterCapacity:
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
     def cells(self, resource: str) -> list:
-        result = self.bootstrap._existing_cells(resource)
+        result = self.bootstrap._existing_cells(resource, max_age_ticks=SURVEY_LAYOUT_TICKS)
         if not result.get("ok"):
             raise RuntimeError(result.get("reason", "cell_survey_failed"))
         return [c for c in result.get("cells", []) if c.get("receiver") and c.get("remaining", 0) > 0]

@@ -20,7 +20,9 @@ Supervisor.run (supervisor.py) loops _cycle():
   7 _dispatch        submit ready nodes by priority while < 4 jobs active   (jobs.submit)
   8 _run_slice       "run --all --seconds 25" -> jobs.run_jobs
 Commands go through kernel.InProcessBridge -> kernel.Session -> __main__.execute (one RCON socket).
-jobs.run_jobs: per pass one observe; critical-path jobs first, then slack jobs on a slack view (critical_path.py), each group in priority order; StarterExecutors.step(capability)
+jobs.run_jobs: per pass one observe and at most one drill-cell survey (bootstrap._existing_cells:
+  one query for all resources, reused within the slice while world, act_epoch and the caller's
+  tick bound SURVEY_SAME_PASS / SURVEY_LAYOUT_TICKS hold; every game.act invalidates it); critical-path jobs first, then slack jobs on a slack view (critical_path.py), each group in priority order; StarterExecutors.step(capability)
   -> shared prelude, then the capability's handler (capability_registry.handler_for)
   -> action dict: durable pending_action, game.act, receipt -> pass ends (fresh observe next)
   -> status dict: recorded; next job gets the same observation

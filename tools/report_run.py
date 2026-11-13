@@ -142,9 +142,34 @@ def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=Non
         "controller_errors": dict(errors.most_common(5)),
         "commands": {k: {"count": v["count"], "seconds": round(v["seconds"], 1)} for k, v in commands.items()},
         "kernel_totals": kernel,
+        "query_load": query_load(kernel, len(actions)),
         "per_job": per_job,
         **incident_report(root, controller),
         **test_mode_label(root),
+    }
+
+
+def query_load(kernel, actions):
+    """RCON query cost from the latest kernel totals (one supervisor session), or None.
+
+    ``share_percent`` is query seconds over the session's command seconds;
+    ``per_slice`` divides by its ``run`` commands; ``ms_per_action`` by the run's
+    actions (all actions of the run; the totals cover the latest session only).
+    """
+    if not isinstance(kernel, dict) or not isinstance(kernel.get("queries"), dict):
+        return None
+    count = kernel["queries"].get("count", 0)
+    seconds = kernel["queries"].get("seconds", 0.0)
+    commands = kernel.get("commands") or {}
+    busy = sum(row.get("seconds", 0.0) for row in commands.values() if isinstance(row, dict))
+    slices = (commands.get("run") or {}).get("count", 0)
+    return {
+        "queries": count,
+        "query_seconds": round(seconds, 1),
+        "share_percent": round(100 * seconds / busy, 1) if busy else None,
+        "queries_per_minute": round(count / (busy / 60), 1) if busy else None,
+        "per_slice": round(count / slices, 1) if slices else None,
+        "ms_per_action": round(1000 * seconds / actions) if actions else None,
     }
 
 
