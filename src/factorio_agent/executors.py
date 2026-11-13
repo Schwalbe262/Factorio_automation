@@ -152,6 +152,13 @@ class StarterExecutors:
         self.carried_surplus = CarriedSurplus(catalog, storage=self.storage, retirement=self.starter_retirement)
         self.starter_retirement.surplus = self.carried_surplus
         self.bootstrap.fuel_depot = self.carried_surplus.depot_take
+        from .power_coal_feed import hand_fed_wood_reserve
+        from .wood_burner_feed import WoodBurnerFeed
+
+        # Wood is burned in the power plant: hand-fed boiler first, then the wood feed chest (wood_burner_feed.py).
+        self.wood_burner_feed = WoodBurnerFeed(game, self.builder, catalog, surplus=self.carried_surplus)
+        self.carried_surplus.wood_feed = self.wood_burner_feed
+        self.carried_surplus.reserve = lambda o, item: hand_fed_wood_reserve(self.builder, catalog, o, item)
         from .science_retirement import StartupScienceRetirement
 
         # Obsolete startup science cell: dismantled once the permanent row researches (obsolete.py).
@@ -721,7 +728,7 @@ class StarterExecutors:
         if isinstance(boiler, dict) and boiler.get("type"):
             return boiler
         surplus = getattr(self, "carried_surplus", None)
-        disposal = surplus.step(obs) if surplus is not None else None
+        disposal = surplus.step(obs, idle=True) if surplus is not None else None
         if disposal:
             return disposal
         if bootstrap is not None:

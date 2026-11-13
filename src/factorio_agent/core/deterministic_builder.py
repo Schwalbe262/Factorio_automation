@@ -1134,7 +1134,11 @@ local t=helpers.json_to_table("""
             + """)
 local function fuel(e)
  if not e or not e.burner then return 0 end
- return (e.burner.remaining_burning_fuel or 0)+(e.burner.inventory.get_item_count("coal") or 0)*4000000
+ local joules=e.burner.remaining_burning_fuel or 0
+ for _,row in pairs(e.burner.inventory.get_contents()) do
+  joules=joules+row.count*(prototypes.item[row.name].fuel_value or 0)
+ end
+ return joules
 end
 local function fluid(e,name)
  if not e then return 0 end
@@ -1220,7 +1224,8 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
         self._reserve_coal_feed(power)
         boiler = next(e for e in power["entities"] if e["name"] == "boiler")
         actual = _find(observation, boiler) or {}
-        if not int((actual.get("inventory") or {}).get("coal", 0)) and actual.get("remaining_burning_fuel", 0) <= 0:
+        held = actual.get("inventory") or {}
+        if not any(int(held.get(f, 0)) for f in ("coal", "wood")) and actual.get("remaining_burning_fuel", 0) <= 0:
             self.state.pop("power_sample_tick", None)
             self._save()
             return _report("waiting", "hand-fed boiler waits for coal from the boiler upkeep", boiler=boiler)

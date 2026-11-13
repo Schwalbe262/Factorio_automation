@@ -160123,7 +160123,8 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
 ## 2026-06-20T20:57:25.3165668Z - Part149 live Automation completion follow-up
 - Goal: verify the temporary drill recovery continued beyond iron repair into Automation progress.
 - Actions: monitored strict Qwen run after commit/push; no extra source changes.
-- Metrics: health tick 105958; researched=4; live skill esearch_automation stopped with utomation research completed; failure_root now gear_mall_missing repair ootstrap_build_item_mall.
+- Metrics: health tick 105958; researched=4; live skill 
+esearch_automation stopped with utomation research completed; failure_root now gear_mall_missing repair ootstrap_build_item_mall.
 - Result: Automation is complete on the reset strict run; next milestone is item mall -> circuits -> electric mining drill.
 - Token usage: current 12,298,924; part delta +246,686 since 12,052,238; weekly quota unavailable.
 
@@ -252150,6 +252151,18 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: gate run; unmeasured live.
 - failure reason / open: power feed not a tap yet and not retired; second lane not built; fallback to an independent pair when no tap site (recorded second_group_reason).
 - next action: fleet run with bricks; check material-supply.json mode trunk_tap, mine-trunks.json, no new coal bank.
+## 2026-11-13 research: closed-loop input top-up for the startup science cell
+- goal: logistics one-pack stall (fleet auto-1113-1758, seed 1298193051: 19 of 20 packs, smelting waited 24 game min on the splitter).
+- evidence: EMD + prewarmed logistics funded 45 Cu / 90 Fe into the shared hub cell (exact bills 25+20); red machines finished 40 (EMD terminal) + 4 = 44; diversion recovery never fired (a gear sat in a red machine). Only stable state: one copper in one hub-fed machine, one gear in the other.
+- actions: industry.py `_closed_loop_topup`/`_cell_shortfall`/`_topup_funding` (`input_topups`, `topup_fund`, TOPUP_STALL_TICKS 1800, cap one more bill); funding_complete/production_complete wait for top-ups; docs BOOTSTRAP_RESEARCH.md; tests/test_v2_bootstrap_topup.py (3).
+- result: 19/20 split stall buys 1 Cu + 2 Fe once, then stops; satisfied target (pack in lab, whole craft in a machine, researched) gets nothing.
+- next action: fleet run; grep job-events for "top up stalled machine science inputs".
+
+## 2026-11-13 wood burned in the power plant (carried_surplus, power_coal_feed, wood_burner_feed)
+- goal: owner rule, carried wood is burned in the boilers; boiler has ONE fuel slot (Factorio 2.1.20 data/base entities.lua boiler fuel_inventory_size=1), so coal blocks wood.
+- actions: wood allowance 0, threshold WOOD_BATCH 25 in idle passes, WOOD_CARRY_CAP 100 in upkeep; hand-fed boiler takes leftover coal out and burns carried wood first (one wood slot reserved); new capability wood_burner_feed (owner's design): wooden chest -> burner arm -> splitter replacing one straight coal-feed belt, input priority wood side, output priority feed side; chest is the wood sink after boilers; proposed once when belt-fed, splitter enabled and >=25 wood carried/in depots. power_evidence counts every fuel by fuel_value.
+- metrics: tests test_v2_wood_burner_feed (7), carried_surplus +4, power_coal_feed +2.
+- next action: live fleet: confirm burner arm self-fuels from wood, splitter priority keeps coal as filler, and boiler proofs that count only coal (steam_expansion, base_coal_recovery) tolerate wood.
 
 ## 2026-11-13 mine trunk: power tap, patch grid, second lane (worker)
 - part: steps 1-3 of the mine-trunk follow-up (power's coal on a trunk tap, whole-patch grid, second lane + 2-2 splitter).
