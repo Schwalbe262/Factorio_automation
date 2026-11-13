@@ -67,8 +67,13 @@ REGISTRY: tuple[Obsolete, ...] = (
     ),
     # Phase switch, not a dismantle: the hand-fed boiler stays and is fed by belt.
     Obsolete("hand-fed boiler fuelling", "power_coal_feed", "dedicated coal belt (power_mode belt)", "power_coal_feed"),
+    Obsolete(
+        "starter boiler coal feed (drill, fuel arm, belts upstream of the join)",
+        "power_coal_tap",
+        "output-priority splitter tap on the coal patch trunk, proven 30 game seconds",
+        "power_coal_tap",
+    ),
     # Later (documented only):
-    Obsolete("legacy power coal belt", "-", "electric_coal bank feeding the boilers", "-", implemented=False),
     Obsolete("private plate lines of early rows", "-", "planned bus taps (planned_tap)", "-", implemented=False),
     Obsolete(
         "stone furnaces of the first smelting bank", "-", "steel furnaces (furnace_upgrade)", "-", implemented=False

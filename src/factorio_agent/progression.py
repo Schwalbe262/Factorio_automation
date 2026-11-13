@@ -605,6 +605,11 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed += mine_trunk_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
         : max(0, limit - len(proposed))
     ]
+    from .power_coal_tap import power_coal_tap_nodes  # boiler coal moves onto the coal trunk once
+
+    proposed += power_coal_tap_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
+        : max(0, limit - len(proposed))
+    ]
     for index, step in enumerate(ROADMAP):
         if len(proposed) >= limit:
             break

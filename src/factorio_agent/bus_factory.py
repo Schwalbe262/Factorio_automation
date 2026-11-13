@@ -25,21 +25,33 @@ def identity(e):
     return e["name"], *xy(e), e.get("direction", 0), e.get("belt_to_ground_type")
 
 
-def trace_corridor(plan, source, destination):
+def trace_corridor(plan, source, destination, *, passthrough=None):
     """Follow one exact saved belt path, including explicit underground pairs.
 
     A splitter, a missing pair, or a loop fails closed. Caller chooses which
     endpoint tiles to retain. No ownership is inferred from proximity.
+    ``passthrough`` maps a tile to an explicitly owned in-line splitter (a mine
+    trunk tap that replaced the plan's belt there): the path passes it along the
+    splitter's direction and the splitter is part of the result.
     """
     by_position = {
         xy(e): e for e in plan["entities"] if e["name"] in ("transport-belt", "underground-belt", "splitter")
     }
+    passthrough = dict(passthrough or {})
     pairs = {tuple(p["input"]): p for p in plan.get("underground_pairs", [])}
     current, goal = xy(source), xy(destination)
     result, visited = [], set()
-    while current not in visited and len(result) <= len(by_position):
+    while current not in visited and len(result) <= len(by_position) + len(passthrough):
         visited.add(current)
         e = by_position.get(current)
+        if e is None and current in passthrough:
+            e = passthrough[current]
+            result.append(e)
+            if current == goal:
+                return {"ok": True, "entities": result}
+            dx, dy = VECTORS[e["direction"]]
+            current = current[0] + dx, current[1] + dy
+            continue
         if e is None:
             return {"ok": False, "reason": "saved_corridor_has_gap", "position": list(current)}
         if e["name"] == "splitter":

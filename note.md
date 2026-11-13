@@ -160123,7 +160123,8 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
 ## 2026-06-20T20:57:25.3165668Z - Part149 live Automation completion follow-up
 - Goal: verify the temporary drill recovery continued beyond iron repair into Automation progress.
 - Actions: monitored strict Qwen run after commit/push; no extra source changes.
-- Metrics: health tick 105958; researched=4; live skill esearch_automation stopped with utomation research completed; failure_root now gear_mall_missing repair ootstrap_build_item_mall.
+- Metrics: health tick 105958; researched=4; live skill 
+esearch_automation stopped with utomation research completed; failure_root now gear_mall_missing repair ootstrap_build_item_mall.
 - Result: Automation is complete on the reset strict run; next milestone is item mall -> circuits -> electric mining drill.
 - Token usage: current 12,298,924; part delta +246,686 since 12,052,238; weekly quota unavailable.
 
@@ -252169,3 +252170,10 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: one EXISTING_CELLS_LUA query for all resources; jobs.run_jobs/run_slice enter executors.survey_slice and bind each pass (begin_survey_pass); reuse needs same world, unchanged game.act_epoch (counts_effect bumps before/after every act) and pass tick within the caller's bound (SURVEY_SAME_PASS fuel/wait, SURVEY_LAYOUT_TICKS=600 layout). report_run query_load line; fleet report median line.
 - metrics: tests test_v2_survey_reuse (15, incl. lupa equivalence with the old per-resource Lua), fleet_tool +1. Baseline query_load on snap run: 1694 queries/min, 729/slice, 46% share, 730 ms/action.
 - next action: fleet round; expect ~450-750 queries/min, <=200/slice, share ~10-15%, identical milestone order.
+## 2026-11-13 mine trunk: power tap, patch grid, second lane (worker)
+- part: steps 1-3 of the mine-trunk follow-up (power's coal on a trunk tap, whole-patch grid, second lane + 2-2 splitter).
+- actions: power_coal_tap.py (capability power_coal_tap: serve-first tap + branch side-loading onto the old feed, 30 s proof, coal_plan adopted (drill = bank drill), old drill/arm/upstream belts mined guarded while the boiler holds fuel); mine_trunk trunk_segments (taps past turns), EXTENDED_ATTEMPTS, receipt independent_groups + power_tap, lane_plan/record_lane/lane_head/tap_passthrough, real lanes_built, lane node; trunk_lane.py (capability mine_trunk_lane); mining_layout_policy.patch_grid (4x8 shift search, water/cliff survey, score covered/drills/unreachable) used by prepare_new_bank (policy grid = grid lattice, candidate_sites(grid=) edge columns, row growth to MAX_PAIRS); outposts: grid_origin reuse, lane head before side-loads, trace through tap splitters, material banks excluded from the rate check.
+- metrics: tests test_v2_power_coal_tap (9), test_v2_patch_grid (6), test_v2_trunk_lane (6); full gate passed.
+- result: offline only; nothing proven live.
+- failure reason / open: second lane has no consumers yet (far-side taps need a dive); steam_expansion keeps its own coal bank; grid footprint not a board reservation.
+- next action: fleet run to a coal bank: check power-coal-tap.json phase done, boiler fuel during retirement, patch_grid on new banks.

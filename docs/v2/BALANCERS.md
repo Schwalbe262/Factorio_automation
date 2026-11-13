@@ -1,7 +1,8 @@
 # Belt balancers
 
-Reference for layout work. Nothing here is built by a capability yet; the "Use in this
-project" section says where it should be.
+Reference for layout work. Only the 2-2 splitter of a mine trunk's second lane is built by a
+capability (`mine_trunk_lane`, `mine_trunk.lane_plan`); the "Use in this project" section
+says where the rest should be.
 
 ## The splitter is the only primitive
 
@@ -73,7 +74,9 @@ as any other build.
 
 - Bus taps (`planned_tap`, `planned_bus.splitter_side`) stay priority splitters.
 - Mine output trunk: drill-row lanes merge by saturation; when the planned demand needs
-  two or more trunk belts, an input-balanced N-to-M merge belongs at the patch edge.
+  two trunk belts, `mine_trunk_lane` builds the second belt and one 2-2 splitter at the trunk
+  head (a second row lane joins at its head port; while lane two has no consumer the splitter
+  merges both into lane one). Three or more belts: reserved and recorded only.
 - Multi-lane bus items (iron, copper, later circuits): a re-level stage after every few
   taps keeps the far lanes from starving.
 - A balancer should be generated from (N, M, required properties) as a splitter network

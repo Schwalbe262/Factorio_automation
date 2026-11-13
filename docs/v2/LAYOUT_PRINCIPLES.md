@@ -243,15 +243,65 @@ Rule:
 
 Wired today: `dedicated_materials` (coal and stone, also the chemistry purpose) taps the patch
 bank when one exists (`material_supply.TRUNK_MODE`; coal gets a two-output even hub splitter
-for `coal` / `brick-coal`). A supply prepared before this rule keeps its own bank. When the
-trunk has no tap site (no observed straight run, every row rejected) the old independent pair
-is still planned and the entry records `second_group_reason`: a recorded exception to retire
-later, not the design.
+for `coal` / `brick-coal`). A supply prepared before this rule keeps its own bank. Before any
+consumer opens its own group the trunk is searched further (`plan_tap`): every straight run
+of the observed trunk (`trunk_segments` follows its turns and passes built tap splitters; a
+belt fed from behind is another line and ends the trace), first `ATTEMPTS` rows per side,
+then `EXTENDED_ATTEMPTS` more. Only when all of that fails is the old independent pair
+planned; the entry records `second_group_reason` and the observe receipt lists it under
+`mine_trunks.independent_groups` (a recorded exception to retire later, not the design).
 
-Not yet: power's boiler feed as a `serve="first"` tap (the starter feed stays separate and is
-not retired), smelting fuel on a tap, building a second trunk lane and its 2-2 splitter (the
-receipt flags `second_lane_required`), retiring an old separate group through `obsolete.py`.
-The whole-patch grid of the Mining Patch Planner "simple" layout (several row pairs, all
-lanes to one edge, searched grid shift, pole lanes, lane merging by saturation) is the
-target shape for the patch plan; today a patch is one row pair with reserved pair slots, and
-only the saturation / lane-count arithmetic (`lane_saturation`, `lane_count`) exists.
+Power (`power_coal_tap.py`, capability `power_coal_tap`): once the boiler is belt-fed,
+`electric_coal` succeeded and the coal patch has a proven bank with an observed trunk
+(receipt `mine_trunks.power_tap`), one node moves the boiler feed onto the trunk: a
+`serve="first"` tap (branch output priority) and a branch belt that side-loads onto a straight
+belt of the existing feed. The old feed keeps running until trunk coal stands at the join with
+a fuelled boiler, a powered bank drill and both engines for 30 game seconds; then the builder's
+`coal_plan` is replaced (branch + kept feed belts + poles, `drill` = a bank drill, template
+`power_trunk_tap`), and the old drill, its arm and the belts upstream of the join are mined one
+guarded `mine` each, only while the boiler holds fuel (`obsolete.REGISTRY`). Before a bank
+exists the hand-fed boiler and the starter feed stay as they are.
+
+Smelting fuel stays the trunk's main output (the downstream consumer of every tap).
+
+Whole-patch grid (`mining_layout_policy.patch_grid`, Mining Patch Planner "simple"
+principles 1, 2, 5; a generalisation of the paired bank, not a second planner): the patch is
+covered by row pairs of the `mining_pair` shape stacked `BANK_PITCH` apart across the flow
+(drill row, shared collector, drill row; the free tile between pairs is the pole / service
+lane), columns `PAIR_PITCH` apart, every collector flowing to one patch edge. The edge is
+the flow's downstream side, which the site plan chose from where the consumers are
+(`mining_site.site_exit`). A drill stands where its footprint is free of water, cliffs
+(native survey `forbidden_tiles`) and other blocks and its mining area holds only the
+resource, at least `GRID_MIN_ORE_TILES` tiles; trees are ignored (cleared). The lattice shift
+is searched over one drill pitch (4 x 8 offsets) and scored by ore tiles covered, then fewer
+drills, then less ore unreachable. `prepare_new_bank` grids the patch first, makes the grid's
+lattice the bank's policy grid and plans the bank as the grid row pair whose edge-most columns
+fit (`candidate_sites(grid=)`), reserving that row's growth up to `MAX_PAIRS` columns; the
+bank keeps the record as `patch_grid`. Building is staged: the drills nearest the output edge
+first, then growth along the row (`prepare_extension`, the mine-trunk growth node). A later
+bank on the patch keeps the lattice (`MiningOutposts.prepare` passes the patch bank's
+`grid_origin`), so it is another row pair of the same grid; another patch is gridded afresh.
+Banks of older maps keep their plan (one row pair on the default lattice). When no grid row
+pair fits, the historical lattice is used and the record says `fallback`. Not yet: the grid's
+footprint is not a board reservation of its own (the ore rule already keeps other blocks off
+it), and the next row pair is placed by `prepare_connected_bank`'s search, not picked from the
+grid record.
+
+Lanes and merge at the patch edge (principle 4, `mine_trunk.lane_plan`, capability
+`mine_trunk_lane`, `trunk_lane.py`): when the receipt says `second_lane_required` (demand
+needs two belts and one stands), `mine_trunk_nodes` proposes the lane once. The second belt
+runs beside the first on the side away from the taps over the first straight run; at the first
+row with a free tap window one 2-2 splitter (no priorities: input and output balanced) spans
+both lanes, replacing the first lane's belt there (recorded and released first, mined by unit,
+`cutover`). Its head port, one row before the splitter, is where the next row lane of the patch
+joins: `prepare_connected_bank` tries it before any side-load onto the first lane. Until lane two
+has consumers the splitter merges both rows into lane one lane by lane (merge by saturation);
+taps then come only from the near side of that run. Three or more lanes stay reserved and
+recorded (`lanes_reserved`, `balancer_plan` `reserved_n_n`). `prepare_connected_bank`'s trunk
+trace passes recorded tap and lane splitters (`tap_passthrough`, `trace_corridor(passthrough=)`),
+and `mining_outpost` no longer counts dedicated-material banks toward its target, extends or
+builds them.
+
+Not yet: `steam_expansion`'s own paired coal bank, retiring an old independent material group
+through `obsolete.py`, consumers tapping the second lane (it needs a tap that dives under the
+first lane from the far side), an N-to-N balancer generator.

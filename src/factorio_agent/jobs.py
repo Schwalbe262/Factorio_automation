@@ -80,6 +80,12 @@ CAPABILITIES = {
         "requires": ["power", "power_coal_feed"],
         "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk",
     },
+    # Mine-trunk rule (power_coal_tap.py): proposed once the coal patch has a proven bank with a trunk.
+    "power_coal_tap": {
+        "parameters": {},
+        "requires": ["power", "power_coal_feed", "electric_coal"],
+        "effect": "boiler coal from an output-priority splitter tap on the coal patch trunk; verify 30 game seconds, then mine the starter feed drill and its upstream belts",
+    },
     "mining_outpost": {
         "parameters": {
             "resource": "iron-ore|copper-ore|coal|stone",
@@ -91,6 +97,12 @@ CAPABILITIES = {
         # power stands; collector belts, poles and the exit route are built, drills wait.
         "early_start": {"requires": ["power"], "inputs": "mining_zones", "locked_until": ["electric-mining-drill"]},
         "effect": "add aligned powered electric drills/collector banks with fixed output ports; never replace operating banks to expand",
+    },
+    # Mine-trunk rule 2 (trunk_lane.py): proposed when the trunk receipt says second_lane_required.
+    "mine_trunk_lane": {
+        "parameters": {"resource": "iron-ore|copper-ore|coal|stone"},
+        "requires": ["mining_outpost"],
+        "effect": "second belt beside the patch trunk with a 2-2 input-balanced splitter at its head; the trunk belt it replaces is released and mined by unit",
     },
     "smelting_district": {
         "parameters": {},

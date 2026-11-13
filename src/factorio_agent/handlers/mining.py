@@ -22,6 +22,34 @@ def electric_coal_proof(ex, obs, result, parameters):
     return ex.electric_coal.proof(obs)
 
 
+def power_coal_tap_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "power_coal_tap")
+    if early is not None:
+        return early
+    return ex.power_coal_tap.step(obs)
+
+
+def power_coal_tap_proof(ex, obs, result, parameters):
+    return ex.power_coal_tap.proof(obs)
+
+
+def mine_trunk_lane_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "mine_trunk_lane")
+    if early is not None:
+        return early
+    return ex.trunk_lane.step(obs, parameters or {})
+
+
+def mine_trunk_lane_proof(ex, obs, result, parameters):
+    return ex.trunk_lane.proof(obs, parameters or {})
+
+
+def validate_mine_trunk_lane(parameters):
+    from ..trunk_lane import validate_parameters
+
+    validate_parameters(parameters)
+
+
 def mining_outpost_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "mining_outpost")
     if early is not None:
@@ -137,6 +165,8 @@ def base_coal_recovery_proof(ex, obs, result, parameters):
 
 
 register("electric_coal", step=electric_coal_step, proof=electric_coal_proof)
+register("power_coal_tap", step=power_coal_tap_step, proof=power_coal_tap_proof)
+register("mine_trunk_lane", step=mine_trunk_lane_step, proof=mine_trunk_lane_proof, validate=validate_mine_trunk_lane)
 register("mining_outpost", step=mining_outpost_step, proof=mining_outpost_proof, validate=validate_mining_outpost)
 register("paired_mining", step=paired_mining_step, proof=paired_mining_proof)
 register(

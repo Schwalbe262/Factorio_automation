@@ -88,6 +88,8 @@ Current capabilities:
 | bootstrap_logistics | none | power and naturally unlocked Automation |
 | bootstrap_research | `--technology gun-turret`, stone-wall or electric-mining-drill | power; current native Automation, red-science recipe, target prerequisites and powered startup machines/lab; logistics research is unnecessary |
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
+| mine_trunk_lane | `--resource coal` (or iron-ore/copper-ore/stone) | mining_outpost; a patch trunk whose receipt says `second_lane_required` |
+| power_coal_tap | none | power, power_coal_feed, electric_coal; a proven coal patch bank with an observed trunk (`mine_trunks.power_tap`) |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..960` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |
 | smelting_capacity | `--resource iron-ore` or copper-ore, `--rate-per-minute` finite (0,450] absolute nominal target | smelting_district; connected ore and installed furnace types must cover the target within the bank's reserved slots (12 pairs on a fresh district, 6 on old rows); proposed by `progression.smelting_capacity_nodes` when bus taps claim 80% of a bank |
