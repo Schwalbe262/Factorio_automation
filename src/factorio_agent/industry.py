@@ -38,6 +38,12 @@ FUND_CHUNK = 10
 # A prewarmed next batch is funded in packets of this many packs (or its whole
 # remainder): never the one-pack packets of 1 copper + 2 iron seen live.
 PREWARM_PACKET = 5
+# Closed-loop input top-up (BOOTSTRAP_RESEARCH.md, closed-loop top-up): once the
+# fixed bill is funded, a cell that has stood still this long with fewer
+# deliverable packs than the technology still needs gets the shortfall's raw
+# inputs. Ingredients split over parallel machines (one holds a copper plate,
+# the other a gear) are not deliverable (seed 1298193051: logistics 19 of 20).
+TOPUP_STALL_TICKS = 1800
 # The technology whose research unlocks the cell's machines; the cell is
 # prebuilt while it runs (``BootstrapLogistics.prebuild``).
 CELL_UNLOCK_TECHNOLOGY = "automation"
@@ -1164,6 +1170,174 @@ class BootstrapLogistics:
         self._save()
         return self._repair_funding(obs, plan)
 
+    # Closed-loop input top-up (BOOTSTRAP_RESEARCH.md, closed-loop top-up).
+    def _topups_unfunded(self):
+        return any(
+            e["allocated_inputs"].get(item, 0) < n
+            for e in self.state.get("input_topups", [])
+            for item, n in e["inputs"].items()
+        )
+
+    def _science_rules(self):
+        """(pack yield, copper per cycle, gears per cycle, iron per gear cycle, gears per gear cycle)."""
+        science = self.catalog.recipe_for_product(RED_PACK)
+        gears = self.catalog.recipe_for_product("iron-gear-wheel")
+
+        def amount(rows, item):
+            return sum(p["amount"] for p in rows if p["name"] == item and p.get("probability", 1) == 1)
+
+        rules = (
+            amount(science["products"], RED_PACK),
+            amount(science["ingredients"], "copper-plate"),
+            amount(science["ingredients"], "iron-gear-wheel"),
+            amount(gears["ingredients"], "iron-plate"),
+            amount(gears["products"], "iron-gear-wheel"),
+        )
+        if any(type(n) is not int or n < 1 for n in rules):
+            raise ValueError("deterministic red science and gear recipes required")
+        return rules
+
+    def _topup_inputs(self, cycles):
+        """Raw plates for ``cycles`` science crafts, priced like ``requirements``."""
+        _, copper, gears, iron, gear_yield = self._science_rules()
+        return {"iron-plate": math.ceil(cycles * gears / gear_yield) * iron, "copper-plate": cycles * copper}
+
+    def _cell_shortfall(self, obs, plan):
+        """Packs this technology still needs from the cell, and packs the cell can still deliver.
+
+        Needed is the bill minus packs already collected or waiting in an
+        output, and never more than the research has left (units remaining
+        from ``research_progress`` minus packs in the labs, in hand or in an
+        output). Deliverable counts only complete crafts: each science machine
+        on its own contents, plus the free plates and gears of the cell's
+        chests and gear machine. An ingredient stranded in a machine without
+        its partner is not deliverable.
+        """
+        pack_yield, copper, gears, iron, gear_yield = self._science_rules()
+
+        def held(entity, item):
+            value = (entity or {}).get("inventory", {}).get(item, 0)
+            return int(value) if type(value) in (int, float) and math.isfinite(value) and value > 0 else 0
+
+        count = self.state["required_packs"]
+        reds = [self.find(obs, pin) for pin in self._red_pins()]
+        gear = next(self.find(obs, p) for p in self.state["machines"] if p.get("recipe") == "iron-gear-wheel")
+        chests = [self.find(obs, e) for e in plan["entities"] if e["name"] == "wooden-chest"]
+        waiting = sum(held(e, RED_PACK) for e in chests + reds)
+        in_labs = sum(held(self.find(obs, pin), RED_PACK) for pin in self._lab_pins())
+        in_hand = obs.get("inventory", {}).get(RED_PACK, 0)
+        in_hand = in_hand if type(in_hand) is int and in_hand > 0 else 0
+        needed = count - self.state["collected_packs"] - waiting
+        progress = obs.get("research_progress")
+        if type(progress) in (int, float) and math.isfinite(progress) and 0 <= progress <= 1:
+            left = count - math.floor(progress * count + 1e-6)
+            needed = min(needed, left - in_labs - in_hand - waiting)
+        cycles = sum(min(held(red, "copper-plate") // copper, held(red, "iron-gear-wheel") // gears) for red in reds)
+        free_copper = sum(held(e, "copper-plate") for e in chests)
+        free_iron = sum(held(e, "iron-plate") for e in chests) + held(gear, "iron-plate")
+        free_gears = sum(held(e, "iron-gear-wheel") for e in chests + [gear]) + free_iron // iron * gear_yield
+        cycles += min(free_copper // copper, free_gears // gears)
+        return max(0, needed), cycles * pack_yield
+
+    def _closed_loop_topup(self, obs, plan):
+        """Top up the raw inputs of a stalled cell by its shortfall, never beyond one more bill.
+
+        Runs only after the fixed bill and every audited repair are funded,
+        while this technology researches. A shortfall must hold, with the
+        cell and labs unchanged, for ``TOPUP_STALL_TICKS`` (inserter hands
+        are not observed; a still cell has none in flight). The top-up buys
+        whole crafts for the missing packs only, so a satisfied technology
+        gets nothing and the total is capped at ``required_packs``.
+        """
+        state = self.state
+        if (
+            any(state["allocated_inputs"].get(k, 0) < n for k, n in state["required_inputs"].items())
+            or any(
+                e["allocated_inputs"] != e["authorization"]["replacement_inputs"]
+                for e in state.get("diversion_recoveries", [])
+            )
+            or self._topups_unfunded()
+            or obs.get("research") != self.technology
+            or obs.get("technologies", {}).get(self.technology)
+        ):
+            return None
+        try:
+            needed, deliverable = self._cell_shortfall(obs, plan)
+            pack_yield = self._science_rules()[0]
+        except (KeyError, TypeError, ValueError, StopIteration):
+            return None
+        short = needed - deliverable
+        if short <= 0:
+            if state.pop("topup_stall", None) is not None:
+                self._save()
+            return None
+        cell = [
+            (e["name"], e["position"])
+            for e in plan["entities"]
+            if e["name"] in ("wooden-chest", "assembling-machine-1")
+        ]
+        signature = _hash(
+            dict(
+                progress=self._progress(obs),
+                research_progress=obs.get("research_progress"),
+                hand=obs.get("inventory", {}).get(RED_PACK, 0),
+                cell=[
+                    (
+                        (self.find(obs, dict(name=n, position=p)) or {}).get("inventory"),
+                        (self.find(obs, dict(name=n, position=p)) or {}).get("products_finished"),
+                    )
+                    for n, p in cell
+                ],
+                labs=[(self.find(obs, pin) or {}).get("inventory") for pin in self._lab_pins()],
+            )
+        )
+        previous = state.get("topup_stall")
+        if not previous or previous["signature"] != signature:
+            state["topup_stall"] = dict(signature=signature, tick=obs["tick"])
+            self._save()
+            return None
+        if obs["tick"] < previous["tick"]:
+            return dict(status="blocked", reason="bootstrap_research_topup_stall_tick_rollback")
+        if obs["tick"] - previous["tick"] < TOPUP_STALL_TICKS:
+            return None
+        cycles = math.ceil(short / pack_yield)
+        packs = cycles * pack_yield
+        used = sum(e["packs"] for e in state.get("input_topups", []))
+        evidence = dict(needed_packs=needed, deliverable_packs=deliverable, topup_packs=packs, prior_topup_packs=used)
+        if used + packs > state["required_packs"]:
+            return dict(status="blocked", reason="bootstrap_research_topup_cap_reached", evidence=evidence)
+        inputs = self._topup_inputs(cycles)
+        epoch = dict(packs=packs, inputs=inputs, allocated_inputs={}, observed_tick=obs["tick"], **evidence)
+        epoch["id"] = _hash(dict(epoch, sequence=len(state.get("input_topups", [])), signature=signature))
+        state.setdefault("input_topups", []).append(epoch)
+        state.pop("topup_stall", None)
+        self._save()
+        return self._topup_funding(obs, plan)
+
+    def _topup_funding(self, obs, plan):
+        for epoch in self.state.get("input_topups", []):
+            for item in ("copper-plate", "iron-plate"):
+                remaining = epoch["inputs"].get(item, 0) - epoch["allocated_inputs"].get(item, 0)
+                if remaining <= 0:
+                    continue
+                if obs.get("inventory", {}).get(item, 0) < remaining:
+                    return self.bootstrap.ensure_item(obs, item, remaining)
+                port = next(p for p in plan["ports"] if p["item"] == item)
+                return self._transfer(
+                    "topup_fund",
+                    dict(
+                        type="insert",
+                        name="wooden-chest",
+                        position=port["position"],
+                        inventory="chest",
+                        item=item,
+                        count=remaining,
+                        reason="top up stalled machine science inputs by the shortfall for " + self.technology,
+                    ),
+                    epoch["id"],
+                )
+        return None
+
     def _plan_hash_ok(self, recorded, plan, *, historical):
         """Plan rule for a bound batch.
 
@@ -1726,7 +1900,7 @@ class BootstrapLogistics:
             if funding is not None and funding.get("type"):
                 return funding
             funding_wait = funding
-        repair = self._repair_funding(obs, plan)
+        repair = self._repair_funding(obs, plan) or self._topup_funding(obs, plan)
         if repair:
             return repair
         if researched:
@@ -1798,6 +1972,11 @@ class BootstrapLogistics:
             # empty cell here is the plate wait, not a diversion.
             return dict(funding_wait, evidence={**self._progress(obs), **funding_wait.get("evidence", {})})
         repair = self._recover_stalled_diversion(obs, plan)
+        if repair and (repair.get("type") or repair.get("status") != "waiting"):
+            return repair
+        topup = self._closed_loop_topup(obs, plan)
+        if topup:
+            return topup
         if repair:
             return repair
         return {
@@ -1901,6 +2080,14 @@ class BootstrapLogistics:
             if total > epoch["authorization"]["replacement_inputs"].get(item, 0):
                 raise ValueError("repair funding exceeds audited allowance")
             epoch["allocated_inputs"][item] = total
+        elif kind == "topup_fund":
+            epoch = next((e for e in self.state.get("input_topups", []) if e["id"] == pending.get("recovery_id")), None)
+            if epoch is None:
+                raise ValueError("closed-loop top-up contract changed; retain durable intent")
+            total = epoch["allocated_inputs"].get(item, 0) + moved
+            if total > epoch["inputs"].get(item, 0):
+                raise ValueError("top-up funding exceeds its shortfall allowance")
+            epoch["allocated_inputs"][item] = total
         elif kind == "collect":
             self.state["collected_packs"] += moved
         elif kind == "lab":
@@ -1968,9 +2155,12 @@ class BootstrapLogistics:
             return None
         if self.state["allocated_inputs"] != self.state["required_inputs"]:
             return None
-        if any(
-            e["allocated_inputs"] != e["authorization"]["replacement_inputs"]
-            for e in self.state.get("diversion_recoveries", [])
+        if (
+            any(
+                e["allocated_inputs"] != e["authorization"]["replacement_inputs"]
+                for e in self.state.get("diversion_recoveries", [])
+            )
+            or self._topups_unfunded()
         ):
             return None
         if any(not _powered(self.find(obs, p)) for p in self.state["machines"] + self._lab_pins()):
@@ -2020,6 +2210,7 @@ class BootstrapLogistics:
                 e["allocated_inputs"] != e["authorization"]["replacement_inputs"]
                 for e in self.state.get("diversion_recoveries", [])
             )
+            or self._topups_unfunded()
             or any(not _powered(self.find(obs, p)) for p in self.state["machines"] + self._lab_pins())
         ):
             return None
@@ -2270,7 +2461,19 @@ class BootstrapLogistics:
         for epoch in recoveries:
             for item, count in epoch["replacement_inputs"].items():
                 effective[item] = effective.get(item, 0) + count
+        topups = self.state.get("input_topups", [])
+        for epoch in topups:
+            for item, count in epoch["inputs"].items():
+                effective[item] = effective.get(item, 0) + count
+        extra = (
+            dict(
+                input_topups=[dict(packs=e["packs"], allocated_inputs=deepcopy(e["allocated_inputs"])) for e in topups]
+            )
+            if topups
+            else {}
+        )
         return dict(
+            **extra,
             technology=self.technology,
             required_packs=self.state["required_packs"],
             machine_products_finished_delta=finished - self.state["baseline_products_finished"],
