@@ -42,6 +42,18 @@ def bus_state(direction, *, length=200, trunk=64):
     return {"world_id": "w", "bus": bus.to_dict(), "trunks": trunks, "feeds": [], "plan": plan, "phase": "verified"}
 
 
+# Factorio: a NORTH splitter's left is west; turning the splitter turns its sides with it.
+RIGHT_HAND = {0: (1, 0), 4: (0, 1), 8: (-1, 0), 12: (0, -1)}
+
+
+def native_side(splitter, point):
+    """Independent oracle: the native splitter side ``point`` lies on."""
+    rx, ry = RIGHT_HAND[splitter["direction"]]
+    p = splitter["position"]
+    lateral = (point["x"] - p["x"]) * rx + (point["y"] - p["y"]) * ry
+    return "right" if lateral > 0 else "left"
+
+
 def published(direction, **kwargs):
     return pb.publication(bus_state(direction, **kwargs))
 
@@ -122,6 +134,24 @@ class LayoutTests(unittest.TestCase):
                 for side in ("left", "right"):
                     with self.subTest(direction=direction, item=item, side=side):
                         self.check(direction, item, side)
+
+    def test_tap_splitter_output_priority_is_the_branch_in_every_direction_and_side(self):
+        for direction in ("N", "E", "S", "W"):
+            for item in ("iron-plate", "copper-plate"):
+                for side in ("left", "right"):
+                    with self.subTest(direction=direction, item=item, side=side):
+                        view, tap = self.check(direction, item, side)
+                        splitter = tap["splitter"]
+                        lane = view.lanes[tap["lane"]]
+                        s = 1 if side == "right" else -1
+                        branch = view.world(tap["along"] + 1, lane.offset + s)  # partner output tile
+                        trunk = view.world(tap["along"] + 1, lane.offset)  # the bus continues here
+                        self.assertEqual(splitter["splitter_output_priority"], native_side(splitter, branch))
+                        self.assertNotEqual(native_side(splitter, trunk), native_side(splitter, branch))
+                        self.assertEqual(splitter["splitter_input_priority"], "none")
+                        self.assertEqual(pb.tap_priorities(tap), {k: splitter[k] for k in pb.PRIORITY_KEYS})
+                        spec = next(e for e in tap["entities"] if e["name"] == "splitter")
+                        self.assertEqual(spec["splitter_output_priority"], splitter["splitter_output_priority"])
 
     def test_inner_lanes_dive_outer_built_trunks_and_tunnel_reserved_lanes(self):
         # Lane table: iron -14 (built), iron -13, copper -12 (built), copper -11, gaps, groups ...
@@ -270,6 +300,41 @@ class ConsumerTests(unittest.TestCase):
             mine = {t["along"] for t in taps}
             self.assertTrue(all(abs(t["along"] - a) >= 5 for t in again["taps"] for a in mine))
 
+    def test_cutover_configures_each_built_tap_splitter_once(self):
+        with TemporaryDirectory() as root:
+            h = Harness(root, direction="W")
+            taps = self.connect(h, side="right")["taps"]
+            pt.publish(h.root, "w", taps)
+            removed = {xy({"position": p}) for t in taps for p in t["remove"]}
+            units = iter(range(9000, 10000))
+            hardware = [dict(e, unit_number=next(units)) for t in taps for e in t["entities"]]
+            for e in hardware:
+                if e["name"] == "splitter":
+                    e.update(splitter_input_priority="none", splitter_output_priority="none")
+            live = [e for e in h.entities if xy(e) not in removed] + hardware
+            # Hardware stands: the taps count as built, but cutover is not done before the priorities.
+            action = pt.cutover(h.root, h.builder, h.obs(live), taps)
+            self.assertEqual(action["type"], "configure_splitter")
+            first = next(e for e in hardware if e["name"] == "splitter")
+            self.assertEqual(action["expected_splitter_unit"], first["unit_number"])
+            self.assertEqual(action["output_priority"], pb.tap_priorities(taps[0])["splitter_output_priority"])
+            self.assertTrue(all(t["built"] for t in taps))
+            # The bus proof wants the same priorities for every recorded tap.
+            state = json.loads((h.root / pb.STATE_FILE).read_text(encoding="utf-8"))
+            wanted = {xy(s): w for s, w in pb.wanted_splitters(state)}
+            self.assertEqual(wanted[xy(taps[0]["splitter"])], pb.tap_priorities(taps[0]))
+            for e in hardware:
+                if e["name"] == "splitter":
+                    e.update(wanted[xy(e)])
+            self.assertIsNone(pt.cutover(h.root, h.builder, h.obs(live), taps))
+            # An older tap record without priorities on its spec is configured the same way.
+            for tap in taps:
+                for key in pb.PRIORITY_KEYS:
+                    tap["splitter"].pop(key)
+            self.assertIsNone(pt.cutover(h.root, h.builder, h.obs(live), taps))
+            first.update(splitter_output_priority="none")
+            self.assertEqual(pt.cutover(h.root, h.builder, h.obs(live), taps)["type"], "configure_splitter")
+
     def test_a_restarted_consumer_reuses_its_built_taps(self):
         with TemporaryDirectory() as root:
             h = Harness(root)
@@ -286,7 +351,8 @@ class ConsumerTests(unittest.TestCase):
 
     def test_supply_rule(self):
         self.assertEqual(pt.tap_budget(150, 60), 90)
-        self.assertEqual(pt.tap_budget(60, 60), 30)  # an even splitter still hands half
+        # Over-subscribed: half the trunk is an allowance; branch-priority taps upstream are served first.
+        self.assertEqual(pt.tap_budget(60, 60), 30)
 
 
 class ProduceTests(unittest.TestCase):

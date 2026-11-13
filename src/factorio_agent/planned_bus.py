@@ -21,12 +21,26 @@ leave east)::
       (x-2..x+2, y+1) branch belts facing east; (x+2, y+1) lies outside the
                     district reservation and is the feed source port
 
-so red keeps the port, green keeps its anchor belt at (x-1, y) and the bus
-gets an ordinary splitter share (a backed-up bus sends everything to science).
+so red keeps the port and green keeps its anchor belt at (x-1, y). The feed
+splitter has output priority to the bus branch (input priority none, one
+input): plates go to the bus first, the district port gets what the bus does
+not take (all of it once the dead-ended trunk and its taps back up).
 The branch is turned with the district's ``site_transform``, so rotated or
 mirrored districts need nothing special. The feed is routed to the lane head
 with ``transport.plan_connection`` guided by the reserved
 ``corridor:smelting->bus``.
+
+Splitter priorities (``feed_priorities``, ``tap_priorities``): native sides are
+relative to the splitter's own facing, so they are derived from the facing
+and a point on the branch (``splitter_side``), never from map axes. Rule:
+a one-input splitter that hands a branch off a belt gives the branch output
+priority (feed: bus branch; tap: consumer branch); where two belts merge onto
+a bus lane (a later lane injection, a second lane of a material) the input
+priority goes to the bus lane (not built yet). The specs carry
+``splitter_input_priority`` / ``splitter_output_priority``; commissioning
+issues ``configure_splitter`` (unit and world guarded) for every built feed
+and tap splitter whose live priorities differ, also on older saved states
+(``annotate_state``), and the proof requires them.
 
 Phases (``planned-main-bus.json``): ``build`` (trunks, feeds, branch belts),
 ``splice`` (district plan gets the splitter, then the old belt is mined and
@@ -70,6 +84,106 @@ TRUNK_TILES = 64
 FACING = {"N": 0, "E": 4, "S": 8, "W": 12}
 BELTS = ("transport-belt", "underground-belt", "splitter")
 MAX_SPAN_LUA = 'return {ok=true,max_span=prototypes.entity["underground-belt"].max_underground_distance}'
+PRIORITY_KEYS = ("splitter_input_priority", "splitter_output_priority")
+_FORWARD = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
+
+
+# ----- splitter priorities (pure) ------------------------------------------------
+def splitter_side(splitter: dict, point: dict) -> str:
+    """``"left"`` or ``"right"``: the side of ``splitter``, seen along its facing, that ``point`` lies on.
+
+    Native splitter priorities name sides relative to the splitter's own
+    facing, so the side is derived from the facing vector and the point, never
+    from map axes: any bus direction, tap side, rotation or mirror.
+    """
+    dx, dy = _FORWARD[splitter["direction"]]
+    rx, ry = -dy, dx  # right of the facing (map y grows south)
+    p = splitter["position"]
+    lateral = (point["x"] - p["x"]) * rx + (point["y"] - p["y"]) * ry
+    if lateral == 0:
+        raise ValueError("point lies on the splitter centre line")
+    return "right" if lateral > 0 else "left"
+
+
+def branch_priorities(splitter: dict, branch_point: dict) -> dict:
+    """Native priorities of a one-input splitter whose branch leaves towards ``branch_point``.
+
+    Output priority to the branch: the consumer behind it takes what it can
+    use, only the surplus continues on the other output. A single input needs
+    no input priority (``"none"``).
+    """
+    return {"splitter_input_priority": "none", "splitter_output_priority": splitter_side(splitter, branch_point)}
+
+
+def feed_priorities(feed: dict) -> dict:
+    """District feed splitter: plates go to the bus branch first, the district port takes the rest."""
+    return branch_priorities(feed["splitter"], feed["source"]["position"])
+
+
+def tap_priorities(tap: dict) -> dict:
+    """Tap splitter: its consumer branch (towards the tap port) first, the surplus continues down the bus."""
+    return branch_priorities(tap["splitter"], tap["port"]["position"])
+
+
+def wanted_splitters(state: dict) -> list[tuple[dict, dict]]:
+    """``(splitter spec, wanted priorities)`` of every feed and recorded tap splitter."""
+    rows = [(f["splitter"], feed_priorities(f)) for f in state.get("feeds", [])]
+    return rows + [(t["splitter"], tap_priorities(t)) for t in state.get("taps", [])]
+
+
+def priorities_match(live: dict | None, wanted: dict) -> bool:
+    return live is not None and all(live.get(k) == v for k, v in wanted.items())
+
+
+def configure_action(builder, obs, rows) -> dict | None:
+    """The next paid ``configure_splitter`` for a built splitter of ``rows`` whose priorities differ, else None.
+
+    Idempotent: a splitter that already matches, or is not built yet, needs
+    nothing. Guarded by the observed unit number and world id.
+    """
+    live = {xy(e): e for e in obs["entities"] if e["name"] == "splitter"}
+    for splitter, wanted in rows:
+        found = live.get(xy(splitter))
+        if found is None or found.get("direction") != splitter.get("direction") or priorities_match(found, wanted):
+            continue
+        move = getattr(builder, "_move", None)  # character backend: walk into reach first
+        step = move(obs, found["position"]) if callable(move) else None
+        if isinstance(step, dict):
+            return step
+        return {
+            "type": "configure_splitter",
+            "name": "splitter",
+            "position": found["position"],
+            "input_priority": wanted["splitter_input_priority"],
+            "output_priority": wanted["splitter_output_priority"],
+            "expected_splitter_unit": found["unit_number"],
+            "expected_splitter_world_id": obs["world_id"],
+            "reason": "set planned bus splitter priorities: branch output first",
+        }
+    return None
+
+
+def _annotate(spec: dict, wanted: dict) -> bool:
+    """Put ``wanted`` priorities on a splitter spec; True when it changed."""
+    if all(spec.get(k) == v for k, v in wanted.items()):
+        return False
+    spec.update(wanted)
+    return True
+
+
+def annotate_state(state: dict) -> bool:
+    """Wanted priorities on every feed / tap splitter spec of a bus state (older states lack them)."""
+    changed = False
+    by_tile = {}
+    for splitter, wanted in wanted_splitters(state):
+        changed |= _annotate(splitter, wanted)
+        by_tile[xy(splitter)] = wanted
+    plans = [state.get("plan"), state.get("staged_plan")] + [{"entities": t["entities"]} for t in state.get("taps", [])]
+    for plan in plans:
+        for e in (plan or {}).get("entities", []):
+            if e["name"] == "splitter" and xy(e) in by_tile:
+                changed |= _annotate(e, by_tile[xy(e)])
+    return changed
 
 
 # ----- geometry (pure) ---------------------------------------------------------
@@ -127,7 +241,9 @@ def feed_branch(district_plan: dict, port: dict) -> dict:
             "direction": "output",
         },
     }
-    return dict(apply_transform(turn, shape), item=port["item"], district_port=dict(port["position"]))
+    feed = dict(apply_transform(turn, shape), item=port["item"], district_port=dict(port["position"]))
+    feed["splitter"].update(feed_priorities(feed))
+    return feed
 
 
 def _at(position) -> tuple:
@@ -408,6 +524,13 @@ class PlannedBus:
     def _save(self):
         _atomic_json(self.path, self.state)
 
+    def _annotate_priorities(self):
+        """Wanted priorities onto older splitter specs; re-read first, consumers append taps to the file."""
+        if self.path.exists():
+            self.state = json.loads(self.path.read_text(encoding="utf-8"))
+        if annotate_state(self.state):
+            self._save()
+
     def _publish(self, obs) -> dict | None:
         path = self.root / "pcb-board.json"
         board = self._board()
@@ -515,6 +638,11 @@ class PlannedBus:
                 return result
             self.state["phase"] = "commission"
             self._save()
+        # Commission: every built feed / tap splitter gets its native priorities first.
+        self._annotate_priorities()
+        action = configure_action(self.builder, obs, wanted_splitters(self.state))
+        if action is not None:
+            return action
         evidence = self.proof(obs)
         if not evidence:
             return {"status": "waiting", "reason": "waiting for district plates to reach every built bus lane tail"}
@@ -544,6 +672,9 @@ class PlannedBus:
             found = live.get((wanted["name"], *xy(wanted)))
             if found is None or (wanted["name"] in BELTS and found.get("direction") != wanted.get("direction")):
                 return None
+        splitters = wanted_splitters(state)
+        if not all(priorities_match(live.get(("splitter", *xy(s))), wanted) for s, wanted in splitters):
+            return None
         bus = Bus.from_dict(state["bus"])
         lanes = {lane.index: lane for lane in bus.lanes}
         evidence = []
@@ -576,5 +707,6 @@ class PlannedBus:
             "lanes": evidence,
             "underground_pairs": len(plan.get("underground_pairs", [])),
             "splitters": [f["splitter"]["position"] for f in state["feeds"]],
+            "splitter_priorities": [{"position": s["position"], **wanted} for s, wanted in splitters],
             "scope": "plates observed along every built lane up to its tail; no throughput or tap certification",
         }

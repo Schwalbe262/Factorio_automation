@@ -36,6 +36,18 @@ def at(position):
     return (position["x"], position["y"])
 
 
+# Factorio: a NORTH splitter's left is west; turning the splitter turns its sides with it.
+RIGHT_HAND = {0: (1, 0), 4: (0, 1), 8: (-1, 0), 12: (0, -1)}
+
+
+def native_side(splitter, point):
+    """Independent oracle: the native splitter side ``point`` lies on."""
+    rx, ry = RIGHT_HAND[splitter["direction"]]
+    p = splitter["position"]
+    lateral = (point["x"] - p["x"]) * rx + (point["y"] - p["y"]) * ry
+    return "right" if lateral > 0 else "left"
+
+
 class GeometryTests(unittest.TestCase):
     def test_plans_cover_every_direction(self):
         self.assertEqual({p.bus.direction for p in PLANS.values()}, {"N", "E", "S", "W"})
@@ -91,6 +103,27 @@ class GeometryTests(unittest.TestCase):
                 # Green science splits one tile upstream of the port on the other side.
                 upstream = owned.get((port["position"]["x"], port["position"]["y"]))
                 self.assertIsNotNone(upstream)
+
+    def test_feed_splitter_output_priority_is_the_bus_branch_for_turned_and_mirrored_districts(self):
+        mirrored = set()
+        for seed, master in PLANS.items():
+            plan = district_plan(master)
+            if plan["site_transform"].get("mirror"):
+                mirrored.add(seed)
+            for port in plan["ports"]:
+                feed = pb.feed_branch(plan, port)
+                splitter = feed["splitter"]
+                # The first branch belt sits one tile downstream of the splitter's branch half.
+                first = feed["belts"][0]["position"]
+                expected = native_side(splitter, first)
+                self.assertEqual(splitter["splitter_output_priority"], expected, seed)
+                # Canonical frame: facing east, branch south = right; a mirror swaps the sides.
+                self.assertEqual(expected, "left" if plan["site_transform"].get("mirror") else "right", seed)
+                self.assertEqual(splitter["splitter_input_priority"], "none")
+                self.assertEqual(pb.feed_priorities(feed)["splitter_output_priority"], expected)
+                # The district port (red science's side) is the other output.
+                self.assertNotEqual(native_side(splitter, feed["district_port"]), expected, seed)
+        self.assertTrue(mirrored)
 
     def test_splice_replaces_only_the_anchor_and_is_idempotent(self):
         plan = district_plan(PLANS[4])
@@ -241,6 +274,61 @@ class ControllerTests(unittest.TestCase):
             self.assertIsNone(h.bus.proof(h.obs(extra=mixed)))
             self.assertIsNone(h.bus.proof(h.obs(extra=built[1:])))
             self.assertIsNone(h.bus.proof(dict(h.obs(extra=built), world_id="other")))
+
+    def test_commission_configures_each_feed_splitter_once_and_proof_requires_the_priorities(self):
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[2])
+            h.bus.state = h.bus.prepare(h.obs())
+            h.bus.state["phase"] = "commission"
+            h.bus._save()
+            plain = [
+                dict(e, splitter_input_priority="none", splitter_output_priority="none")
+                if e["name"] == "splitter"
+                else e
+                for e in self.built(h, plates=True)
+            ]
+            self.assertIsNone(h.bus.proof(h.obs(extra=plain)))
+            action = h.bus.step(h.obs(extra=plain))
+            feed = h.bus.state["feeds"][0]
+            live = next(
+                e for e in plain if e["name"] == "splitter" and at(e["position"]) == at(feed["splitter"]["position"])
+            )
+            self.assertEqual(action["type"], "configure_splitter")
+            self.assertEqual(action["expected_splitter_unit"], live["unit_number"])
+            self.assertEqual(action["expected_splitter_world_id"], "w")
+            self.assertEqual(
+                (action["input_priority"], action["output_priority"]),
+                ("none", native_side(feed["splitter"], feed["source"]["position"])),
+            )
+            # Configured: no further action, the proof passes.
+            done = [dict(e, **pb.feed_priorities(feed)) if e is live else e for e in plain]
+            other = h.bus.step(h.obs(extra=done))
+            self.assertEqual(other["type"], "configure_splitter")
+            self.assertNotEqual(at(other["position"]), at(feed["splitter"]["position"]))
+            matched = self.built(h, plates=True)
+            result = h.bus.step(h.obs(extra=matched))
+            self.assertEqual(result["status"], "succeeded", result)
+            self.assertEqual(len(result["evidence"]["splitter_priorities"]), 2)
+
+    def test_an_older_state_without_priorities_is_annotated_and_configured(self):
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[7])
+            state = h.bus.prepare(h.obs())
+            for e in [f["splitter"] for f in state["feeds"]] + state["plan"]["entities"]:
+                for key in pb.PRIORITY_KEYS:
+                    e.pop(key, None)
+            state["phase"] = "verified"
+            h.bus.state = state
+            h.bus._save()
+            unset = self.built(h, plates=True)  # observed splitters carry no priorities
+            action = h.bus.step(h.obs(extra=unset))
+            self.assertEqual(action["type"], "configure_splitter")
+            saved = json.loads((h.root / pb.STATE_FILE).read_text(encoding="utf-8"))
+            for row in [f["splitter"] for f in saved["feeds"]] + [
+                e for e in saved["plan"]["entities"] if e["name"] == "splitter"
+            ]:
+                self.assertIn(row["splitter_output_priority"], ("left", "right"))
+            self.assertEqual(h.bus.state, saved)
 
     @staticmethod
     def built(h, *, plates):
