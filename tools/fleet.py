@@ -423,6 +423,9 @@ class Fleet:
         self.base = Path(base or self.code / "runtime").resolve()
         self.dir = self.base / "fleets"
         self._lock = threading.Lock()
+        # "none" = rules in code only; "luna" = the low-tier model answers incidents
+        # (needed only to compare the two on the same seeds).
+        self.planner = "none"
 
     # manifest ----------------------------------------------------------
     def manifest_path(self, name):
@@ -488,7 +491,7 @@ class Fleet:
         from factorio_agent.automation_config import load_automation_config
 
         options = load_automation_config(self.code / "automation_config.json")
-        return replace(options, controller=replace(options.controller, planner="none"))
+        return replace(options, controller=replace(options.controller, planner=self.planner))
 
     # start --------------------------------------------------------------
     def cost(self):
@@ -534,6 +537,7 @@ class Fleet:
             code=str(self.code),
             created_at=time.time(),
             target_minutes=minutes,
+            planner=self.planner,
             runs=[
                 dict(seed=s, runtime=str(r), server_port=u, rcon_port=t, status="planned")
                 for s, r, (u, t) in zip(seeds, roots, pairs)
@@ -795,6 +799,12 @@ def main(argv=None):
     start.add_argument("--parallel", type=int, default=4, help="runs starting at once (map generation is serial)")
     start.add_argument("--stagger", type=float, default=10.0, help="seconds between the first launches")
     start.add_argument("--force", action="store_true", help="start even above the measured machine capacity")
+    start.add_argument(
+        "--planner",
+        choices=("none", "luna"),
+        default="none",
+        help="controller planner for every run of this fleet (compare by starting two fleets on the same --seeds)",
+    )
     for command in ("status", "report", "stop", "watch"):
         one = sub.add_parser(command)
         one.add_argument("--name")
@@ -807,6 +817,7 @@ def main(argv=None):
     quiet = getattr(args, "json", False)
     out = (lambda *_: None) if quiet else print
     if args.command == "start":
+        fleet.planner = args.planner
         value = fleet.start(
             args.count,
             args.seeds,
