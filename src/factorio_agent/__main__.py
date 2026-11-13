@@ -231,6 +231,12 @@ def execute(argv=None, services=None):
                 obs["furnace_block_claims"] = furnace_block_claims(root, obs)
             except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
                 obs["furnace_block_claims"] = {"blocks": [], "error": f"{type(exc).__name__}: {exc}"[:200]}
+            from .bandwidth_audit import receipt as bandwidth_receipt
+
+            try:  # planned belts through the lane flow model (docs/v2/LAYOUT_PRINCIPLES.md)
+                obs["belt_bandwidth"] = bandwidth_receipt(root, obs)
+            except Exception as exc:  # an audit must never break observe
+                obs["belt_bandwidth_error"] = f"{type(exc).__name__}: {exc}"[:200]
             obs["factory_constraints"] = factory_constraints(root, obs, services.catalog(root, game))
             from .normal_research import ready_options
 

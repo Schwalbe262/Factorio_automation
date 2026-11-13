@@ -252234,3 +252234,10 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - metrics: the receipt shape now grows labs 2 -> 4; plate limit 2 -> 7 with 60/30 spare in the unit test.
 - result: offline only.
 - next action: live map: science_growth grows labs, blocked_by_missing_pack names logistic-science-pack.
+
+## 2026-11-14 Part 52 - belt lane flow model, bandwidth audit, split furnace feed head
+- goal: owner screenshot (eval-4177156614 brick/steel block): raw side-loaded onto a short belt, then a splitter -> each row a quarter belt; the framework treated belts as full capacity.
+- actions: belt_flow.py (lane graph: head-on/curve keep lanes, side-load -> near lane, undergrounds, splitters even/priority/filter with demand-aware back-up, inserter far lane); bandwidth_audit.py (furnace blocks, district banks, bus + taps, produce rows, green cluster, mines + trunk taps, material hub, power coal and wood feeds); observe receipt belt_bandwidth (+ rework proposals), fleet report "belt bandwidth findings"; planned_furnaces.split_feed_head chosen by head_choice (flow model at full growth); growth guard feed_head_bandwidth_below_next_slot_demand.
+- metrics: live map plans: furnace_block 4 side_load_before_splitter + 2 single_lane_feed (brick rows 225/min delivered vs 225 needed at 6 slots); smelting_bank 4 + 4; bus, rows, mines, feeds 0. Split head: 450/min raw and coal per row, no findings.
+- result: offline only; gate PASS.
+- next action: build the rework (republish, new head beside the old, move feed, mine old head) and give smelting.paired_furnace_bank the split head (district banks show the same finding).
