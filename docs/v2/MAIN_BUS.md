@@ -1,5 +1,34 @@
 # Shared material bus
 
+## Planned bus on fresh maps (`planned_bus.py`, capability `planned_main_bus`)
+
+Roadmap step `main_bus` (after `automation_science`) builds the bus of the
+site plan on any seed: `plan.bus` gives head, flow direction (N/E/S/W) and the
+lane table. The first `iron-plate` and the first `copper-plate` lane each get
+a straight trunk of `TRUNK_TILES = 64` belts from the head; foreign belts
+already on a lane are crossed with underground pairs. All other lanes stay
+reserved. Each trunk is fed from its district plate port: three tiles upstream
+of the port a splitter replaces the district belt and a five-belt branch
+leaves the district beside the port (the side opposite green science's
+branch), routed to the lane head with the `corridor:smelting->bus` guide. Red
+science keeps the port; the bus takes an ordinary splitter share. Phases:
+build (everything but the splitters), splice (splitters go into the district
+plan, splitter stock first, the exact old belt is mined, splitter built),
+commission, verified. Proof: every planned belt as planned, native
+underground partners, each built trunk carries only its plate and its tail
+belt holds plates. `board["shared_main_bus"]` gets `template:
+planned_main_bus`, the bus frame, lanes (built/reserved/spare), trunks,
+per-material lane-band `reservations` over the whole bus length, head/tail
+`ports`, `entities`, `underground_pairs` and `sources`.
+
+Not yet: taps. `bus_tap.BusTap`, `industrial.free_tap_parameters` and the
+consumers that require `planned_main_bus` (steel supply, engines, ammo,
+advanced circuits, construction mall) still read only the template below and
+block on this bus; `produce` keeps using free board ports. The legacy
+`main_bus_factory` below is no longer a roadmap step (explicit request only).
+
+## Development-map bus (`main_bus.py`, `bus_factory.py`)
+
 `main_bus.py` compiles one real NORTH trunk for each declared material line.
 Several consumer splitters draw from that same trunk. The initial layout uses
 one iron belt at x=-11.5 and one copper belt at x=-3.5. A spare column four tiles

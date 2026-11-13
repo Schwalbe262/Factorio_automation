@@ -121,6 +121,11 @@ SMELTING_DISTRICT_BUILDS = {
     "underground-belt": 4,  # crossings only (estimate)
 }
 
+# planned_main_bus: two trunks of planned_bus.TRUNK_TILES (64) belts, two feed
+# routes from the district (about 30 belts each, estimate) and 5 branch belts
+# per feed, one splitter per feed, underground pairs where belts cross (estimate).
+PLANNED_BUS_BUILDS = {"transport-belt": 200, "splitter": 2, "underground-belt": 8}
+
 ROADMAP: tuple[Step, ...] = (
     Step("starter", "starter", {}),
     # Starter capacity is not a fixed step: ``autopilot_nodes`` sizes it from
@@ -188,17 +193,20 @@ ROADMAP: tuple[Step, ...] = (
     _research("steel-processing"),
     _research("fast-inserter"),
     Step("logistic_science", "logistic_science", {"rate_per_minute": 30}),
+    # The fresh-map bus: trunks from the site plan, fed beside the district
+    # ports (planned_bus.py). bus_factory's main_bus_factory is the old
+    # development-map migration and is only run on explicit request.
+    Step("main_bus", "planned_main_bus", {}, builds=PLANNED_BUS_BUILDS),
     Step("steam_expansion", "steam_expansion", {}, after=("logistic_science",)),
     _research("gun-turret"),
     Step("defense_perimeter", "defense_perimeter", {}, after=("research_gun_turret", "steam_expansion")),
-    Step("main_bus_factory", "main_bus_factory", {}),
     _research("advanced-material-processing"),
     _research("automation-2"),
     _research("engine"),
     _research("fluid-handling"),
     _research("oil-gathering"),
-    Step("dedicated_materials_coal", "dedicated_materials", {"resource": "coal"}, after=("main_bus_factory",)),
-    Step("dedicated_materials_stone", "dedicated_materials", {"resource": "stone"}, after=("main_bus_factory",)),
+    Step("dedicated_materials_coal", "dedicated_materials", {"resource": "coal"}, after=("main_bus",)),
+    Step("dedicated_materials_stone", "dedicated_materials", {"resource": "stone"}, after=("main_bus",)),
     Step("steel_supply", "steel_supply", {}),
     Step(
         "steel_production",

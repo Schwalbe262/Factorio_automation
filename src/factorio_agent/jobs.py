@@ -154,7 +154,7 @@ CAPABILITIES = {
     },
     "construction_mall": {
         "parameters": {"product": "transport-belt|gun-turret|underground-belt|splitter|assembling-machine-1|inserter"},
-        "requires": ["main_bus_factory", "defense_perimeter"],
+        "requires": ["planned_main_bus", "defense_perimeter"],
         "effect": "normally belt-feed expandable construction cells from surplus bus taps, cap native finished stocks, prove actual machine output and collect it for recurring construction",
     },
     "base_coal_recovery": {
@@ -171,6 +171,11 @@ CAPABILITIES = {
         "parameters": {},
         "requires": ["smelting_district", "logistic_science", "defense_perimeter"],
         "effect": "replace separate raw plate corridors with shared northbound iron/copper buses and native priority taps; commission compact green then normally retire obsolete western hardware; no throughput certification",
+    },
+    "planned_main_bus": {
+        "parameters": {},
+        "requires": ["smelting_district", "automation_science"],
+        "effect": "normally build the site plan's iron/copper bus trunks fed by a splitter branch beside each district plate port; prove plates on every built lane tail; other lanes stay reserved",
     },
     "dedicated_materials": {
         "parameters": {"resource": "coal|stone"},
@@ -207,7 +212,7 @@ CAPABILITIES = {
     },
     "steel_supply": {
         "parameters": {},
-        "requires": ["main_bus_factory"],
+        "requires": ["planned_main_bus"],
         "effect": "normally install and prove a surplus-priority iron bus outlet at a bounded resource-free station",
     },
     "steel_production": {
@@ -247,7 +252,7 @@ CAPABILITIES = {
     },
     "engine_production": {
         "parameters": {},
-        "requires": ["steel_production", "main_bus_factory"],
+        "requires": ["steel_production", "planned_main_bus"],
         "effect": "normally build a defended compact engine district with a surplus iron tap, fixed steel supply and reserved machine expansion; prove real engines on its output",
     },
     "engine_capacity": {
@@ -267,7 +272,7 @@ CAPABILITIES = {
     },
     "advanced_circuit_production": {
         "parameters": {},
-        "requires": ["chemical_production", "main_bus_factory"],
+        "requires": ["chemical_production", "planned_main_bus"],
         "effect": "normally build a compact advanced-circuit district with dedicated green/wire subcells, two fresh surplus bus taps and an exact proven plastic supply; preserve fixed ports and expansion space",
     },
     "chemical_science": {
@@ -277,7 +282,7 @@ CAPABILITIES = {
     },
     "ammo_production": {
         "parameters": {},
-        "requires": ["main_bus_factory"],
+        "requires": ["planned_main_bus"],
         "effect": "normally build a defended automatic magazine factory from a critical iron bus tap, bound its real output buffer, then supply full normal magazines through guarded inventory transfers",
     },
     "legacy_coal_cleanup": {
