@@ -101,6 +101,98 @@ class LapsedDefenseTests(unittest.TestCase):
         growth.assert_not_called()
 
 
+def belt(x, y, direction, unit=0):
+    return {"name": "transport-belt", "position": {"x": x, "y": y}, "direction": direction, "unit_number": unit}
+
+
+class DeadEndBankTests(unittest.TestCase):
+    """375 min: the extra iron bank (2 drills, port 47.5,-25.5 facing north) still fed nothing; its port
+    belt was full of ore 4 tiles south of the trunk (41.5,-29.5 east, full belt at 47.5,-29.5) and the
+    growth job blocked ``no_clean_extra_bank_connection_to_owned_ore_trunk`` looking for a far patch."""
+
+    def setUp(self):
+        import json, tempfile
+        from pathlib import Path
+
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        trunk_port = {"position": {"x": 41.5, "y": -29.5}, "facing": 4, "item": "iron-ore", "direction": "output"}
+        (root / "smelting-district.json").write_text(
+            json.dumps({"world_id": "w", "source_ports": {"iron-ore": trunk_port}}), encoding="utf-8"
+        )
+        (root / "pcb-board.json").write_text(json.dumps({"connections": []}), encoding="utf-8")
+        self.root = root
+        self.trunk = bank((41.5, -29.5))
+        self.dead = bank((47.5, -25.5), area=((39, -29.0), (48.0, -21)))
+        self.found = outposts([self.trunk, self.dead])
+        self.found.path = root / "mining-outposts.json"
+        self.entities = [belt(41.5, -29.5, 4), belt(47.5, -29.5, 4, 1719), belt(47.5, -25.5, 0)]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_ready_bank_whose_port_belt_runs_into_nothing_is_a_dead_end(self):
+        obs = dict(OBS, entities=self.entities)
+        self.assertEqual(self.found.dead_end_banks(obs, "iron-ore"), [self.dead])
+        # The district's source port and a bank with a belt in front of its port are not.
+        fed = dict(OBS, entities=self.entities + [belt(47.5, -26.5, 0)])
+        self.assertEqual(self.found.dead_end_banks(fed, "iron-ore"), [])
+
+    def test_a_port_another_block_takes_is_not_a_dead_end(self):
+        import json
+
+        (self.root / "pcb-board.json").write_text(
+            json.dumps({"connections": [{"source": {"x": 47.5, "y": -25.5}, "item": "iron-ore"}]}), encoding="utf-8"
+        )
+        self.assertEqual(self.found.dead_end_banks(dict(OBS, entities=self.entities), "iron-ore"), [])
+
+    def test_growth_connects_the_dead_end_bank_before_extending_or_adding_a_module(self):
+        obs = dict(OBS, entities=self.entities)
+        wired = dict(self.dead, consumer_connection={"target": {"unit_number": 1719}}, ok=True)
+        with (
+            patch.object(MiningOutposts, "prepare_dead_end_connection", return_value=wired) as connect,
+            patch.object(MiningOutposts, "prepare_extension") as extend,
+            patch.object(MiningOutposts, "prepare_connected_bank") as module,
+        ):
+            growth = self.found.plan_growth(obs, "iron-ore", 420, 270, [self.trunk, self.dead])
+        self.assertIs(growth["bank"], self.dead)
+        self.assertNotIn("ok", growth["extension"])
+        self.assertEqual(connect.call_args.args[2][0], self.trunk)  # onto the patch trunk
+        extend.assert_not_called()
+        module.assert_not_called()
+
+    def test_a_standing_bank_preflights_only_its_new_route_onto_the_nearest_trunk_target(self):
+        route = [belt(47.5, -26.5, 0), belt(47.5, -27.5, 0), belt(47.5, -28.5, 0)]
+        targets = [
+            {
+                "destination": {"position": {"x": x, "y": -28.5}, "facing": 0, "item": "iron-ore"},
+                "target": belt(x, -29.5, 4, 1700 + int(x)),
+            }
+            for x in (44.5, 47.5, 53.5)
+        ]
+        self.dead["plan"]["entities"].append(belt(47.5, -25.5, 0))
+        self.found.game = self.found.builder = None
+        checked = []
+        with (
+            patch(
+                "factorio_agent.outposts.belt_connection",
+                return_value={"ok": True, "entities": route, "underground_pairs": [], "route_metrics": {"length": 3}},
+            ) as connect,
+            patch(
+                "factorio_agent.outposts.preflight",
+                side_effect=lambda g, b, o, es: checked.append(es) or {"ok": True, "clear_obstacles": []},
+            ),
+        ):
+            routed, tried = self.found._route_to_trunk(
+                dict(OBS, entities=self.entities), self.dead, targets, None, built=True
+            )
+        self.assertEqual(connect.call_args.args[4]["position"], {"x": 47.5, "y": -28.5})  # nearest first
+        self.assertEqual(checked, [route])
+        self.assertEqual(len(routed["plan"]["entities"]), 5)
+        self.assertEqual(routed["consumer_connection"]["kind"], "same-item perpendicular side-load")
+        self.assertEqual(tried["routes"], 1)
+
+
 class WaypointRouteTests(unittest.TestCase):
     """steel_supply blocked 77 min: the coal route 52.5,34.5 -> 67.5,-126.5 (176 tiles across the base)
     had no corridor on every candidate; 52.5,34.5 -> 58.5,-60.5 and 58.5,-61.5 -> 67.5,-126.5 both fit."""

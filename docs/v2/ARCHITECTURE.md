@@ -187,7 +187,8 @@ drills), `dedicated_materials` (trunk-tap failure named in `change`),
 `trunk_return_feed` (`site:past_first_tap`), `steam_expansion` (`site:wider_steam_search`),
 `power_coal_tap` (replan), `relax:waypoint_route` (two-leg cross-base routes: steel, brick, steam),
 `engine_production` / `ammo_production` (produce rows on a planned world, `produce` rungs),
-`oil_gathering` (`site:wider_survey`, survey rings to 1024 tiles, scouting; `OIL_GATHERING.md`).
+`oil_gathering` (`site:wider_survey`, survey rings to 1024 tiles, scouting; `OIL_GATHERING.md`),
+`basic_petroleum` (refinery anchors from `block_sites`, `site:more_blocks`, crude route rungs incl. waypoint).
 Route rungs use one shared lever (`remedy.ROUTE_RELAX` read by
 `transport.plan_connection`). Not yet: a `clear` rung (no planner declares one;
 trees and rocks are already cleared by every plan, `site/nature.py`; rerouting

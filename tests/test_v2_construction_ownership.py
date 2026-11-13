@@ -92,6 +92,30 @@ class RegisteredStockOwnershipTests(unittest.TestCase):
         self.save()
         self.assertIsNone(self.bootstrap._take_output(self.obs, "iron-gear-wheel", 6))
 
+    def test_a_backed_up_pile_of_a_blocks_own_product_is_construction_surplus(self):
+        # eval-1575138435, 375 min: steel furnaces held 85 and 78 steel behind a full output belt
+        # whose port tile the engine row's route also owned; nothing could take the 8 steel of the
+        # engine row's chest or the 5 of a pumpjack.
+        furnace = dict(
+            name="stone-furnace", position={"x": 70, "y": -130}, unit_number=4493, output_inventory={"steel-plate": 85}
+        )
+        port = dict(
+            name="transport-belt", position={"x": 72.5, "y": -150.5}, unit_number=9, belt_inventory={"steel-plate": 8}
+        )
+        steel_port = dict(position=port["position"], direction="output", item="steel-plate", facing=0)
+        self.board["blocks"] = {
+            "steel_production": dict(entities=[furnace, port], ports=[steel_port]),
+            "production_row_engine-unit": dict(entities=[port], ports=[]),
+        }
+        self.save()
+        obs = dict(world_id="w", entities=[furnace, port])
+        action = self.bootstrap._take_output(obs, "steel-plate", 8)
+        self.assertEqual([s["unit_number"] for s in action["sources"]], [4493])
+        self.assertEqual(action["count"], 8)
+        # A furnace moving its output on (a few plates inside) keeps them.
+        furnace["output_inventory"] = {"steel-plate": 3}
+        self.assertIsNone(self.bootstrap._take_output(obs, "steel-plate", 8))
+
     def test_foreign_world_or_catalog_fails_before_selecting_goods(self):
         for field in ["world_id", "catalog_fingerprint"]:
             original = self.board[field]

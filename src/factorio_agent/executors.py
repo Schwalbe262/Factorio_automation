@@ -249,7 +249,7 @@ class StarterExecutors:
         self.water = WaterGathering(game, self.builder, catalog, self.perimeter)
         from .petroleum import BasicPetroleum
 
-        self.petroleum = BasicPetroleum(game, self.builder, catalog, self.perimeter)
+        self.petroleum = BasicPetroleum(game, self.builder, catalog, self.perimeter, site=self.site)
         from .ammo_production import AmmoProduction
 
         self.ammo = AmmoProduction(

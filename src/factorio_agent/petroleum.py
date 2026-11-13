@@ -256,6 +256,10 @@ PIPE_SURVEY_CELLS = 40000
 PIPE_SURVEY_MAX_CELLS = 160000
 
 
+OWNER = "basic_petroleum"  # site allocation name (block_sites)
+LEGACY_ANCHOR_OFFSETS = ((0, 0), (32, 0), (0, -16), (32, -16), (0, -32), (32, -32))  # development map only
+
+
 def refinery_origin(board):
     """Where the refinery block is sought: west of the industrial district (the crude consumer)."""
     industrial = [
@@ -514,8 +518,9 @@ def _petroleum_needs(failures, source, origin) -> dict:
 
 
 class BasicPetroleum:
-    def __init__(self, game, builder, catalog, perimeter):
+    def __init__(self, game, builder, catalog, perimeter, *, site=None):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
+        self.site = site  # planned world: refinery anchors from the master plan (block_sites)
         self.path = Path(game.cfg.runtime_dir) / "basic-petroleum.json"
         self.sources_path = self.path.parent / "fluid-sources.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
@@ -573,9 +578,27 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
             return {"ok": False, "reason": "petroleum_board_identity_changed"}
         reserved = [b["reserved_area"] for b in board.get("blocks", {}).values() if b.get("reserved_area")]
         reserved += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
-        # Relative to existing industrial district's west edge, not a well-specific waypoint.
-        base_x, base_y = refinery_origin(board)
-        anchors = [(base_x + dx, base_y + dy) for dx, dy in ((0, 0), (32, 0), (0, -16), (32, -16), (0, -32), (32, -32))]
+        from . import block_sites
+
+        # Planned world: district blocks of the refinery's size from the site service (rung
+        # site:more_blocks probes more); the development map keeps the anchors relative to the
+        # industrial district's west edge (refinery_origin), never a well-specific waypoint.
+        sited = block_sites.anchors(self.site, obs, OWNER, lambda x, y: refinery_core(self.catalog, x, y))
+        self._allocations = {anchor: name for anchor, name in sited or ()}
+        if sited == []:
+            return {
+                "ok": False,
+                "reason": "no_bounded_basic_petroleum_site_with_complete_native_connections",
+                "plan_needs": _petroleum_needs(
+                    [{"stage": "site_allocation"}], source["source"], refinery_origin(board)
+                ),
+                "evidence": {"attempts": 0, "failures": [{"stage": "site_allocation"}]},
+            }
+        if sited is not None:
+            anchors = list(self._allocations)
+        else:
+            base_x, base_y = refinery_origin(board)
+            anchors = [(base_x + dx, base_y + dy) for dx, dy in LEGACY_ANCHOR_OFFSETS]
         failures = []
         deadline = time.monotonic() + 20
         attempts = 0
@@ -664,6 +687,7 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
                 "fluid_edges": _fluid_edges(nodes, route["underground_pairs"], core, source["source"]),
                 "wire_hops": power["wire_hops"],
                 "planning_attempts": attempts,
+                "site_allocation": self._allocations.get((x, y)),
             }
         return {
             "ok": False,
@@ -725,11 +749,15 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
 
     def step(self, obs):
         if not self.state:
+            from . import block_sites
+
             prepared = self.prepare(obs)
             if not prepared.get("ok"):
+                block_sites.keep(self.site, obs, OWNER, None)
                 return {"status": "blocked", **prepared}
             self.state = prepared
             self._save()
+            block_sites.keep(self.site, obs, OWNER, prepared.get("site_allocation"))
         if not _identity(obs, self.state, self.catalog):
             return {"status": "blocked", "reason": "petroleum_world_or_catalog_changed"}
         source = self._source(obs)

@@ -142,6 +142,11 @@ FUEL_BATCH = 8  # coal pieces worth one fetch-and-fuel trip
 FUEL_FILL = 20  # cap; the amount follows coal production (haul_batch)
 FUEL_FETCH = 48  # cap for one coal fetch
 COLLECT_BATCH = 10  # construction items worth one collection trip
+# A block's machine holding this many of the block's own output-port item cannot move it out (its
+# output belt is backed up): that pile is surplus a construction trip may take (eval-1575138435,
+# 375 min: two steel furnaces held 163 steel behind a full output belt that the engine row's route
+# also owned, so the engine row's steel chest (8) and the pumpjacks (5 each) waited for ever).
+SURPLUS_OUTPUT_STOCK = 20
 # Hauling adapts to production: one trip carries about HAUL_MINUTES of the
 # item's measured output, between a floor and a cap. Early (15 plates/min) a
 # trip is small; with more cells it grows instead of multiplying trips.
@@ -277,6 +282,7 @@ class V2Bootstrap(DeterministicBootstrap):
                 groups.append(("shared_main_bus", board["shared_main_bus"]))
             ownership = {}
             owners = {}
+            surplus = {}  # machine key -> the owning blocks' output-port items (SURPLUS_OUTPUT_STOCK)
             # Once the bus feed is spliced (phase commission/verified) the district's plate ports
             # feed the trunks: their plates belong to the bus, never to a construction trip
             # (eval-4177156614: 42 takes at the iron port kept the lane tail empty for 10 min).
@@ -296,6 +302,12 @@ class V2Bootstrap(DeterministicBootstrap):
                     } - fed
                     ownership[key] = public if key not in ownership else ownership[key] & public
                     owners.setdefault(key, set()).add(name)
+                    if entity["name"] in OUTPUT_NAMES and name != "startup_science":
+                        surplus.setdefault(key, set()).update(
+                            port["item"]
+                            for port in block.get("ports", [])
+                            if port.get("direction") == "output" and isinstance(port.get("item"), str)
+                        )
             # Surplus trunk tiles past the last tap (starter_retirement.collection_points)
             # are the construction plate stock once the bus exists.
             from .starter_retirement import collection_points
@@ -313,16 +325,21 @@ class V2Bootstrap(DeterministicBootstrap):
             )
             for key, plate in points.items():
                 ownership[key] = ownership[key] | {plate}
-            self._stock_ownership_cache = (version, ownership, points)
+            self._stock_ownership_cache = (version, ownership, points, surplus)
         ownership = self._stock_ownership_cache[1]
         self._collection_points = self._stock_ownership_cache[2]
+        surplus = self._stock_ownership_cache[3]
 
         def available(entity):
             p = entity.get("position")
             if not _position(p):
                 return True  # ordinary candidate validation still rejects malformed rows
-            allowed = ownership.get((entity.get("name"), p["x"], p["y"]))
-            return allowed is None or item in allowed
+            key = (entity.get("name"), p["x"], p["y"])
+            allowed = ownership.get(key)
+            if allowed is None or item in allowed:
+                return True
+            held = (entity.get("output_inventory") or {}).get(item, 0)
+            return item in surplus.get(key, ()) and isinstance(held, (int, float)) and held >= SURPLUS_OUTPUT_STOCK
 
         return dict(observation, entities=[e for e in observation.get("entities", []) if available(e)])
 
