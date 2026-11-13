@@ -50,6 +50,9 @@ DEFAULT_MINUTES = 60.0
 # The roadmap stage the tail follows: production steps wait for it (the research steps
 # wait for their packs anyway, ``progression._packs_unsupplied``).
 TAIL_ANCHOR = "chemical_science"
+# Belt inputs of the anchor block (chemical_science.ChemicalScience._sources); a belt row of one of
+# them must not wait for the anchor (it would deadlock: blue waits for engine units on a belt).
+TAIL_ANCHOR_INPUTS = frozenset({"engine-unit", "advanced-circuit", "sulfur"})
 # Items per minute of one yellow belt, both lanes (``mine_trunk.BELT_RATE_PER_MINUTE``).
 BELT = "transport-belt"
 PRODUCE = "produce"
@@ -925,9 +928,10 @@ def tail(bill: Mapping, *, existing: Iterable[str] = (), researched_by: Mapping[
         if producer.get("belt_row"):
             # A stock-only block's item a consumer needs on a belt: its belt-output produce row.
             belt = producer["belt_row"]
-            after = [TAIL_ANCHOR] + (
-                [by_tech[row["technology"]]] if by_tech.get(row.get("technology")) in known else []
-            )
+            # The anchor block itself reads this item from a belt (blue science's engine units on a
+            # planned world, where the engine block is a stock-chest row): not after the anchor.
+            anchor = [] if row["item"] in TAIL_ANCHOR_INPUTS else [TAIL_ANCHOR]
+            after = anchor + ([by_tech[row["technology"]]] if by_tech.get(row.get("technology")) in known else [])
             node = step_id("rocket", "produce", row["item"], "belt")
             parameters = dict(belt["parameters"], rate_per_minute=_produce_rate(row))
             add({"id": node, "capability": belt["capability"], "parameters": parameters, "after": after})

@@ -140,9 +140,9 @@ planned tap is not republished).
 
 ## Known limits
 
-* Ordering: on a planned world `chemical_science` (roadmap) waits for engine units on a belt,
-  but the tail's `rocket_produce_engine_unit_belt` is generated `after: [chemical_science, ...]`
-  (`rocket_plan.tail`, line ~928): a deadlock until that row drops the anchor when the anchor
-  itself consumes the item.
+* Ordering: on a planned world `chemical_science` (roadmap) reads engine units from the tail's
+  `rocket_produce_engine_unit_belt`; that row no longer waits for the anchor
+  (`rocket_plan.TAIL_ANCHOR_INPUTS`). It exists only because the 2.1.20 rocket bill needs engines
+  on a belt; a bill without that need would leave blue without an engine belt on a planned world.
 * None of these has a native deployment proof yet (see `ADVANCED_PETROLEUM.md`); provable only
   live: typed pipe survey/router, handoff declare/bind, isolation, real taps and throughput.

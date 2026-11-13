@@ -299,6 +299,8 @@ class EveryBillItemHasAProducerTests(unittest.TestCase):
         engines = rows["rocket_produce_engine_unit_belt"]
         self.assertEqual(engines["parameters"]["output"], "belt")
         self.assertIn("rocket_produce_engine_unit_belt", rows["rocket_produce_electric_engine_unit"]["after"])
+        # Blue science (the anchor) reads engine units from that belt on a planned world: no anchor wait.
+        self.assertNotIn(rp.TAIL_ANCHOR, engines["after"])
         validate_parameters(engines["parameters"])
 
 
