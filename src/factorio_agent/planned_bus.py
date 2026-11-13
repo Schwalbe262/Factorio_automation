@@ -860,6 +860,18 @@ class PlannedBus:
         # is tap hardware now, not trunk (all-1113-2107: 4 of 12 buses waited
         # 10-15 minutes on the crossing belt of their own produce rows' taps).
         replaced = {_at(p) for tap in state.get("taps", []) if tap.get("built") for p in tap.get("remove", ())}
+        # A tap past the old trunk end builds its own trunk extension, so a dived lane's crossing
+        # tile was never a trunk belt to remove: its branch belt (sideways, another item) is tap
+        # hardware too (aud-1114-0703 seeds 1520940511, 2247342255: copper on the iron lane's
+        # crossing tile held both buses unproven for 15-25 minutes).
+        facing = FACING[Bus.from_dict(state["bus"]).direction]
+        replaced |= {
+            _at(e["position"])
+            for tap in state.get("taps", [])
+            if tap.get("built") and tap.get("dived_lanes")
+            for e in tap.get("entities", ())
+            if e["name"] == "transport-belt" and e.get("direction") != facing
+        }
         live = {(e["name"], *xy(e)): e for e in obs["entities"]}
         for wanted in plan["entities"]:
             found = live.get((wanted["name"], *xy(wanted)))

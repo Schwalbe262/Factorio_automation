@@ -420,6 +420,74 @@ class ControllerTests(unittest.TestCase):
             h.bus.state["taps"] = [dict(tap, built=False)]
             self.assertIsNotNone(h.bus.proof(h.obs(extra=self.built(h, plates=True))))
 
+    def test_proof_ignores_the_crossing_belt_of_a_tap_past_the_old_trunk_end(self):
+        # aud-1114-0703 (1520940511, 2247342255): the inserter row's copper tap sat past the old
+        # trunk end, built its own extension of both lanes and dived the iron lane; nothing was
+        # removed, so its copper branch belt on the iron lane's crossing tile held both buses.
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[1])
+            h.bus.state = h.bus.prepare(h.obs())
+            h.bus.state["phase"] = "commission"
+            bus = Bus.from_dict(h.bus.state["bus"])
+            lanes = {lane.index: lane for lane in bus.lanes}
+            copper = next(t for t in h.bus.state["trunks"] if t["item"] == "copper-plate")
+            iron = next(t for t in h.bus.state["trunks"] if t["item"] == "iron-plate")
+            end = pb.TRUNK_TILES
+            facing = pb.FACING[bus.direction]
+            across = (facing + 4) % 16
+            dive = [pb.lane_tile(bus, lanes[iron["lane"]], a) for a in (end + 1, end + 2, end + 3)]
+            extension = [
+                {"name": "transport-belt", "position": pb.lane_tile(bus, lanes[t["lane"]], a), "direction": facing}
+                for t in (copper, iron)
+                for a in range(end, end + 8)
+                if (t is copper and a != end) or (t is iron and a not in (end + 1, end + 2, end + 3))
+            ]
+            cut = pb.lane_tile(bus, lanes[copper["lane"]], end)
+            splitter = {"name": "splitter", "position": cut, "direction": facing, "_width": 2, "_height": 1}
+            tap = {
+                "splitter": splitter,
+                "name": "production_row_inserter:copper-plate",
+                "item": "copper-plate",
+                "lane": copper["lane"],
+                "along": end,
+                "dived_lanes": [iron["lane"]],
+                "built": True,
+                "remove": [],
+                "extension": {str(copper["lane"]): end + 8, str(iron["lane"]): end + 8},
+                "entities": extension + [
+                    splitter,
+                    {"name": "underground-belt", "position": dive[0], "direction": facing, "belt_to_ground_type": "input"},
+                    {"name": "transport-belt", "position": dive[1], "direction": across},
+                    {"name": "underground-belt", "position": dive[2], "direction": facing, "belt_to_ground_type": "output"},
+                ],
+                "underground_pairs": [
+                    {"input": [dive[0]["x"], dive[0]["y"]], "output": [dive[2]["x"], dive[2]["y"]],
+                     "direction": facing, "span": 2}
+                ],
+                "port": {"kind": "item", "item": "copper-plate", "position": dive[1], "facing": across,
+                         "direction": "output", "role": "tap"},
+            }  # fmt: skip
+            h.bus.state["taps"] = [tap]
+            for trunk in h.bus.state["trunks"]:
+                trunk["length"] = end + 8
+            copper_tiles = {at(pb.lane_tile(bus, lanes[copper["lane"]], a)) for a in range(end, end + 8)}
+            observed = self.built(h, plates=True) + [
+                dict(e, unit_number=91000 + n,
+                     belt_inventory={(copper if at(e["position"]) in copper_tiles else iron)["item"]: 4})
+                for n, e in enumerate(extension)
+            ]  # fmt: skip
+            observed += [
+                dict(splitter, unit_number=90000, **pb.tap_priorities(tap)),
+                dict(tap["entities"][-3], unit_number=90001, underground_pair_verified=True,
+                     underground_neighbour={"unit_number": 90002}, belt_inventory={"iron-plate": 4}),
+                dict(tap["entities"][-2], unit_number=90003, belt_inventory={"copper-plate": 4}),
+                dict(tap["entities"][-1], unit_number=90002, underground_pair_verified=True,
+                     underground_neighbour={"unit_number": 90001}, belt_inventory={"iron-plate": 4}),
+            ]  # fmt: skip
+            proof = h.bus.proof(h.obs(extra=observed))
+            self.assertIsNotNone(proof)
+            self.assertEqual({row["item"]: row["tail"] for row in proof["lanes"]}[iron["item"]], iron["tail"])
+
     def test_commission_configures_each_feed_splitter_once_and_proof_requires_the_priorities(self):
         with TemporaryDirectory() as root:
             h = Harness(root, PLANS[2])
