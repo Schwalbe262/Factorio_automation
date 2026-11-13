@@ -65,6 +65,9 @@ class CriticalPathToolTests(unittest.TestCase):
                 "".join(json.dumps(e) + "\n" for e in slices), encoding="utf-8"
             )
             data = tool.report(root, 0, 6, [0.5, 1.5])
+            # A window off the 10 s sample grid sees the same split (was: everything slack).
+            shifted = tool.report(root, 2.95, 6, [])
+        self.assertIn("power", shifted["actor_seconds"]["critical"])
         self.assertEqual(data["critical_path_at"]["0.5"]["ready"], ["starter"])
         self.assertEqual(data["critical_path_at"]["1.5"]["frontier"][0], "power")
         rows = {row["job"]: row for row in data["critical_jobs"]}

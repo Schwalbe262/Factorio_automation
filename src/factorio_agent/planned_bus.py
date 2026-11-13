@@ -291,20 +291,37 @@ def trunk_ports(bus: Bus, trunks: list[dict]) -> list[dict]:
     return ports
 
 
+def _tapped(plan: dict, taps: list, ports: list) -> dict:
+    removed = {_at(p) for tap in taps for p in tap["remove"]}
+    kept = [e for e in plan["entities"] if not (e["name"] == "transport-belt" and xy(e) in removed)]
+    entities = merge_entities(kept, *(tap["entities"] for tap in taps))
+    pairs = plan.get("underground_pairs", []) + [p for tap in taps for p in tap["underground_pairs"]]
+    extra = {k: v for k, v in plan.items() if k not in ("ok", "reason", "entities", "ports", "required_items")}
+    extra["underground_pairs"] = pairs
+    return _plan(entities, ports, **extra)
+
+
 def effective_plan(state: dict) -> dict:
     """The bus plan with every recorded tap applied: replaced trunk belts out, tap hardware and ports in."""
     plan = state["plan"]
     taps = state.get("taps", [])
     if not taps:
         return plan
-    removed = {_at(p) for tap in taps for p in tap["remove"]}
-    kept = [e for e in plan["entities"] if not (e["name"] == "transport-belt" and xy(e) in removed)]
-    entities = merge_entities(kept, *(tap["entities"] for tap in taps))
-    pairs = plan.get("underground_pairs", []) + [p for tap in taps for p in tap["underground_pairs"]]
     ports = trunk_ports(Bus.from_dict(state["bus"]), state["trunks"]) + [tap["port"] for tap in taps]
-    extra = {k: v for k, v in plan.items() if k not in ("ok", "reason", "entities", "ports", "required_items")}
-    extra["underground_pairs"] = pairs
-    return _plan(entities, ports, **extra)
+    return _tapped(plan, taps, ports)
+
+
+def build_plan(state: dict, plan: dict) -> dict:
+    """``plan`` (staged or full) with every built tap applied, for the bus's own build and splice.
+
+    A consumer may cut its tap into a built trunk while the bus is still
+    building (a produce row on the iron lane): the bus must not want its old
+    trunk belt back under that splitter (pace1 seeds 1634401926, 1193005910:
+    "reserved block placement is obstructed" for 15 minutes, no bus, no red science).
+    A recorded tap that is not built yet keeps the belt until its owner cuts it over.
+    """
+    taps = [tap for tap in state.get("taps", []) if tap.get("built")]
+    return _tapped(plan, taps, plan["ports"]) if taps else plan
 
 
 def publication(state: dict) -> dict:
@@ -626,7 +643,8 @@ class PlannedBus:
             # Early start: trunks and feed routes are built while the district is
             # still building; entities waiting for coming research or contested plates wait.
             defer = deferral(self.root, obs, self.catalog, "planned_main_bus")
-            result = self.builder.ensure_plan(obs, self.state["staged_plan"], **({"defer": defer} if defer else {}))
+            staged = build_plan(self.state, self.state["staged_plan"])
+            result = self.builder.ensure_plan(obs, staged, **({"defer": defer} if defer else {}))
             if result.get("status") != "succeeded":
                 return result
             self.state["phase"] = "splice"
@@ -643,7 +661,7 @@ class PlannedBus:
             for action in (self._splice_district(obs), self._cut_over(obs)):
                 if action is not None:
                     return action
-            result = self.builder.ensure_plan(obs, self.state["plan"])
+            result = self.builder.ensure_plan(obs, build_plan(self.state, self.state["plan"]))
             if result.get("status") != "succeeded":
                 return result
             self.state["phase"] = "commission"

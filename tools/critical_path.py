@@ -215,7 +215,9 @@ def report(root: Path, lo_min: float, hi_min: float, at: list[float]) -> dict:
         moments[str(minute)] = path.as_dict()
     # critical membership sampled every 10 game seconds
     critical_at = {}
-    for tick in range(lo, hi + 1, 600):
+    # on multiples of 600 ticks: the actor loop looks samples up at tick - tick % 600
+    # (a window starting off the grid, e.g. --from 18.6, counted every action as slack)
+    for tick in range(lo - lo % 600, hi + 1, 600):
         critical_at[tick] = run.critical_keys_at(tick)
     ever = set().union(*critical_at.values()) if critical_at else set()
     jobs = []

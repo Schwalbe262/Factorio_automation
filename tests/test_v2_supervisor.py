@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 from factorio_agent.jobs import _admission_error
 from factorio_agent.supervisor import (
+    AUTO_RETRY_LIMIT,
     Supervisor,
     WorkQueue,
     CLIBridge,
@@ -853,6 +854,32 @@ class MultiJobTests(Fixture):
         self.clock.advance(121)
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
         self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "stuck"]])
+
+    def test_a_failed_site_search_is_retried_after_a_quiet_interval(self):
+        # pace1 seed 2692229611: the district waited 5 minutes for the next unrelated success.
+        blocked_at = self.clock()
+        self.cli.jobs["site"] = job(
+            "site",
+            "c0",
+            status="blocked",
+            reason="no_clear_pcb_smelting_district_with_corridors",
+            blocked_at_time=blocked_at,
+        )
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(121)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "site"]])
+
+    def test_a_retry_deferred_for_a_job_slot_is_not_counted(self):
+        self.cli.jobs["site"] = job(
+            "site", "c0", status="blocked", reason="no_clear_x", blocked_at_time=self.clock() - 500
+        )
+        original = self.s._control_command
+        self.s._control_command = lambda command, key: False  # slot refusals
+        for _ in range(AUTO_RETRY_LIMIT + 1):
+            self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.s._control_command = original
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
 
     def test_stalled_job_without_a_block_timestamp_is_timed_from_first_sight(self):
         self.cli.jobs["stuck"] = job("stuck", "c0", status="blocked", reason="objective_progress_stalled")
