@@ -65,7 +65,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Space | `transport.py`, `routing.py`, `power_grid.py`, `manufacturing.py` | belt corridors (`plan_connection`), trunks, pole plans, `connect_power_groups` |
 | Space | `board.py` | `pcb-board.json` block registry; startup science cell |
 | Space | `resource_policy.py` | ore keepouts; only annotated mining entities may stand on ore |
-| Tools | `tools/check.ps1`, `tools/report_run.py`, `tools/luna_incident_replay.py` | lint + tests; run report; offline incident replay |
+| Tools | `tools/check.ps1`, `tools/report_run.py`, `tools/luna_incident_replay.py`, `tools/dashboard.py` | lint + tests; run report; offline incident replay; read-only web dashboard (docs/v2/README.md) |
 
 All other top-level modules are capability controllers constructed in
 `StarterExecutors.__init__` (`executors.py:38`).

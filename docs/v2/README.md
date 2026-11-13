@@ -12,6 +12,26 @@
 | [LIFECYCLE.md](LIFECYCLE.md) | BAT menu and `lifecycle` commands |
 | [AUTOMATION_CONFIG.md](AUTOMATION_CONFIG.md) | `automation_config.json` fields and ranges |
 
+## Dashboard (read-only run view)
+
+```
+python -B tools/dashboard.py [--runtime runtime/v2/<name>] [--port 8765]
+```
+
+Opens a server on `http://127.0.0.1:8765/` (loopback only; Ctrl+C stops it).
+Default runtime: the `runtime` of `runtime/active-runtime.json`, the one
+`lifecycle status` shows. It only reads files in the runtime folder: no RCON,
+no locks, no writes. The page polls `/api/state` every 5 s; JSONL logs are
+read incrementally and a missing or half-written JSON keeps its last good value.
+
+| Panel | Reads |
+|---|---|
+| Header | `run.json` (seed), `tools/report_run.report` (wall/game minutes, planner, idle-gap share), `logs/controller-state.json` + `supervisor-process.json` (process check by pid + creation time, else freshness of the last controller event), `lifecycle-pause.json` |
+| 진행 중 (now) | `jobs.json` (every non-succeeded job: status, reason, actions, age, evidence digest of blocked jobs), `work_queue.json` (open nodes), `logs/controller-events.jsonl` (`autopilot`, `auto_retry`, `dispatch_deferred`) |
+| 완료 (done) | report milestones (`job-events.jsonl` terminal successes); `progression.ROADMAP` matched against jobs/queue: done / active / queued / blocked / ready / not started |
+| 최근 활동 | last 40 `action_intent` rows of `job-events.jsonl` with their result, report's repeated-action top 3, `open_incidents` of the controller state, last controller errors |
+| 레이아웃 | `site-map.json` + `site-plan.json` drawn by `site.planrender.render_dashboard_svg` (map, zones, corridors, rail, bus lanes, allocations) with the `pcb-board.json` blocks' `reserved_area` on top; a placeholder until `SiteService` wrote the plan |
+
 ## Capability and subsystem reference
 
 Module-level notes. The modules they describe exist and match on spot checks;
