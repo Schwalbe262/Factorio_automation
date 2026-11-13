@@ -36,7 +36,7 @@ every item: net += max(0, installed cells * cell_rate - produced)   # cells buil
 | Field | Default | Meaning |
 |---|---|---|
 | `max_step` | 2 | cells added per decision |
-| `max_cells` / `max_plate_cells` | 8 / 8 | cap for coal / plates and stone (was 4 for plates: starved the early game on seed 283895142; the time comparison against lookahead demand decides below the cap) |
+| `max_cells` / `max_plate_cells` | 8 / 6 | cap for coal / plates and stone (was 4 for plates: starved the early game on seed 283895142; the time comparison against lookahead demand decides below the cap) |
 | `default_cell_rate` | 15.0 | ore/min per burner cell when unmeasured |
 | `fuel_margin` | 1.2 | coal deficit threshold |
 | `fuel_per_cell_per_minute` / `fuel_per_drill_per_minute` | 3.6 / 2.25 | coal burned by a new smelting / drill-only cell |

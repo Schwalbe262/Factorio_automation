@@ -149,15 +149,15 @@ class TimeComparisonTests(unittest.TestCase):
         # User rule: do not overbuild plate output; more cells cost plates and time.
         # Seed 4176033748: "net 1.3/min" (production minus the construction that
         # the bill itself describes) made the wait look endless: iron 1 -> 7 cells.
-        busy = dict(productive_cells=5, installed_live_cells=5, produced_per_minute=75.0, net_per_minute=1.3)
-        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=70, **busy)}, {"iron-plate": 330}), [])
+        busy = dict(productive_cells=4, installed_live_cells=4, produced_per_minute=60.0, net_per_minute=1.3)
+        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=70, **busy)}, {"iron-plate": 100}), [])
         self.assertEqual(len(plan_capacity({"iron-plate": iron(shortfall=70, **busy)}, {"iron-plate": 1500})), 1)
 
     def test_max_cells_cap(self):
-        full = dict(productive_cells=6, produced_per_minute=90.0, net_per_minute=5.0)
-        decisions = plan_capacity({"iron-plate": iron(shortfall=3000, installed_live_cells=6, **full)}, {})
-        self.assertEqual(decisions[0].target_cells, 8)
-        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=8)}, {}), [])
+        full = dict(productive_cells=4, produced_per_minute=60.0, net_per_minute=5.0)
+        decisions = plan_capacity({"iron-plate": iron(shortfall=3000, installed_live_cells=4, **full)}, {})
+        self.assertEqual(decisions[0].target_cells, 6)
+        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=6)}, {}), [])
         tight = CapacityConfig(max_plate_cells=4)
         decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=3)}, {}, config=tight)
         self.assertEqual(decisions[0].target_cells, 4)

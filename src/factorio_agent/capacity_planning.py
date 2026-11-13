@@ -66,7 +66,10 @@ class CapacityConfig:
     # the next steps needed 1000+ iron while 4 iron cells made 60/min). The
     # fuel new cells burn is covered by the coal rule (extra_fuel_burn) and
     # hand-fuelling by FUEL_BATCH; an earlier 1 -> 8 iron build-up predates both.
-    max_plate_cells: int = 8
+    # 6, not 8 (user rule): the cells are demolished once the smelting district
+    # and the bus exist, and every cell is hand-fuelled and hand-emptied, so
+    # each one adds hauling (16 served cells were 43% of all actions).
+    max_plate_cells: int = 6
     # Items/minute of one starter cell when the receipt has no measurement:
     # a burner mining drill mines 0.25 ore/s = 15/min.
     default_cell_rate: float = 15.0
