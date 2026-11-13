@@ -206,9 +206,22 @@ def prepare_new_bank(game, builder, obs, resource, count, reservations, **option
 
     ``options`` (for example ``site_exit``) are passed on unchanged.
     """
+    from . import evidence_capture
     from .mining_layout_policy import prepare_new_bank as prepare_policy_bank
 
-    return prepare_policy_bank(game, builder, obs, resource, count, reservations, **options)
+    result = prepare_policy_bank(game, builder, obs, resource, count, reservations, **options)
+    if evidence_capture.active():  # one row per tried exit side / patch (post-mortem dry run)
+        evidence_capture.note(
+            "mining_bank_attempt",
+            resource=resource,
+            count=count,
+            seed=((obs.get("resources") or {}).get(resource) or {}).get("position"),
+            site_exit=options.get("site_exit"),
+            reservations=len(reservations),
+            options=sorted(options),
+            outcome=evidence_capture.outcome(result),
+        )
+    return result
 
 
 class PairedMining:

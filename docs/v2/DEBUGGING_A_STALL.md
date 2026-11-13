@@ -75,6 +75,82 @@ and `python -m factorio_agent.site.masterplan <map.json> <out.svg>` (re-plans; n
 `python -m factorio_agent.blocks.row runtime/v2/<name>/catalog.json <recipe> <rate>`;
 a placed plan: `blocks.render.render_ascii(catalog, state["plan"])`.
 
+## 3b. Post-mortem of a fleet run
+
+A fleet round does not just switch its runs off. At the target game minute the
+watcher (`tools/fleet.py watch`, spawned by `start --minutes`) handles every due
+run in two passes:
+
+1. **Pause** each due run: lifecycle safe stop (supervisor ACK, `game.tick_paused`,
+   checkpoint save). The server stays up; nothing changes in the world any more.
+2. **Triage** each run from its logs (`tools/fleet_triage.py`, written to
+   `<run>/postmortem/triage.json`): `errored` (>= 3 controller errors, a job
+   ended by `repeated_executor_failure`/`planner_fault`/unknown outcome, processes
+   down), `stalled` (no action or success, no slice, or an empty queue for 8
+   game min), `blocked` (a job blocked/failed for >= 3 min), `slow` (a milestone
+   later than the fleet median by max(5 min, 25 %), or missing while half the
+   fleet has it), else `healthy`. The waste report's `run_stalled`,
+   `blocked_unretried`, `repeated_block` and `long_wait` rows are attached.
+3. **Snapshot** every non-healthy run while its server is up
+   (`factorio_agent.postmortem.snapshot`) into `<run>/postmortem/<stamp>-t<tick>/`:
+   `observe-raw.json` (every entity), `observe.json` (the full `observe` receipt
+   with the planner receipts), `layout.svg` (dashboard map), `probes/<job>.json`
+   per blocked/failed job (for a stalled run: its waiting jobs; at most 4) and
+   `manifest.json` (`run_files_changed` must be empty). A probe holds: the
+   job's ledger row; a dry run of its planner's pure `prepare` (`DRY_RUN`) and of
+   its controller `step` (an action it would take now is `would_act`, never
+   sent); every evidence note (`evidence_capture`: preflight failures with
+   entity and position, every route attempt with endpoints and reason, mining
+   bank attempts per exit side and the candidate list with the check each
+   failed, the patch-survey receipt fields, smelting candidates rejected by the
+   block filters / land survey and per-candidate failure stages); the queries
+   the planner sent (`probes/<job>-<mode>-queries.jsonl`); entity / resource /
+   water / cliff / charted-chunk dumps of up to 6 areas around the failure
+   positions, route spans and candidate areas; the entities standing on each
+   failure position (`blockers`); and a one-line `cause`.
+4. **Shut down** healthy runs as before. Problem runs stay `paused_problem`; when
+   the round is over `settle_kept` keeps the `--keep-problem N` worst (score:
+   stalled > blocked > errored > slow, then fewer milestones, longer idle) as
+   `kept` and shuts the others down. A kept run is shut down after
+   `--keep-timeout` minutes (default 60), by `fleet.py stop`, or by the next
+   `fleet.py start` when it needs the memory (oldest held first).
+
+Read-only by construction: the planners run against `postmortem.ReadOnlyGame`
+(`act`, `save`, `initialize` refuse; a query body matching `WRITE_PATTERN`, e.g.
+`create_entity`, `.insert{`, `d.x=`, `game.tick_paused=`, is refused before it is
+sent and recorded as `read_only_violation`) and against a sandbox copy of the
+run's JSON state inside the snapshot folder (planner state writes land there;
+the probe lists them as `sandbox_writes`; the sandbox is removed). Queries stay
+world-bound. The planners' wall-clock budgets are raised to 90 s for the dry
+run (full sweep) and the smelting search cursor is reset in the sandbox.
+
+Dry-run planners (`postmortem.DRY_RUN`): `mining_outpost` (`MiningOutposts.prepare`
+with the drill count `step` would ask for), `planned_main_bus`
+(`PlannedBus.prepare`), `smelting_district` (`SmeltingDistrict.prepare`),
+`produce` (`ProductionRows.prepare`), `supply_cell` (`SupplyCell.prepare`; not for
+retirements), `dedicated_materials` (`DedicatedMaterials.prepare`). Every other
+capability gets the generic dry run of its registered handler `step`; adding a
+planner = one `DryRun` entry with its pure `prepare`. A planner that needs a
+world write to plan shows the refused write in the probe (that is what it would
+need to become read-only).
+
+Commands:
+
+```powershell
+python -B tools/fleet.py report --name <fleet>            # "problem runs": class, blocking job, cause, folder, kept ports
+python -B tools/waste_report.py <fleet>                   # blocked_unretried rows carry "cause (post-mortem)"
+python -B tools/fleet.py inspect --name <fleet> --seed S  # state, ports, triage, causes, read-only snippet
+python -B tools/fleet.py inspect --name <fleet> --seed S --gui   # owner: visible client on a COPY of the save
+python -B tools/fleet.py revive --name <fleet> --seed S   # stopped run: its server again, paused, no supervisor
+python -B tools/fleet.py postmortem --name <fleet> --seed S      # a new snapshot of a kept or revived run
+```
+
+`--gui` copies the run's save to `<run>/postmortem/gui/` and starts a visible
+single-player client with its own profile there (`--load-game`); the run's
+server and files are untouched. Never join a run's server with a client: a
+connected player changes a client-free world (HEADLESS.md). The copy loads
+paused when the run was paused (`/c game.tick_paused=false` to let it run).
+
 ## 4. Profile
 
 - Set `FACTORIO_AGENT_PROFILE=1` in the environment that starts the

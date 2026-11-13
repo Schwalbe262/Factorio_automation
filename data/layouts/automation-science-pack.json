@@ -609,5 +609,368 @@
    "iron-plate",
    "steel-plate"
   ]
+ },
+ "science_block": {
+  "catalog_fingerprint": "284d4776bc3ab0b4cab69291afd367fac84c46ea17689a20010eb68de609f26d",
+  "entries": {
+   "square/single/both_sides": {
+    "descriptor": {
+     "aspect": "square",
+     "blue_lab_extension": false,
+     "counts": {
+      "belts": 101,
+      "inserters": 9,
+      "machines": 3,
+      "poles": 6
+     },
+     "footprint": [
+      32,
+      32
+     ],
+     "form": "science",
+     "growth": {
+      "kind": "in_place",
+      "lab_slots": 6,
+      "limit": "gear_output_inserter",
+      "max_rate_in_place": 30.0,
+      "slots": 4
+     },
+     "id": "sci-single-bothsides",
+     "input_sides": [
+      "N",
+      "S"
+     ],
+     "labs": "both_sides",
+     "machines": "single",
+     "output_side": "-",
+     "pollution_per_min": null,
+     "port_relation": "internal",
+     "power_kw": 477.3,
+     "power_kw_full": 1343.1,
+     "rate_full": 36.0,
+     "rate_now": 12.0,
+     "rate_requested": 6.0,
+     "raw_start": 388.5,
+     "raw_total": 887.5,
+     "rebuild_ahead": 65.6
+    },
+    "evidence": {},
+    "genome": {
+     "beacons": [],
+     "form": "science",
+     "lab_slots": 8,
+     "labs": "both_sides",
+     "machines": "single",
+     "modules": {}
+    },
+    "scores": {
+     "archive_cost": [
+      887.5,
+      101,
+      1024,
+      155
+     ]
+    }
+   },
+   "square/single/chain": {
+    "descriptor": {
+     "aspect": "square",
+     "blue_lab_extension": false,
+     "counts": {
+      "belts": 105,
+      "inserters": 9,
+      "machines": 3,
+      "poles": 6
+     },
+     "footprint": [
+      32,
+      32
+     ],
+     "form": "science",
+     "growth": {
+      "kind": "in_place",
+      "lab_slots": 6,
+      "limit": "gear_output_inserter",
+      "max_rate_in_place": 30.0,
+      "slots": 4
+     },
+     "id": "sci-single-chain",
+     "input_sides": [
+      "N",
+      "S"
+     ],
+     "labs": "chain",
+     "machines": "single",
+     "output_side": "-",
+     "pollution_per_min": null,
+     "port_relation": "internal",
+     "power_kw": 477.3,
+     "power_kw_full": 1343.1,
+     "rate_full": 36.0,
+     "rate_now": 12.0,
+     "rate_requested": 6.0,
+     "raw_start": 394.5,
+     "raw_total": 893.5,
+     "rebuild_ahead": 69.6
+    },
+    "evidence": {},
+    "genome": {
+     "beacons": [],
+     "form": "science",
+     "lab_slots": 8,
+     "labs": "chain",
+     "machines": "single",
+     "modules": {}
+    },
+    "scores": {
+     "archive_cost": [
+      893.5,
+      105,
+      1024,
+      159
+     ]
+    }
+   },
+   "square/single/row": {
+    "descriptor": {
+     "aspect": "square",
+     "blue_lab_extension": true,
+     "counts": {
+      "belts": 118,
+      "inserters": 9,
+      "machines": 3,
+      "poles": 6
+     },
+     "footprint": [
+      34,
+      32
+     ],
+     "form": "science",
+     "growth": {
+      "kind": "in_place",
+      "lab_slots": 6,
+      "limit": "gear_output_inserter",
+      "max_rate_in_place": 30.0,
+      "slots": 4
+     },
+     "id": "sci-single-row",
+     "input_sides": [
+      "N",
+      "S"
+     ],
+     "labs": "row",
+     "machines": "single",
+     "output_side": "-",
+     "pollution_per_min": null,
+     "port_relation": "internal",
+     "power_kw": 477.3,
+     "power_kw_full": 1343.1,
+     "rate_full": 36.0,
+     "rate_now": 12.0,
+     "rate_requested": 6.0,
+     "raw_start": 414.0,
+     "raw_total": 913.0,
+     "rebuild_ahead": 0.0
+    },
+    "evidence": {},
+    "genome": {
+     "beacons": [],
+     "form": "science",
+     "lab_slots": 8,
+     "labs": "row",
+     "machines": "single",
+     "modules": {}
+    },
+    "scores": {
+     "archive_cost": [
+      913.0,
+      118,
+      1088,
+      172
+     ]
+    }
+   },
+   "tall/direct/both_sides": {
+    "descriptor": {
+     "aspect": "tall",
+     "blue_lab_extension": false,
+     "counts": {
+      "belts": 112,
+      "inserters": 9,
+      "machines": 3,
+      "poles": 5
+     },
+     "footprint": [
+      42,
+      26
+     ],
+     "form": "science",
+     "growth": {
+      "kind": "in_place",
+      "lab_slots": 6,
+      "limit": "frame_slots",
+      "max_rate_in_place": 36.0,
+      "slots": 4
+     },
+     "id": "sci-direct-bothsides",
+     "input_sides": [
+      "W"
+     ],
+     "labs": "both_sides",
+     "machines": "direct",
+     "output_side": "-",
+     "pollution_per_min": null,
+     "port_relation": "internal",
+     "power_kw": 477.3,
+     "power_kw_full": 1581.3,
+     "rate_full": 36.0,
+     "rate_now": 12.0,
+     "rate_requested": 6.0,
+     "raw_start": 404.0,
+     "raw_total": 991.0,
+     "rebuild_ahead": 65.6
+    },
+    "evidence": {},
+    "genome": {
+     "beacons": [],
+     "form": "science",
+     "lab_slots": 8,
+     "labs": "both_sides",
+     "machines": "direct",
+     "modules": {}
+    },
+    "scores": {
+     "archive_cost": [
+      991.0,
+      112,
+      1092,
+      175
+     ]
+    }
+   },
+   "tall/direct/chain": {
+    "descriptor": {
+     "aspect": "tall",
+     "blue_lab_extension": false,
+     "counts": {
+      "belts": 116,
+      "inserters": 9,
+      "machines": 3,
+      "poles": 5
+     },
+     "footprint": [
+      42,
+      26
+     ],
+     "form": "science",
+     "growth": {
+      "kind": "in_place",
+      "lab_slots": 6,
+      "limit": "frame_slots",
+      "max_rate_in_place": 36.0,
+      "slots": 4
+     },
+     "id": "sci-direct-chain",
+     "input_sides": [
+      "W"
+     ],
+     "labs": "chain",
+     "machines": "direct",
+     "output_side": "-",
+     "pollution_per_min": null,
+     "port_relation": "internal",
+     "power_kw": 477.3,
+     "power_kw_full": 1581.3,
+     "rate_full": 36.0,
+     "rate_now": 12.0,
+     "rate_requested": 6.0,
+     "raw_start": 410.0,
+     "raw_total": 997.0,
+     "rebuild_ahead": 69.6
+    },
+    "evidence": {},
+    "genome": {
+     "beacons": [],
+     "form": "science",
+     "lab_slots": 8,
+     "labs": "chain",
+     "machines": "direct",
+     "modules": {}
+    },
+    "scores": {
+     "archive_cost": [
+      997.0,
+      116,
+      1092,
+      179
+     ]
+    }
+   },
+   "tall/direct/row": {
+    "descriptor": {
+     "aspect": "tall",
+     "blue_lab_extension": true,
+     "counts": {
+      "belts": 128,
+      "inserters": 9,
+      "machines": 3,
+      "poles": 5
+     },
+     "footprint": [
+      42,
+      26
+     ],
+     "form": "science",
+     "growth": {
+      "kind": "in_place",
+      "lab_slots": 6,
+      "limit": "frame_slots",
+      "max_rate_in_place": 36.0,
+      "slots": 4
+     },
+     "id": "sci-direct-row",
+     "input_sides": [
+      "W"
+     ],
+     "labs": "row",
+     "machines": "direct",
+     "output_side": "-",
+     "pollution_per_min": null,
+     "port_relation": "internal",
+     "power_kw": 477.3,
+     "power_kw_full": 1581.3,
+     "rate_full": 36.0,
+     "rate_now": 12.0,
+     "rate_requested": 6.0,
+     "raw_start": 428.0,
+     "raw_total": 1015.0,
+     "rebuild_ahead": 0.0
+    },
+    "evidence": {},
+    "genome": {
+     "beacons": [],
+     "form": "science",
+     "lab_slots": 8,
+     "labs": "row",
+     "machines": "direct",
+     "modules": {}
+    },
+    "scores": {
+     "archive_cost": [
+      1015.0,
+      128,
+      1092,
+      191
+     ]
+    }
+   }
+  },
+  "generator": "science-block-v1",
+  "request": {
+   "frame": 6,
+   "rate": 6.0,
+   "start_labs": 2,
+   "start_machines": 2
+  }
  }
 }

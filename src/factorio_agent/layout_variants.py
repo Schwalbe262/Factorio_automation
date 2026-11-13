@@ -327,7 +327,7 @@ def energy_metrics(catalog: Any, genome: Genome, line: dict) -> dict:
     usage) x 60 / 1000; machines scaled by ``1 + consumption``. Pollution: the prototype's
     ``emissions_per_minute`` (``{"pollution": x}``) when the catalog exports it, machines
     scaled by ``(1 + consumption) x (1 + pollution)``; None when the catalog has no
-    emission data (today's catalog export does not include it).
+    emission data (a ``catalog.json`` exported before ``emissions_per_minute`` existed).
     """
     effect = effects(catalog, genome)
     power = 0.0

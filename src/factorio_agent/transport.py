@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
+from . import evidence_capture
 from .board import built_keys, entity
 from .routing import LONG_ROUTE_TURNS, VECTORS, route_trunks
 from .resource_policy import (
@@ -579,6 +580,49 @@ def guided_bounds(bounds, guide):
 
 
 def plan_connection(
+    game,
+    builder,
+    obs,
+    source,
+    destination,
+    reserved=(),
+    *,
+    ignored_units=(),
+    released_unbuilt_receiver=None,
+    guide=None,
+    bus_route=False,
+    max_detour_ratio=None,
+):
+    """``_plan_connection``; a post-mortem dry run notes every route attempt (``evidence_capture``)."""
+    result = _plan_connection(
+        game,
+        builder,
+        obs,
+        source,
+        destination,
+        reserved,
+        ignored_units=ignored_units,
+        released_unbuilt_receiver=released_unbuilt_receiver,
+        guide=guide,
+        bus_route=bus_route,
+        max_detour_ratio=max_detour_ratio,
+    )
+    if evidence_capture.active():
+        evidence_capture.note(
+            "route",
+            item=source.get("item"),
+            source=source.get("position"),
+            destination=destination.get("position"),
+            facing=[source.get("facing"), destination.get("facing")],
+            guide=guide,
+            bus_route=bus_route,
+            reserved=len(reserved),
+            outcome=evidence_capture.outcome(result),
+        )
+    return result
+
+
+def _plan_connection(
     game,
     builder,
     obs,

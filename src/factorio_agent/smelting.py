@@ -1075,6 +1075,18 @@ return {ok=true,legal=legal}
             needs = "corridor_route:" + max(by_item, key=by_item.get)
         elif failures:
             needs = "stage:" + max(stages, key=stages.get)
+        from . import evidence_capture
+
+        if evidence_capture.active():  # post-mortem: every candidate, filtered before or after the land survey
+            legal = set(survey.get("legal", []))
+            evidence_capture.note(
+                "smelting_district_candidates",
+                offered=len(planned) + len(fallback),
+                after_block_filters=len(candidates),
+                land_legal=[c["area"] for i, c in enumerate(candidates, 1) if i in legal],
+                land_illegal=[c["area"] for i, c in enumerate(candidates, 1) if i not in legal],
+                failures=failures,
+            )
         return {
             "ok": False,
             "reason": "no_clear_pcb_smelting_district_with_corridors",
