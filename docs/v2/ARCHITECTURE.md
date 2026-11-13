@@ -190,9 +190,16 @@ drills), `dedicated_materials` (trunk-tap failure named in `change`),
 `oil_gathering` (`site:wider_survey`, survey rings to 1024 tiles, scouting; `OIL_GATHERING.md`),
 `basic_petroleum` (refinery anchors from `block_sites`, `site:more_blocks`, crude route rungs incl. waypoint).
 Route rungs use one shared lever (`remedy.ROUTE_RELAX` read by
-`transport.plan_connection`). Not yet: a `clear` rung (no planner declares one;
-trees and rocks are already cleared by every plan, `site/nature.py`; rerouting
-another block's bridge or belt needs a guarded rebuild rule first).
+`transport.plan_connection`). The `clear` rung (`remedy.CLEAR_REBUILD`, needs kind `built`)
+repairs a built block whose proof keeps failing although every planned entity stands
+(`built_block_repair`): today the starter power plant (`power`, in `remedy.REPAIRABLE`, no pure
+planner needed) after one game minute fuelled at water 0 / steam 0 is diagnosed (water pipe on a
+steam port, steam in a water pipe, water that never reaches the boiler), the water route is
+planned again with the old pipes' tiles free, republished in the builder state, the replaced
+pipes are mined (guarded) and the new ones built; at most `REPAIRS_MAX` per world. The belt
+case (a pole of ours on a planned lane head) is diagnosed (`belt_tile_faults`) but not repaired
+yet: the pole's consumers need a replacement link before its guarded mine. Trees and rocks are
+already cleared by every plan (`site/nature.py`).
 
 Inside a job, `StarterExecutors.step` first runs shared upkeep before the
 capability's own controller: `pending_repair` and `_approved_initial_defense`

@@ -8,7 +8,8 @@ ladder for the job, one rung per check, in a fixed order (rules, not a model):
 ``layout``  another layout candidate of the same block (other form, other port side);
 ``site``    another site / a longer connection (long-route fallback, detour);
 ``relax``   the planner's declared soft-constraint relaxations (growth, turn caps, margins);
-``clear``   remove what is in the way when it is ours and cheap (paid, guarded);
+``clear``   remove what is in the way when it is ours and cheap (paid, guarded): today the
+            faulty part of a built block (``CLEAR_REBUILD``, ``built_block_repair``);
 ``shrink``  a smaller request now (fewer drills, a lower rate), growth later.
 
 Every rung is a set of *options* the planner reads while it plans
@@ -103,8 +104,22 @@ SITE_MORE_BLOCKS = Rung(
     note="twelve district blocks probed for a fixed oil/chemistry core instead of six (block_sites)",
 )
 
+CLEAR_REBUILD = Rung(
+    "clear:rebuild_faulty_part",
+    "clear",
+    {"repair_built_block": True},  # built_block_repair.OPTION
+    kinds=("built",),
+    cost_seconds=60.0,  # mining and rebuilding a short pipe or belt run
+    note="mine the faulty part of a built block (guarded) and rebuild it from a republished plan",
+)
+# Capabilities whose built block can be diagnosed and repaired (built_block_repair). They have no
+# pure planner: a ``built`` fault is found on the live block, so the what-if answers no_pure_planner
+# and the rung is applied by retry (Supervisor._remedy_ladder admits them for ``built`` needs).
+REPAIRABLE = frozenset({"power"})
+
 # Declared per planner (ADDING_A_CAPABILITY.md: every new planner declares its relaxations).
 RELAXATIONS: dict[str, tuple[Rung, ...]] = {
+    "power": (CLEAR_REBUILD,),
     "logistic_science": (
         Rung("layout:next_form", "layout", {"layout_rotate": 1}, note="the other green form (cluster/split) first"),
         ROUTE_RELAX_1,

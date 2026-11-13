@@ -128,6 +128,10 @@ def hand_fed_power_ready(evidence: dict[str, Any]) -> bool:
     )
 
 
+def _tile_key(position: dict) -> tuple[float, float]:
+    return (round(float(position["x"]), 3), round(float(position["y"]), 3))
+
+
 def _position(x: float, y: float) -> dict[str, float]:
     return {"x": round(x, 3), "y": round(y, 3)}
 
@@ -954,7 +958,9 @@ return success{sites=out}
         start_direction: int | None = None,
         end_direction: int | None = None,
         margin: float = 12,
+        ignore: list[dict] | None = None,
     ) -> dict:
+        """A route avoiding ``reserved`` and the world; ``ignore``: our entities' tiles treated as free."""
         return self._route(
             source,
             destination,
@@ -963,6 +969,7 @@ return success{sites=out}
             start_direction=start_direction,
             end_direction=end_direction,
             margin=margin,
+            ignore=ignore,
         )
 
     def clear_route_obstacle(
@@ -1032,6 +1039,7 @@ return success{sites=out}
         end_direction: int | None = None,
         margin: float = 12,
         clear_natural: bool = False,
+        ignore: list[dict] | None = None,
     ) -> dict:
         if stop_requested(self.path.parent / "stop.json"):
             raise InterruptedError("operator_stop_requested")
@@ -1060,6 +1068,7 @@ return success{sites=out}
                     "source": source,
                     "destination": destination,
                     "clear_natural": clear_natural,
+                    "ignore": [{"x": q["x"], "y": q["y"]} for q in ignore or ()],
                 },
                 separators=(",", ":"),
             )
@@ -1069,6 +1078,7 @@ return success{sites=out}
 local args=helpers.json_to_table("""
             + payload
             + """);local b=args.bounds;local blocked={};local clearable={}
+local ignored={};for _,q in ipairs(args.ignore or {}) do ignored[q.x..":"..q.y]=true end
 local function natural(p)
  if not args.clear_natural then return nil end
  --[[ Ghost checks retain terrain collision but may ignore buildings;
@@ -1089,14 +1099,14 @@ local function natural(p)
 end
 for x=b.min_x,b.max_x,1 do for y=b.min_y,b.max_y,1 do
  local p={x=x,y=y}
- if not s.can_place_entity{name=args.name,position=p,force=f} then
+ if not ignored[x..":"..y] and not s.can_place_entity{name=args.name,position=p,force=f} then
   local removable=natural(p)
   if removable then clearable[#clearable+1]={position=p,entities=removable} else blocked[#blocked+1]=p end
  end
 end end
 local function endpoint(p) return (p.x==args.source.x and p.y==args.source.y) or (p.x==args.destination.x and p.y==args.destination.y) end
 for _,e in pairs(s.find_entities_filtered{area={{b.min_x-1,b.min_y-1},{b.max_x+1,b.max_y+1}},force=f}) do
- if not endpoint(e.position) then
+ if not endpoint(e.position) and not ignored[e.position.x..":"..e.position.y] then
   if e.type=="transport-belt" then
    local vectors={[0]={0,-1},[4]={1,0},[8]={0,1},[12]={-1,0}};local v=vectors[e.direction]
    if v then blocked[#blocked+1]={x=e.position.x+v[1],y=e.position.y+v[2]} end
@@ -1415,7 +1425,9 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
 """
         )
 
-    def ensure_power(self, observation: dict) -> dict:
+    def ensure_power(self, observation: dict, repair: bool = False) -> dict:
+        """Build and verify starter power; ``repair`` (the power job itself): diagnose a built plant
+        that never runs and repair it under the ladder's clear rung (``_power_fault``)."""
         self._sync(observation)
         if not observation.get("technologies", {}).get("steam-power") and "boiler" not in observation.get(
             "enabled_recipes", {}
@@ -1427,13 +1439,138 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
                 return _report("blocked", plan["reason"], diagnostics=plan)
             self.state["power_plan"] = plan
             self._save()
+        if self.state.get("power_repair"):
+            # The republished plan is in place; the replaced pipes go before anything new is built.
+            step = self._continue_power_repair(observation)
+            if step is not None:
+                return step
         power = self.state["power_plan"]
         result = self.ensure_plan(observation, power)
         if result.get("status") != "succeeded":
             return self._replan_power(observation, power, result) or result
         if coal_feed_mode(self.state) == HAND_FED:
-            return self._ensure_hand_fed_power(observation, power)
-        return self._ensure_belt_fed_power(observation, power, "power_sample_tick")
+            result = self._ensure_hand_fed_power(observation, power)
+        else:
+            result = self._ensure_belt_fed_power(observation, power, "power_sample_tick")
+        if repair and result.get("status") == "waiting" and isinstance(result.get("evidence"), dict):
+            return self._power_fault(observation, power, result["evidence"]) or result
+        return result
+
+    def power_pipe_fluids(self, power: dict) -> dict:
+        """Live fluids of the plan's pipes (plan order) and the boiler's water: the fault diagnosis read."""
+        pipes = [{"name": e["name"], "position": e["position"]} for e in power["entities"] if e["name"] == "pipe"]
+        boiler = next(e for e in power["entities"] if e["name"] == "boiler")
+        payload = json.dumps(json.dumps({"pipes": pipes, "boiler": boiler}, separators=(",", ":")))
+        return self.game.query(
+            """
+local t=helpers.json_to_table("""
+            + payload
+            + """)
+local rows={}
+for i,row in ipairs(t.pipes) do
+ local e=target(row.position,row.name);local fluids={}
+ if e then for name,amount in pairs(e.get_fluid_contents()) do fluids[name]=amount end end
+ rows[i]={standing=e~=nil,fluids=fluids}
+end
+local boiler=target(t.boiler.position,t.boiler.name);local water=0
+if boiler then water=boiler.get_fluid_contents()["water"] or 0 end
+return success{pipes=rows,boiler_water=water}
+"""
+        )
+
+    def _power_fault(self, observation: dict, power: dict, evidence: dict) -> dict | None:
+        """A built plant that has fuel but no water or steam for REPAIR_AFTER_TICKS: diagnose, then block or repair.
+
+        Only a plant that generates nothing is touched (no consumer can be cut off). A fault
+        (``built_block_repair.water_network_faults``) blocks the job with ``built`` needs; the
+        remedy ladder's clear rung re-runs it with ``repair_built_block`` and the repair starts.
+        """
+        from .. import built_block_repair as repair
+        from .. import remedy
+
+        tick = int(evidence.get("tick", observation.get("tick", 0)) or 0)
+        healthy = evidence.get("water", 0) > 0 and evidence.get("steam", 0) > 0
+        if healthy or evidence.get("generation_kw", 0) > 0 or evidence.get("boiler_fuel", 0) <= 0:
+            if self.state.pop("power_fault_since", None) is not None:
+                self._save()
+            return None
+        since = self.state.setdefault("power_fault_since", tick)
+        self._save()
+        if tick - since < repair.REPAIR_AFTER_TICKS:
+            return None
+        live = self.power_pipe_fluids(power)
+        if not live.get("ok"):
+            return None
+        faults = repair.water_network_faults(power["entities"], live.get("pipes"), live.get("boiler_water"))
+        if not faults:
+            return None
+        done = int(self.state.get("power_repairs", 0))
+        if remedy.option(repair.OPTION) and done < repair.REPAIRS_MAX:
+            return self._start_power_repair(observation, power, faults)
+        out = _report("blocked", f"built_block_fault:power:{faults[0]['fault']}", faults=faults[:5], **evidence)
+        out["plan_needs"] = repair.needs("power", faults, repairs=done)
+        return out
+
+    def _start_power_repair(self, observation: dict, power: dict, faults: list[dict]) -> dict:
+        """Plan the water pipe again (the old pipes' tiles free), republish the plan, then remove the old pipes."""
+        from .. import built_block_repair as repair
+
+        pump = next(e for e in power["entities"] if e["name"] == "offshore-pump")
+        site = next((w for w in self.water_sites() if _same_position(w["position"], pump["position"])), None)
+        water = next((p for p in power.get("ports", []) if p.get("item") == "water"), None)
+        old = repair.route_pipes(power["entities"], site["water_out"], water["position"]) if site and water else []
+        if site is None or water is None or not old:
+            out = _report("blocked", "built_block_repair_no_water_site:power", faults=faults[:5])
+            missing = "water site" if site is None else "water port" if water is None else "routed pipe"
+            out["plan_needs"] = repair.needs("power", faults, missing=missing)
+            return out
+        routed = {_tile_key(e["position"]) for e in old}
+        keep = [e for e in power["entities"] if e["name"] != "pipe" or _tile_key(e["position"]) not in routed]
+        bank = [e for e in keep if e["name"] != "offshore-pump"]
+        path = self.route(
+            site["water_out"], water["position"], "pipe", bank + [pump], ignore=[e["position"] for e in old]
+        )
+        if not path.get("ok"):
+            out = _report(
+                "blocked", "built_block_repair_route_failed:power", faults=faults[:5], route=path.get("reason")
+            )
+            out["plan_needs"] = repair.needs("power", faults, route=str(path.get("reason") or "")[:120])
+            return out
+        pipes = [{"name": "pipe", "position": q, "direction": 0} for q in path["path"]]
+        fresh = {_tile_key(q["position"]) for q in pipes}
+        plan = {**power, **_plan(keep + pipes, power["ports"], template=power.get("template", "starter_power"))}
+        self.state["power_plan"] = plan  # republished: the board reads the builder state
+        self.state["power_repair"] = {
+            "remove": [e for e in old if _tile_key(e["position"]) not in fresh],
+            "faults": faults[:5],
+            "tick": observation.get("tick"),
+        }
+        self.state["power_repairs"] = int(self.state.get("power_repairs", 0)) + 1
+        self.state.pop("power_fault_since", None)
+        self._save()
+        return self._continue_power_repair(observation) or _report(
+            "waiting", "power water network replanned; building the new pipe", faults=faults[:5]
+        )
+
+    def _continue_power_repair(self, observation: dict) -> dict | None:
+        """The next guarded mine of a replaced pipe, or None once every one is gone (the record is dropped)."""
+        from ..obsolete import guarded_mine, room_action, slots_needed
+
+        record = self.state.get("power_repair") or {}
+        for entity in record.get("remove", []):
+            found = _find(observation, entity)
+            if found is None:
+                continue
+            room = room_action(observation, slots_needed(self.catalog, [found]))
+            if room is not None:
+                return room
+            action = guarded_mine(
+                found, observation.get("world_id"), "repair the power plant water network: remove a misrouted pipe"
+            )
+            return action or _report("blocked", "built_block_repair_entity_has_no_unit:power", entity=entity)
+        self.state.pop("power_repair", None)
+        self._save()
+        return None
 
     def _reserve_coal_feed(self, power: dict) -> None:
         """Choose the dedicated coal feed once, right after the plant stands, but do not build it.
