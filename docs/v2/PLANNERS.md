@@ -163,6 +163,9 @@ skip when any plate net is unmeasured or <= 0, or rate < PRODUCE_MIN_RATE (1.0)
 ```
 
 `bulk_item_demand`: `Step.builds` of the next 4 steps. Pinned by `tests/test_v2_produce_autopilot.py`.
+A row is proposed only when every plate of `raw_per_item` has a belt source now (receipt
+`produce_plate_sources`, `production_sources.plate_sources`: a published bus lane, a free board
+port or a bus tap); before, it only blocked `production_row_input_source_missing`.
 
 Line design (`production_layout.plan_sources`): at most two routed solid
 inputs; an unsourced one-level intermediate gets a sub-row; two unsourced
@@ -735,7 +738,8 @@ runs early (runs_early): a strict requires missing OR a locked_until technology 
 parked (early_start.parked): ensure_plan's deferred wait whose reasons are all research (or plan order behind it)
   reports evidence.research_only; such a waiting job keeps its lane but holds no job slot
   (jobs._admission_error, supervisor._dispatch); it is still stepped every pass
-outposts: one lane per resource (PER_RESOURCE_CAPABILITIES); while electric-mining-drill is coming the bank is
+outposts: one lane per resource (PER_RESOURCE_CAPABILITIES) and one job slot for all of them
+  (SHARED_SLOT_CAPABILITIES, jobs.slots_used); while electric-mining-drill is coming the bank is
   prepared, saved and published (port final), collector belts, poles, bridge and exit route are built, drills
   (sorted last in resource cells) wait; blocked electric_mining_research_required only when it is not coming;
   proof unchanged (ready only after drill output); an early outpost is not an "existing capacity task" for

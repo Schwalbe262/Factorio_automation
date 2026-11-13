@@ -163,16 +163,26 @@ class LaneAndSlotTests(unittest.TestCase):
         for resource in ("iron-ore", "copper-ore", "coal"):
             self.submit(resource, "mining_outpost", {"resource": resource, "rate_per_minute": 30})
         self.submit("research", "bootstrap_research", {"technology": EMD})
-        with self.assertRaisesRegex(ValueError, "jobs may be active"):
-            self.submit("cell", "supply_cell", {"products": ["transport-belt"]})
+        # The three outposts share one slot (all-1113-2107: the coal outpost waited 5 minutes for one).
+        self.submit("cell", "supply_cell", {"products": ["transport-belt"]})
+        with self.assertRaisesRegex(ValueError, "early start keeps a job slot free"):
+            self.submit("district", "smelting_district")
         for resource in ("iron-ore", "copper-ore", "coal"):
             self.assertEqual(
                 run_slice(self.root, self.game, Executor(PARKED), resource, seconds=1)["status"], "waiting"
             )
-        # Three parked outposts + research: three slots free, an early district keeps the last one.
-        self.submit("cell", "supply_cell", {"products": ["transport-belt"]})
+        # Three parked outposts: research + cell hold two slots, an early district keeps the last one free.
         self.submit("district", "smelting_district")
         self.assertEqual(MAX_ACTIVE_JOBS, 4)
+
+    def test_outposts_of_every_resource_hold_one_slot_together(self):
+        self.submit("research", "bootstrap_research", {"technology": EMD})
+        self.submit("cell", "supply_cell", {"products": ["transport-belt"]})
+        self.submit("iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60})
+        self.submit("copper", "mining_outpost", {"resource": "copper-ore", "rate_per_minute": 60})
+        self.submit("coal", "mining_outpost", {"resource": "coal", "rate_per_minute": 30})  # was refused
+        with self.assertRaisesRegex(ValueError, "jobs may be active|early start"):
+            self.submit("district", "smelting_district")
 
     def test_a_parked_job_does_not_run_its_deadline_while_its_research_is_missing(self):
         self.submit("iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60})

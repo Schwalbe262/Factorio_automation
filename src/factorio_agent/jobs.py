@@ -547,6 +547,27 @@ def holds_slot(job: dict) -> bool:
     return is_active(job) and not parked(job)
 
 
+# Capabilities whose per-resource jobs together hold one job slot: the outposts are one
+# block of work for one actor (all-1113-2107: supply cell + drill research + iron + copper
+# outposts filled the 4 slots at 12.9 min; the coal outpost, the district's last input,
+# waited a median 5 minutes for the iron outpost to finish, and the district behind it).
+SHARED_SLOT_CAPABILITIES = frozenset({"mining_outpost"})
+
+
+def slot_group(capability: str, key: str) -> str:
+    return capability if capability in SHARED_SLOT_CAPABILITIES else "job:" + str(key)
+
+
+def slots_used(jobs) -> set:
+    """Slot groups held by active, unparked jobs (``holds_slot``); a shared capability counts once."""
+    return {slot_group(job["capability"], job.get("key")) for job in jobs if holds_slot(job)}
+
+
+def slots_added(used: set, capability: str) -> int:
+    """Slots a new job of ``capability`` adds: none when its shared group already holds one."""
+    return 0 if capability in SHARED_SLOT_CAPABILITIES and capability in used else 1
+
+
 def admission_lane(capability: str, parameters) -> str:
     """The exclusivity key of a job: its capability, plus the resource for per-resource capabilities."""
     if capability in PER_RESOURCE_CAPABILITIES and isinstance(parameters, dict) and parameters.get("resource"):
@@ -564,8 +585,9 @@ def _admission_error(
         return f"another job with capability {capability} is already active"
     if capability in RESEARCH_CAPABILITIES and any(job["capability"] in RESEARCH_CAPABILITIES for job in active):
         return "another job that owns research is already active"
-    # A job parked for research (early start) keeps its lane but holds no slot.
-    slots = sum(1 for job in active if not parked(job))
+    # A job parked for research (early start) keeps its lane but holds no slot; the outposts share one.
+    used = slots_used([dict(job, key=key) for key, job in jobs.items() if key != exclude_key])
+    slots = len(used) + slots_added(used, capability) - 1
     if slots >= MAX_ACTIVE_JOBS:
         return f"another job must finish or pause first: at most {MAX_ACTIVE_JOBS} jobs may be active"
     # Early start: the job runs ahead of unfinished prerequisites and never takes the last free slot.

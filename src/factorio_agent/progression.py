@@ -1110,6 +1110,12 @@ def produce_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
             continue
         if not isinstance(raw, Mapping) or not raw or _produce_taken(item, jobs, queue_nodes):
             continue
+        # A row whose plate has no belt source yet (no published bus lane, no free board
+        # port) would only block production_row_input_source_missing; it is proposed once a
+        # source exists (all-1113-2107: 6 rows in 3 runs blocked for the rest of the run).
+        sources = observation.get("produce_plate_sources")
+        if isinstance(sources, Mapping) and any(sources.get(plate) is False for plate in raw):
+            continue
         rate = count / COVER_MINUTES
         caps = []
         for plate, per_item in raw.items():
