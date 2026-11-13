@@ -23,7 +23,23 @@ def starter_research_step(ex, obs, parameters):
     result = ex.builder.ensure_power(obs)
     if result.get("status") != "succeeded":
         return result
-    return ex.research.step(obs, parameters or {})
+    return prebuild_science_cell(ex, obs, parameters, ex.research.step(obs, parameters or {}))
+
+
+def prebuild_science_cell(ex, obs, parameters, result):
+    """While the starter research only waits, build the next bootstrap batch's science cell (early start)."""
+    from ..industry import CELL_UNLOCK_TECHNOLOGY
+
+    if result.get("type") or result.get("status") != "waiting":
+        return result
+    if (parameters or {}).get("technology") != CELL_UNLOCK_TECHNOLOGY:
+        return result
+    try:
+        target = ex._next_bootstrap_target(obs)
+        action = target.prebuild(obs) if target is not None else None
+    except (OSError, AttributeError, KeyError, TypeError, ValueError):
+        return result
+    return action or result
 
 
 def starter_research_proof(ex, obs, result, parameters):
@@ -82,7 +98,8 @@ def bootstrap_logistics_step(ex, obs, parameters):
         return result
     if obs.get("technologies", {}).get("logistics") or ex.industry.local_power_ready(obs):
         ex.builder._sync(obs)
-        return ex.industry.step(obs)
+        # Back to back: a funded logistics batch funds the next bootstrap batch while it waits.
+        return ex._science_wait_action(obs, ex.industry, ex.industry.step(obs))
     early, _ = shared_upkeep(ex, obs, "bootstrap_logistics")
     if early is not None:
         return early

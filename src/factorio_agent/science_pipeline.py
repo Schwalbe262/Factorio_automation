@@ -1,13 +1,35 @@
-"""One approved science batch ahead; v1 electric-mining-drill -> logistics."""
+"""One approved science batch ahead: back-to-back finite bootstrap batches.
+
+Rule (PLANNERS.md "Back-to-back bootstrap batches"): while a finite
+bootstrap batch (the owner) is fully funded and its research runs, the next
+approved bootstrap node in the work queue (highest priority first; any
+finite red-only technology the temporary cell can serve, ``bootstrap_research``
+or ``bootstrap_logistics``) is reserved and funded from plates no other
+critical job waits for, so its packs are made while the owner is still
+researched and the labs roll straight on. The next batch's counter baselines
+are the owner's batch end (``BootstrapLogistics.funding_complete``).
+"""
 
 from __future__ import annotations
 
 from copy import deepcopy
 import json
+import math
 from pathlib import Path
 
 from factorio_agent.core.deterministic_state import _atomic_json
-from .industry import BootstrapLogistics
+from .industry import BootstrapLogistics, _red_only_fixed
+
+OWNER_CAPABILITIES = ("bootstrap_research", "starter_research", "bootstrap_logistics")
+
+
+def job_technology(row) -> str | None:
+    """The technology a bootstrap job or work-queue node researches (``parameters.technology`` or STEP_TECHNOLOGY)."""
+    from .progression import STEP_TECHNOLOGY
+
+    parameters = row.get("parameters") if isinstance(row.get("parameters"), dict) else {}
+    technology = parameters.get("technology") or STEP_TECHNOLOGY.get(row.get("capability"))
+    return technology if isinstance(technology, str) else None
 
 
 class SciencePipeline:
@@ -33,26 +55,29 @@ class SciencePipeline:
     def _target(node):
         return {k: deepcopy(node[k]) for k in ("id", "job_key", "capability", "parameters")}
 
-    def _surplus(self, obs, controller):
-        """Leave both the known construction bill and one full plate batch."""
-        budget = obs.get("known_project_construction_budget")
-        if budget is None:
-            from .diagnostics import construction_budget
+    def _claimed(self, obs, jobs, exclude):
+        """``{item: units or None}`` that active critical jobs other than ``exclude`` wait for (critical_path claims)."""
+        from .critical_path import critical_claims, critical_jobs, critical_path, known_items
+        from .jobs import CAPABILITIES
 
-            budget = construction_budget(self.path.parent, obs, self.catalog)
-        if (
-            not isinstance(budget, dict)
-            or not isinstance(budget.get("base_material_upper_bound"), dict)
-            or budget.get("unresolved_materials")
-        ):
-            raise ValueError("science_pipeline_construction_cost_unknown")
-        raw = budget["base_material_upper_bound"]
-        if any(type(n) not in (int, float) or n < 0 or n % 1 for n in raw.values()):
-            raise ValueError("science_pipeline_construction_cost_invalid")
-        _, reserve = controller.requirements()
+        world = {k: j for k, j in (jobs or {}).items() if j.get("world_id", obs["world_id"]) == obs["world_id"]}
+        path = critical_path(world.values(), obs, CAPABILITIES, catalog=self.catalog)
+        known = known_items(self.catalog, obs)
+        keys = [k for k in critical_jobs(world, path, known_items=known) if k not in set(exclude)]
+        return {item: row.get("units") for item, row in critical_claims(world, keys, known).items()}
+
+    def _surplus(self, obs, controller, jobs=None, exclude=()):
+        """Plates the next batch may take: held plus public furnace output, minus other critical jobs' claims.
+
+        The next batch is itself on the critical path (the next research
+        step), so it is not held back by the lookahead construction bill of
+        later steps, only by units another active critical job waits for
+        (a claim without a unit count keeps the whole item).
+        """
+        claimed = self._claimed(obs, jobs, exclude)
+        _, inputs = controller.requirements()
         result = {}
-        for item, kept in reserve.items():
-            kept += raw.get(item, 0)
+        for item in inputs:
             filtered = obs
             filter_ = getattr(self.bootstrap, "_unreserved_stock_observation", None)
             if callable(filter_):
@@ -72,18 +97,38 @@ class SciencePipeline:
             held = obs.get("inventory", {}).get(item, 0)
             if type(held) is not int or held < 0:
                 raise ValueError("observed integer actor plate inventory required")
+            if item not in claimed:
+                kept = 0
+            elif claimed[item] is None:
+                kept = public + held
+            else:
+                kept = math.ceil(claimed[item])
             result[item] = max(0, public + held - kept)
         return result
 
+    def _supported(self, node) -> str | None:
+        """The technology of a node the temporary cell can serve next, else None."""
+        technology = job_technology(node)
+        if node.get("capability") == "bootstrap_logistics" and node.get("parameters") == {}:
+            return technology
+        if (
+            node.get("capability") == "bootstrap_research"
+            and isinstance(node.get("parameters"), dict)
+            and set(node["parameters"]) == {"technology"}
+            and _red_only_fixed(self.catalog, technology)
+        ):
+            return technology
+        return None
+
     def next_action(self, obs, owner, *, owner_key=None, surplus_budget=None):
         self.last_diagnostic = None
-        if owner.technology != "electric-mining-drill":
-            return self._decline("science_pipeline_v1_edge_not_supported")
+        if not isinstance(owner, BootstrapLogistics):
+            return self._decline("science_pipeline_owner_not_a_bootstrap_batch")
         if not obs.get("ok", True) or not obs.get("world_id"):
             return self._decline("science_pipeline_observation_invalid")
         if any((self.path.parent / name).exists() for name in ("stop.json", "supervisor-stop.json")):
             return self._decline("science_pipeline_stop_requested")
-        complete = owner.production_complete(obs)
+        complete = owner.funding_complete(obs)
         if not complete or obs.get("research") != owner.technology or obs.get("technologies", {}).get(owner.technology):
             return self._decline("science_pipeline_current_research_has_priority")
         try:
@@ -103,46 +148,38 @@ class SciencePipeline:
                 if j.get("world_id") == obs["world_id"]
             ):
                 return self._decline("science_pipeline_unresolved_world_action")
+
+            def owns(job):
+                return (
+                    job.get("world_id") == obs["world_id"]
+                    and job.get("capability") in OWNER_CAPABILITIES
+                    and job_technology(job) == owner.technology
+                    and job.get("status") in ("running", "waiting")
+                )
+
             if owner_key is None:
-                owners = [
-                    k
-                    for k, j in jobs.items()
-                    if j.get("world_id") == obs["world_id"]
-                    and j.get("capability") in ("bootstrap_research", "starter_research")
-                    and j.get("parameters") == {"technology": owner.technology}
-                    and j.get("status") in ("running", "waiting")
-                ]
+                owners = [k for k, j in jobs.items() if owns(j)]
                 if len(owners) != 1:
                     return self._decline("science_pipeline_unique_active_owner_required")
                 owner_key = owners[0]
-            job = jobs.get(owner_key, {})
-            if (
-                job.get("world_id") != obs["world_id"]
-                or job.get("status") not in ("running", "waiting")
-                or job.get("capability") not in ("bootstrap_research", "starter_research")
-                or job.get("parameters") != {"technology": owner.technology}
-            ):
+            if not owns(jobs.get(owner_key, {})):
                 return self._decline("science_pipeline_owner_job_changed")
             nodes = {q["id"]: q for q in queue.get("nodes", [])}
             owner_nodes = [n for n in nodes.values() if n.get("job_key") == owner_key and not n.get("paused")]
             if len(owner_nodes) != 1:
                 return self._decline("science_pipeline_approved_owner_node_required")
             owner_id = owner_nodes[0]["id"]
+            if self.state:
+                reserved = job_technology(self.state.get("target", {}))
+                # The reservation was consumed: its target became the owner
+                # (or was researched). The next pair starts a fresh reservation.
+                if reserved == owner.technology or obs.get("technologies", {}).get(reserved):
+                    self.state = {}
             eligible = []
             for node in nodes.values():
-                technology = (
-                    node.get("parameters", {}).get("technology")
-                    if node.get("capability") == "bootstrap_research"
-                    else "logistics"
-                )
-                supported = (
-                    node.get("capability") == "bootstrap_logistics"
-                    and node.get("parameters") == {}
-                    or node.get("capability") == "bootstrap_research"
-                    and technology in ("gun-turret", "stone-wall", "electric-mining-drill")
-                )
+                technology = self._supported(node)
                 if (
-                    not supported
+                    technology is None
                     or technology == owner.technology
                     or obs.get("technologies", {}).get(technology)
                     or node.get("paused")
@@ -179,15 +216,16 @@ class SciencePipeline:
                 if not eligible:
                     return self._decline("science_pipeline_no_approved_successor")
                 node = min(eligible, key=lambda q: (-q["priority"], q.get("created_at", 0), q["id"]))
-                if node["capability"] != "bootstrap_logistics":
-                    return self._decline("science_pipeline_v1_next_edge_not_supported", target=self._target(node))
             controller = BootstrapLogistics(
-                self.game, self.bootstrap, self.builder, self.catalog, technology="logistics"
+                self.game, self.bootstrap, self.builder, self.catalog, technology=self._supported(node)
             )
             self.target_controller = controller
             if controller.state and not controller.state.get("prewarm"):
                 return self._decline("science_pipeline_existing_target_requires_primary_resume")
-            budget = self._surplus(obs, controller) if surplus_budget is None else surplus_budget
+            if surplus_budget is None:
+                budget = self._surplus(obs, controller, jobs, exclude=(owner_key, node["job_key"]))
+            else:
+                budget = surplus_budget
             if not self.state:
                 self.state = dict(
                     schema_version=1,
@@ -207,10 +245,14 @@ class SciencePipeline:
         except (OSError, KeyError, TypeError, ValueError) as exc:
             return self._decline("science_pipeline_context_invalid", detail=str(exc))
 
+    def _target_controller(self):
+        technology = job_technology(self.state.get("target", {})) or "logistics"
+        return BootstrapLogistics(self.game, self.bootstrap, self.builder, self.catalog, technology=technology)
+
     def record_action(self, action, receipt):
         if not self.state:
             return
-        controller = BootstrapLogistics(self.game, self.bootstrap, self.builder, self.catalog, technology="logistics")
+        controller = self._target_controller()
         if controller.state.get("pending_transfer", {}).get("action") != action:
             return
         if (

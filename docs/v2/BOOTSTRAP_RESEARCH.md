@@ -62,3 +62,9 @@ returns an explicit `already_researched` proof without funding or new metadata.
 through `record_action`; no new game action or runtime handler is needed. The
 tests cover native gates, finite and partial funding, original unit/plan pins,
 counter proof, receipt uncertainty and unchanged legacy logistics behavior.
+
+Back to back (PLANNERS.md "Back-to-back bootstrap batches"): once a batch is fully
+funded and its research consumes packs (`funding_complete`), its waits fund the next
+approved finite red-only bootstrap batch (`science_pipeline.py`), whose baselines are
+this batch's computed end. The cell itself is prebuilt while automation is researched
+(`prebuild`, PLANNERS.md "Early start"); only its assemblers wait for the unlock.

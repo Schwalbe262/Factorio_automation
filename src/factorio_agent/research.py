@@ -27,11 +27,20 @@ class StarterResearch:
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
     def lab(self, obs: dict) -> dict:
-        for entity in obs.get("entities", []):
-            if entity["name"] == "lab":
-                if not entity.get("electric_network_connected"):
-                    return {"status": "blocked", "reason": "existing_lab_not_connected"}
-                return {"status": "succeeded", "entity": entity}
+        # A connected lab wins: a prebuilt science-cell lab slot may still
+        # wait for its pole while the starter lab already researches.
+        labs = [entity for entity in obs.get("entities", []) if entity["name"] == "lab"]
+        connected = [entity for entity in labs if entity.get("electric_network_connected")]
+        if connected:
+            # The lab already holding or consuming the packs stays the starter lab.
+            busy = [
+                e
+                for e in connected
+                if (e.get("inventory") or {}).get("automation-science-pack") or e.get("status_name") == "working"
+            ]
+            return {"status": "succeeded", "entity": (busy or connected)[0]}
+        if labs:
+            return {"status": "blocked", "reason": "existing_lab_not_connected"}
         site = self.state.get("lab_site")
         if site is None:
             site = self.game.query("""

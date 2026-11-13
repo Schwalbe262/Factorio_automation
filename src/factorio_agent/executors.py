@@ -325,12 +325,25 @@ class StarterExecutors:
             )
         return self.bootstrap_research_targets[name]
 
+    def _next_bootstrap_target(self, obs):
+        """The batch controller of the first unresearched finite bootstrap research step of the roadmap, or None."""
+        from .industry import _red_only_fixed, bootstrap_technologies
+
+        researched = obs.get("technologies", {})
+        for technology in bootstrap_technologies():
+            if researched.get(technology) or not _red_only_fixed(self.catalog, technology):
+                continue
+            if technology == "logistics":
+                return self.industry
+            return self._bootstrap_research({"technology": technology})
+        return None
+
     def record_action(self, capability, obs, action, receipt, parameters=None):
         pipeline = getattr(self, "science_pipeline", None)
         if pipeline is not None:
             pipeline.record_action(action, receipt)
             if pipeline.target_controller is not None:
-                self.industry = pipeline.target_controller
+                self._adopt_science_target(pipeline.target_controller)
         handler = get_handler(capability)
         if handler is not None and handler.record_action is not None:
             handler.record_action(self, obs, action, receipt, parameters)
@@ -342,20 +355,30 @@ class StarterExecutors:
             self.components = ComponentReserve(self.game, self.bootstrap, self.catalog)
         return self.components
 
+    def _adopt_science_target(self, controller):
+        """Use the pipeline's freshly written next-batch controller from now on (no stale cached state)."""
+        if controller.technology == "logistics":
+            self.industry = controller
+        else:
+            if not hasattr(self, "bootstrap_research_targets"):
+                self.bootstrap_research_targets = {}
+            self.bootstrap_research_targets[controller.technology] = controller
+
     def _science_wait_action(self, obs, batch, result):
-        if (
-            result.get("status") != "waiting"
-            or result.get("type")
-            or not result.get("evidence", {}).get("autonomous_wait")
-        ):
+        """While a funded batch only waits, fund the next batch back to back (science_pipeline)."""
+        if result.get("status") != "waiting" or result.get("type"):
             return result
+        if not result.get("evidence", {}).get("autonomous_wait"):
+            funded = getattr(batch, "funding_complete", None)
+            if obs.get("research") != getattr(batch, "technology", None) or not callable(funded) or not funded(obs):
+                return result
         from .science_pipeline import SciencePipeline
 
         if getattr(self, "science_pipeline", None) is None:
             self.science_pipeline = SciencePipeline(self.game, self.bootstrap, self.builder, self.catalog)
         action = self.science_pipeline.next_action(obs, batch)
         if action and self.science_pipeline.target_controller is not None:
-            self.industry = self.science_pipeline.target_controller
+            self._adopt_science_target(self.science_pipeline.target_controller)
         return action or result
 
     def _funded_startup_owner(self, obs):
