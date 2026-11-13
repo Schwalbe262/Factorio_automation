@@ -623,7 +623,18 @@ class MiningOutposts:
         connected extra module keeps its own reserved pairs (fleet all-1113-2332 seeds 677884616
         and 3862808667: the first bank's pairs were all built, the extra module had 2 of 3 pairs
         free, only the first bank was tried and the job blocked on a third module's trunk
-        connection)."""
+        connection).
+
+        A standing bank whose output feeds nothing (``dead_end_banks``) is connected to a trunk
+        first: a few belts turn its drills into supply before any new drill is paid."""
+        dead = [b for b in self.dead_end_banks(obs, resource) if any(b is a for a in active)]
+        if dead:
+            primaries = self._trunk_primaries(obs, resource, dead[0])
+            for bank in dead:
+                connected = self.prepare_dead_end_connection(obs, bank, primaries)
+                if connected.get("ok"):
+                    connected.pop("ok")
+                    return {"bank": bank, "extension": connected}
         first = None
         for candidate in active:
             count = sum(e["name"] == "electric-mining-drill" for e in candidate["plan"]["entities"])
@@ -663,6 +674,184 @@ class MiningOutposts:
 
     def prepare_connected_bank(self, obs, primary, count):
         """Feed a paid extra module into an identity-bound same-item trunk T."""
+        found = self._trunk_targets(obs, primary)
+        if not found.get("ok"):
+            return found
+        targets, head = found["targets"], found["head"]
+        failures = []
+        rejected = []
+        attempts = 0
+        for site_index in range(6):
+            extra = (
+                self.prepare(obs, primary["plan"]["resource"], count, extra_reservations=rejected)
+                if rejected
+                else self.prepare(obs, primary["plan"]["resource"], count)
+            )
+            if not extra.get("ok"):
+                failures.append(extra.get("reason"))
+                break
+            # A plan-oriented module routes inside its reserved feeder corridor.
+            guide = guide_tuple(extra["plan"].get("site_exit"))
+            routed, tried = self._route_to_trunk(obs, extra, targets, head, guide=guide)
+            attempts += tried["routes"]
+            failures += tried["failures"]
+            if routed is not None:
+                routed["planning_attempts"] = {"sites": site_index + 1, "routes": attempts}
+                return routed
+            if not extra.get("reserved_area"):
+                break
+            rejected.append(extra["reserved_area"])
+        return {
+            "ok": False,
+            "reason": "no_clean_extra_bank_connection_to_owned_ore_trunk",
+            "candidates": failures,
+            "planning_attempts": {"sites": len(rejected), "routes": attempts},
+        }
+
+    def _route_to_trunk(self, obs, extra, targets, head, *, guide=None, built=False):
+        """Route ``extra``'s output port onto the trunk (lane head first, then the nearest, middle and
+        farthest side-load targets): ``(bank with the merged plan and consumer_connection, tried)``,
+        or ``(None, tried)``. ``built``: the bank stands, only the route is preflighted."""
+        resource = extra["plan"]["resource"]
+        source = extra["plan"]["ports"][0]
+        ranked = sorted(targets, key=lambda row: sum(abs(a - b) for a, b in zip(xy(source), xy(row["destination"]))))
+        probes = [ranked[i] for i in sorted({0, len(ranked) // 2, len(ranked) - 1})] if ranked else []
+        if built:
+            # A standing bank: its nearest targets first (a few belts), never a far one first.
+            probes = ranked[:3] + [r for r in probes if r not in ranked[:3]]
+        probes = ([head] if head else []) + probes
+        routing = {} if guide is None else {"guide": guide}
+        tried = {"routes": 0, "failures": []}
+        for row in probes:
+            destination, target = row["destination"], row["target"]
+            tried["routes"] += 1
+            route = belt_connection(
+                self.game, self.builder, obs, source, destination, extra["plan"]["entities"], **routing
+            )
+            if not route.get("ok"):
+                tried["failures"].append(route.get("reason"))
+                if route.get("reason") in {
+                    "no_safe_bounded_mining_exit",
+                    "mining_exit_requires_owned_source",
+                    "prospective_mining_core_native_preflight_failed",
+                }:
+                    tried["stop"] = True
+                    break
+                continue
+            es = {(e["name"], *xy(e)): e for e in extra["plan"]["entities"] + route["entities"]}
+            metadata = {
+                k: v
+                for k, v in extra["plan"].items()
+                if k
+                not in (
+                    "ok",
+                    "reason",
+                    "entities",
+                    "ports",
+                    "required_items",
+                    "underground_pairs",
+                    "clear_obstacles",
+                    "clearance_world_id",
+                )
+            }
+            plan = _plan(
+                list(es.values()),
+                extra["plan"]["ports"],
+                **metadata,
+                underground_pairs=extra["plan"].get("underground_pairs", []) + route["underground_pairs"],
+            )
+            check = preflight(self.game, self.builder, obs, route["entities"] if built else plan["entities"])
+            if not check.get("ok"):
+                tried["failures"].append(check.get("reason"))
+                continue
+            plan.update(clear_obstacles=check["clear_obstacles"], clearance_world_id=obs["world_id"])
+            connected = dict(extra, plan=plan)
+            connected["consumer_connection"] = {
+                "kind": "second trunk lane head" if row.get("kind") == "lane" else "same-item perpendicular side-load",
+                "item": resource,
+                "target": target,
+                "entry_port": destination,
+                "route_metrics": route["route_metrics"],
+            }
+            return connected, tried
+        return None, tried
+
+    def dead_end_banks(self, obs, resource) -> list:
+        """Ready banks of ``resource`` whose output port feeds nothing: no consumer connection, not the
+        district's source port, no board connection from it, and no belt in front of the live port belt
+        (eval-1575138435: an iron bank of 2 drills planned standalone while the other banks were
+        unproven; its port belt ended 4 tiles beside the trunk, full of ore, counted as 60/min supply,
+        and a coal bank of 2 drills the same)."""
+        if getattr(self, "path", None) is None:
+            return []
+        root = self.path.parent
+        district = {}
+        try:
+            district = json.loads((root / "smelting-district.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            pass
+        board = {}
+        try:
+            board = json.loads((root / "pcb-board.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            pass
+        if not isinstance(district, dict) or district.get("world_id") != obs.get("world_id"):
+            return []  # no district: no trunk to tell a dead end from
+        fed = {xy(p) for p in (district.get("source_ports") or {}).values() if isinstance(p, dict) and "position" in p}
+        fed |= {
+            (c["source"].get("x"), c["source"].get("y"))
+            for c in board.get("connections", [])
+            if isinstance(c.get("source"), dict)
+        }
+        belts = {
+            xy(e): e
+            for e in obs.get("entities", [])
+            if e.get("name") in ("transport-belt", "underground-belt", "splitter")
+        }
+        found = []
+        for bank in self.state.get("banks", []):
+            plan = bank["plan"]
+            if (
+                plan["resource"] != resource
+                or not bank.get("ready")
+                or bank.get("material_supply_id")
+                or bank.get("consumer_connection")
+                or bank.get("pending_extension") is not None
+            ):
+                continue
+            port = plan["ports"][0]
+            p = xy(port)
+            live = belts.get(p)
+            if p in fed or live is None or live.get("name") != "transport-belt":
+                continue
+            v = VECTORS[live.get("direction", 0)]
+            ahead = (p[0] + v[0], p[1] + v[1])
+            if ahead in belts:
+                continue
+            found.append(bank)
+        return found
+
+    def prepare_dead_end_connection(self, obs, bank, primaries) -> dict:
+        """Belts from a standing dead-end bank's port onto a same-item trunk (``dead_end_banks``): the
+        bank's plan with the route added and its ``consumer_connection``, built as an extension."""
+        failures = []
+        for primary in primaries:
+            if primary is bank:
+                continue
+            found = self._trunk_targets(obs, primary)
+            if not found.get("ok"):
+                failures.append(found.get("reason"))
+                continue
+            routed, tried = self._route_to_trunk(obs, bank, found["targets"], found["head"], built=True)
+            failures += tried["failures"]
+            if routed is not None:
+                routed["dead_end_connection"] = {"tick": obs.get("tick"), "trunk_port": primary["plan"]["ports"][0]}
+                return dict(routed, ok=True)
+        return {"ok": False, "reason": "dead_end_bank_connection_failed", "candidates": failures}
+
+    def _trunk_targets(self, obs, primary) -> dict:
+        """Side-load targets along ``primary``'s traced trunk and its lane head:
+        ``{"ok", "targets", "head"}`` or a failure."""
         path = self.path.parent / "smelting-district.json"
         consumer = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if consumer.get("world_id") != obs["world_id"]:
@@ -773,90 +962,7 @@ end;return {ok=true,indices=indices}"""
         # A built second trunk lane takes the extra module at its head (2-2 balanced, lane-preserving)
         # before any side-load onto the first lane (mine_trunk.lane_plan).
         head = lane_head(self.path.parent, obs, primary)
-        failures = []
-        rejected = []
-        attempts = 0
-        for site_index in range(6):
-            extra = (
-                self.prepare(obs, primary["plan"]["resource"], count, extra_reservations=rejected)
-                if rejected
-                else self.prepare(obs, primary["plan"]["resource"], count)
-            )
-            if not extra.get("ok"):
-                failures.append(extra.get("reason"))
-                break
-            source = extra["plan"]["ports"][0]
-            ranked = sorted(
-                targets, key=lambda row: sum(abs(a - b) for a, b in zip(xy(source), xy(row["destination"])))
-            )
-            probes = [ranked[i] for i in sorted({0, len(ranked) // 2, len(ranked) - 1})] if ranked else []
-            probes = ([head] if head else []) + probes
-            # A plan-oriented module routes inside its reserved feeder corridor.
-            guide = guide_tuple(extra["plan"].get("site_exit"))
-            routing = {} if guide is None else {"guide": guide}
-            for row in probes:
-                destination, target = row["destination"], row["target"]
-                attempts += 1
-                route = belt_connection(
-                    self.game, self.builder, obs, source, destination, extra["plan"]["entities"], **routing
-                )
-                if not route.get("ok"):
-                    failures.append(route.get("reason"))
-                    if route.get("reason") in {
-                        "no_safe_bounded_mining_exit",
-                        "mining_exit_requires_owned_source",
-                        "prospective_mining_core_native_preflight_failed",
-                    }:
-                        break
-                    continue
-                es = {(e["name"], *xy(e)): e for e in extra["plan"]["entities"] + route["entities"]}
-                metadata = {
-                    k: v
-                    for k, v in extra["plan"].items()
-                    if k
-                    not in (
-                        "ok",
-                        "reason",
-                        "entities",
-                        "ports",
-                        "required_items",
-                        "underground_pairs",
-                        "clear_obstacles",
-                        "clearance_world_id",
-                    )
-                }
-                plan = _plan(
-                    list(es.values()),
-                    extra["plan"]["ports"],
-                    **metadata,
-                    underground_pairs=extra["plan"].get("underground_pairs", []) + route["underground_pairs"],
-                )
-                check = preflight(self.game, self.builder, obs, plan["entities"])
-                if not check.get("ok"):
-                    failures.append(check.get("reason"))
-                    continue
-                plan.update(clear_obstacles=check["clear_obstacles"], clearance_world_id=obs["world_id"])
-                extra["plan"] = plan
-                extra["consumer_connection"] = {
-                    "kind": "second trunk lane head"
-                    if row.get("kind") == "lane"
-                    else "same-item perpendicular side-load",
-                    "item": primary["plan"]["resource"],
-                    "target": target,
-                    "entry_port": destination,
-                    "route_metrics": route["route_metrics"],
-                }
-                extra["planning_attempts"] = {"sites": site_index + 1, "routes": attempts}
-                return extra
-            if not extra.get("reserved_area"):
-                break
-            rejected.append(extra["reserved_area"])
-        return {
-            "ok": False,
-            "reason": "no_clean_extra_bank_connection_to_owned_ore_trunk",
-            "candidates": failures,
-            "planning_attempts": {"sites": len(rejected), "routes": attempts},
-        }
+        return {"ok": True, "targets": targets, "head": head}
 
     def prepare_extension(self, obs, bank, added_drills):
         """Grow upstream while keeping the installed downstream port untouched."""

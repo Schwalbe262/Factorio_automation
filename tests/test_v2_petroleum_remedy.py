@@ -70,5 +70,65 @@ class PetroleumNeedsTests(unittest.TestCase):
         self.assertEqual(petroleum._petroleum_needs([], SOURCE, (0, 0))["kind"], "site")
 
 
+class RefinerySiteTests(unittest.TestCase):
+    """The refinery anchor comes from the site service on a planned world (block_sites), not from six
+    fixed offsets around the industrial district."""
+
+    def prepare(self, site, blocks=None):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from types import SimpleNamespace
+
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        found = petroleum.BasicPetroleum.__new__(petroleum.BasicPetroleum)
+        found.site, found.state, found.game, found.builder = site, {}, None, None
+        found.catalog = SimpleNamespace(fingerprint="c")
+        found.path = Path(tmp.name) / "basic-petroleum.json"
+        (found.path.parent / "pcb-board.json").write_text(
+            '{"world_id": "w", "catalog_fingerprint": "c", "blocks": %s}' % (blocks or "{}"), encoding="utf-8"
+        )
+        cores = []
+
+        def core(catalog, x, y):
+            cores.append((x, y))
+            return {"reserved_area": [[x - 0.5, y - 0.5], [x + 9.5, y + 12.5]], "ports": [DEST]}
+
+        obs = {
+            "world_id": "w",
+            "technologies": {"oil-processing": True},
+            "enabled_recipes": {"basic-oil-processing": True, "oil-refinery": True},
+        }
+        with (
+            patch.object(petroleum, "refinery_core", side_effect=core),
+            patch.object(petroleum, "_identity", return_value=True),
+            patch.object(petroleum.BasicPetroleum, "_source", return_value={"ok": True, "source": SOURCE}),
+            patch.object(petroleum, "survey_slots", return_value={"ok": True, "legal": []}),
+        ):
+            result = found.prepare(obs)
+        return result, cores[1:]  # the first core call is block_sites' footprint probe (or a legacy anchor)
+
+    def test_planned_world_anchors_are_the_allocated_district_blocks(self):
+        from types import SimpleNamespace
+
+        rect = SimpleNamespace(x0=200, y0=-80)
+        site = SimpleNamespace(
+            allocate_candidates=lambda kind, w, h, **kw: [SimpleNamespace(rect=rect, name="production#3")]
+        )
+        result, cores = self.prepare(site)
+        self.assertEqual(cores, [(200.5, -79.5)])
+        self.assertEqual(result["evidence"]["failures"][0]["position"], [200.5, -79.5])
+        self.assertIn("site:more_blocks", [r.name for r in remedy.ladder("basic_petroleum")])
+
+    def test_no_allocation_is_a_site_need_and_the_development_map_keeps_its_offsets(self):
+        from types import SimpleNamespace
+
+        result, cores = self.prepare(SimpleNamespace(allocate_candidates=lambda *a, **kw: []))
+        self.assertEqual(cores, [])
+        self.assertEqual(result["plan_needs"]["kind"], "site")
+        result, _ = self.prepare(None)
+        self.assertEqual(result["evidence"]["attempts"], len(petroleum.LEGACY_ANCHOR_OFFSETS))
+
+
 if __name__ == "__main__":
     unittest.main()
