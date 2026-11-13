@@ -1008,13 +1008,27 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             }
         pending = next((b for b in banks if not b.get("ready")), None)
         if active and pending is None:
-            bank = active[0]
+            bank = next((b for b in active if b.get("pending_extension") is not None), active[0])
             extension = bank.get("pending_extension")
             if extension is None:
-                count = sum(e["name"] == "electric-mining-drill" for e in bank["plan"]["entities"])
-                per_drill = bank["nominal_rate_per_minute"] / count
-                added = min(8, math.ceil((target - rate) / per_drill))
-                extension = self.prepare_extension(obs, bank, added)
+                # Every proven bank of the resource may grow in place before a new module is
+                # connected: a connected extra module keeps its own reserved pairs (fleet
+                # all-1113-2332 seeds 677884616 and 3862808667: the first bank's pairs were all
+                # built, the extra module had 2 of 3 pairs free, only the first bank was tried
+                # and the job blocked on a third module's trunk connection).
+                first = None
+                for candidate in active:
+                    count = sum(e["name"] == "electric-mining-drill" for e in candidate["plan"]["entities"])
+                    per_drill = candidate["nominal_rate_per_minute"] / count
+                    added = min(8, math.ceil((target - rate) / per_drill))
+                    tried = self.prepare_extension(obs, candidate, added)
+                    if first is None:
+                        first = (candidate, tried, added)
+                    if tried.get("ok"):
+                        bank, extension = candidate, tried
+                        break
+                if extension is None:  # no bank grows in place: a new module from the first bank's trunk
+                    bank, extension, added = first
                 if not extension.get("ok"):
                     connected = self.prepare_connected_bank(obs, bank, added)
                     if not connected.get("ok"):

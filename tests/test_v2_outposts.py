@@ -93,6 +93,41 @@ class AlignedMiningBankTests(unittest.TestCase):
         outpost.prepare_connected_bank.assert_called_once_with(obs, bank, 1)
         self.assertEqual(len(outpost.state["banks"]), 1)
 
+    def test_a_connected_extra_module_with_free_pairs_grows_before_a_new_module(self):
+        # Fleet all-1113-2332 seeds 677884616 / 3862808667: bank 1 had all 3 reserved pairs built,
+        # the connected extra module 1 of 3; only bank 1 was tried, then a third module's trunk
+        # connection failed (no_clean_extra_bank_connection_to_owned_ore_trunk).
+        outpost = MiningOutposts.__new__(MiningOutposts)
+        outpost.path = Mock()
+        first = {"ready": True, "plan": mining_bank(0.5, 0.5, 6, "iron-ore"), "nominal_rate_per_minute": 180}
+        extra = {"ready": True, "plan": mining_bank(40.5, 0.5, 2, "iron-ore"), "nominal_rate_per_minute": 60}
+        outpost.state = {"world_id": "w", "banks": [first, extra]}
+        outpost.publish_reservations = Mock(return_value=None)
+        outpost.bank_proof = Mock(side_effect=lambda obs, b: {"nominal_rate_per_minute": b["nominal_rate_per_minute"]})
+        grown = {"ok": True, "plan": mining_bank(36.5, 0.5, 4, "iron-ore")}
+        outpost.prepare_extension = Mock(
+            side_effect=lambda obs, b, n: (
+                grown if b is extra else {"ok": False, "reason": "paired_mining_reserved_columns_exhausted"}
+            )
+        )
+        outpost.prepare_connected_bank = Mock(return_value={"ok": False, "reason": "no safe additional bank"})
+        outpost.builder = Mock()
+        outpost.builder.ensure_plan = Mock(return_value={"type": "build"})
+        outpost._construction_coverage = Mock(return_value=None)
+        entities = [
+            dict(e, unit_number=i + 1) for i, e in enumerate(first["plan"]["entities"] + extra["plan"]["entities"])
+        ]
+        obs = {"world_id": "w", "technologies": {"electric-mining-drill": True}, "entities": entities}
+        with (
+            patch("factorio_agent.outposts._atomic_json"),
+            patch("factorio_agent.mining_layout_policy.validate_retained_units", return_value={"ok": True}),
+        ):
+            result = outpost.step(obs, {"resource": "iron-ore", "rate_per_minute": 300})
+        self.assertEqual(result, {"type": "build"})
+        outpost.prepare_connected_bank.assert_not_called()
+        self.assertIs(extra["pending_extension"], grown)
+        self.assertNotIn("pending_extension", first)
+
 
 if __name__ == "__main__":
     unittest.main()

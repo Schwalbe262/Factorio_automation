@@ -16,10 +16,12 @@ from .planning import preflight
 from .site.transform import apply as apply_transform
 from .smelting_site import (
     DISTRICT_SIZE,
+    bus_header_tiles,
     canonical_bank,
     corridor_guide,
     district_candidate,
     district_head_choice,
+    pair_cells,
     plan_candidates,
 )
 
@@ -817,10 +819,15 @@ class SmeltingDistrict:
         # Other blocks' planned-but-unbuilt hardware (bridges, routed belts)
         # lies outside their reserved areas; a district must not sit on it.
         unbuilt = planned_unbuilt_hardware(self.builder, obs, board.get("blocks", {}), exclude=("smelting_district",))
+        # The district -> bus head corridor stays free of the district (its plate feeds use it).
+        header = bus_header_tiles(master)
+        header_keepouts = [entity(RESERVED_TILE, x, y) for x, y in sorted(header)]
         for candidate in planned + fallback:
             area = candidate["area"]
             growth = [e for b in candidate["banks"] for e in b.get("growth_entities", [])]
             if hardware_conflicts(self.builder, candidate["entities"] + growth, unbuilt):
+                continue
+            if header and any(area[0][0] < x < area[1][0] and area[0][1] < y < area[1][1] for x, y in header):
                 continue
             if any(
                 area[0][0] < b["reserved_area"][1][0]
@@ -900,6 +907,7 @@ return {ok=true,legal=legal}
             # area is hard for every other block's routes and poles).
             keepouts = growth_keepouts(self.builder, site["banks"])
             reserved_growth = {xy(e) for e in keepouts}
+            keepouts = keepouts + header_keepouts
             for source, destination in connections:
                 if budget.expired():
                     good = False
@@ -958,6 +966,12 @@ return {ok=true,legal=legal}
             if set().union(*boxes) & reserved_growth:
                 failures.append(
                     {"stage": "growth_footprint", "area": site["area"], "reason": "plan_entity_in_reserved_growth_slot"}
+                )
+                continue
+            tunnels = pair_cells(p for route in routes for p in route.get("underground_pairs", []))
+            if header and (set().union(*boxes) | tunnels) & header:
+                failures.append(
+                    {"stage": "bus_header", "area": site["area"], "reason": "plan_entity_in_bus_header_corridor"}
                 )
                 continue
             # Corridors may include exact approved natural clearances. A raw

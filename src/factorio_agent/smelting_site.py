@@ -242,6 +242,39 @@ def plan_candidates(plan, counts, *, limit: int = PLAN_CANDIDATES) -> list[dict]
     return [oriented(p.plan, p.transform) for p in placements[:limit]]
 
 
+def bus_header_tiles(plan) -> set:
+    """Tile centres of the plan's ``corridor:smelting->bus`` (the district -> bus head feed corridor).
+
+    Nothing of the district may stand or tunnel there: its plate feeds run through it to the
+    lane heads (fleet all-1113-2332 seeds 3872030632 and 2304149747: the district's ore route
+    ran along the bus head row, ``planned_bus_feed_route_failed`` on every retry).
+    """
+    import math
+
+    from .planned_bus import HEADER_CORRIDOR
+
+    corridor = plan.corridor(HEADER_CORRIDOR) if plan is not None else None
+    if corridor is None or not corridor.segments:
+        return set()
+    return {
+        (x + 0.5, y + 0.5)
+        for r in corridor.rects
+        for x in range(math.floor(r.x0), math.ceil(r.x1))
+        for y in range(math.floor(r.y0), math.ceil(r.y1))
+    }
+
+
+def pair_cells(pairs) -> set:
+    """Tile centres an underground pair spans (both mouths included)."""
+    cells = set()
+    for pair in pairs or []:
+        (ax, ay), (bx, by) = pair["input"], pair["output"]
+        span = int(abs(bx - ax) + abs(by - ay))
+        for i in range(span + 1):
+            cells.add((ax + (bx - ax) * i / max(1, span), ay + (by - ay) * i / max(1, span)))
+    return cells
+
+
 def corridor_guide(plan, item: str):
     """Bounding box ``(x0, y0, x1, y1)`` of the reserved feeder corridor for ``item``, or None."""
     corridor = plan.corridor(f"corridor:{item}->smelting")
