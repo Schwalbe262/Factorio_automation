@@ -14,8 +14,10 @@ from factorio_agent import planned_bus as pb
 from factorio_agent import planned_tap as pt
 from factorio_agent.compact_green import _recipe_catalog
 from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
-from factorio_agent.green_science import GREEN_BLOCK, LogisticScience, planned_green_cores
-from factorio_agent.manufacturing import GREEN_CORE_DEPTH, lab_green_entry_outside
+from factorio_agent.blocks.cluster_audit import audit_cluster
+from factorio_agent.core.world_catalog import WorldCatalog
+from factorio_agent.green_science import GREEN_TREE, LogisticScience, planned_green_clusters
+from factorio_agent.manufacturing import lab_green_entry_outside
 from factorio_agent.science import AutomaticScience, lab_row
 from factorio_agent.site.fakeworld import make_world
 from factorio_agent.site.planmodel import SiteConfig
@@ -24,6 +26,8 @@ from factorio_agent.site.transform import Transform, apply, in_canonical, plan_t
 from factorio_agent.smelting import merge_entities
 from factorio_agent.smelting_site import plan_candidates
 from factorio_agent.transport import xy
+from test_v2_production_layout import catalog as layout_catalog
+from v2_blocks_fixture import _entity, _recipe
 
 WORLD = "w1"
 SEED = 3
@@ -47,6 +51,20 @@ def catalog():
         recipes[plate] = {"energy": 3.2, "ingredients": [], "products": [{"name": plate, "amount": 1}]}
     entities = {"assembling-machine-1": {"crafting_speed": 0.5}, "stone-furnace": {"crafting_speed": 1}}
     return SimpleNamespace(recipes=recipes, entities=entities, recipe_for_product=recipes.get, fingerprint="cat")
+
+
+class GreenCatalog(WorldCatalog):
+    fingerprint = "cat"
+
+
+def green_catalog():
+    """Layout fake catalog (entity types, footprints, the green recipe tree) plus plate smelting."""
+    data = layout_catalog().to_dict()
+    data["recipes"]["copper-plate"] = _recipe(3.2, {"copper-ore": 1}, {"copper-plate": 1}, "smelting", enabled=True)
+    data["entities"]["stone-furnace"] = _entity(
+        "furnace", 2, electric=False, crafting_speed=1, crafting_categories=["smelting"]
+    )
+    return GreenCatalog.from_dict(data)
 
 
 def site_service(root, kind, **kwargs):
@@ -90,7 +108,7 @@ class World:
         self.game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root), query=lambda _body: CLEAR)
         self.write_board({"smelting_district": self.district})
         entities = list(self.district["entities"])
-        recipes = ("logistic-science-pack", "fast-inserter", "automation-science-pack", "iron-gear-wheel")
+        recipes = ("logistic-science-pack", "fast-inserter", "automation-science-pack", *GREEN_TREE)
         self.obs = {
             "world_id": WORLD,
             "tick": 100,
@@ -144,7 +162,7 @@ class World:
         self.write_board(board["blocks"], bus=board["shared_main_bus"])
         rate = self.red["nominal_machine_rate"]
         science = SimpleNamespace(proof=lambda obs: True, state={"labs": self.labs, "nominal_machine_rate": rate})
-        self.green = LogisticScience(self.game, BUILDER, catalog(), smelting, science, site=self.site)
+        self.green = LogisticScience(self.game, BUILDER, green_catalog(), smelting, science, site=self.site)
 
     @staticmethod
     def legal(game, slots):
@@ -173,15 +191,13 @@ class World:
 
 
 class GreenSitePlanTests(unittest.TestCase):
-    def test_narrow_core_fits_a_district_block_with_plates_on_the_bus_edge(self):
+    def test_green_cluster_fits_a_district_block_with_plates_on_the_bus_edge(self):
         with TemporaryDirectory() as directory:
             site = site_service(Path(directory), None)
-            self.assertGreaterEqual(site.plan(WORLD).district_depth, GREEN_CORE_DEPTH)
-            cores = planned_green_cores(site, WORLD, 7)
+            cores = planned_green_clusters(site, WORLD, green_catalog(), {"position": {"x": 0, "y": 0}})
             self.assertTrue(cores)
             for core in cores:
                 allocation = site.allocation(core["allocation"], WORLD)
-                self.assertEqual((allocation.along1 - allocation.along0, allocation.depth), GREEN_BLOCK)
                 self.assertTrue(inside(core["reserved_area"], allocation.rect))
                 self.assertEqual(overlaps(core["entities"]), 0)
                 # Both plate inputs sit near the bus edge, facing away from it.
@@ -223,6 +239,13 @@ class GreenSitePlanTests(unittest.TestCase):
                 seen.add(("bus", world.site.plan(WORLD).bus.direction))
                 core = result["core"]
                 self.assertTrue(inside(core["reserved_area"], world.site.allocation(core["allocation"], WORLD).rect))
+                # The block is the compact cluster: six machines, no internal routes, a small belt count.
+                names = [e["name"] for e in core["entities"]]
+                self.assertEqual(names.count("assembling-machine-1"), 6)
+                self.assertLess(names.count("transport-belt"), 60)
+                self.assertNotIn("underground-belt", names)
+                self.assertNotIn("splitter", names)
+                self.assertEqual(audit_cluster(world.green.catalog, core), [])
                 # No district splitter branch: the district plan is untouched, plates come from taps.
                 self.assertEqual(result["remove"], [])
                 self.assert_taps(world, result, "logistic_science")
@@ -248,7 +271,7 @@ class GreenSitePlanTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             world = World(root, None)
-            with patch("factorio_agent.green_science.planned_green_cores", return_value=[]):
+            with patch("factorio_agent.green_science.planned_green_clusters", return_value=[]):
                 full = world.prepare()
             self.assertEqual(full["reason"], "no_green_science_district_block")
             (root / "shallow").mkdir()
@@ -256,9 +279,15 @@ class GreenSitePlanTests(unittest.TestCase):
             world.green.site = site_service(root / "shallow", None, config=config)
             with patch("factorio_agent.green_science.green_core", side_effect=AssertionError("legacy anchor")):
                 shallow = world.prepare()
-        self.assertFalse(shallow["ok"])
-        self.assertEqual(shallow["reason"], "green_science_needs_deeper_district")
-        self.assertEqual((shallow["district_depth"], shallow["block_depth"]), (32, GREEN_CORE_DEPTH))
+        self.assertNotEqual(shallow.get("reason"), "green_science_needs_deeper_district")
+
+    def test_a_planned_world_without_a_bus_never_builds_a_district_branch(self):
+        with TemporaryDirectory() as directory:
+            world = World(Path(directory), None)
+            board = world.board()
+            world.write_board(board["blocks"])  # bus not published
+            result = world.prepare()
+        self.assertEqual(result["reason"], "green_science_needs_planned_bus")
 
 
 class GreenLabEntryTests(unittest.TestCase):

@@ -16,21 +16,24 @@ NAMED_GLYPHS = {"inserter": "i", "fast-inserter": "f", "long-handed-inserter": "
 TYPE_GLYPHS = {"assembling-machine": "M", "inserter": "I", "electric-pole": "+", "container": "C"}
 
 
-def _glyph(catalog: Any, e: dict) -> str:
+def _glyph(catalog: Any, e: dict, letters: dict | None = None) -> str:
     kind = (catalog.entities.get(e["name"]) or {}).get("type", "")
+    if letters and e.get("recipe") in letters:
+        return letters[e["recipe"]]
     if kind == "transport-belt":
         return BELT_GLYPHS[e["direction"]]
     return NAMED_GLYPHS.get(e["name"]) or TYPE_GLYPHS.get(kind, "?")
 
 
-def render_ascii(catalog: Any, plan: dict) -> str:
+def render_ascii(catalog: Any, plan: dict, letters: dict | None = None) -> str:
+    """``letters`` optionally maps a machine recipe to its glyph (cluster pictures)."""
     cells: dict[tuple[float, float], str] = {}
     for slot in plan.get("expansion_slots", []):
         for tile in footprint(catalog, dict(slot, direction=0)):
             cells[tile] = ":"
     for e in plan["entities"]:
         for tile in footprint(catalog, e):
-            cells[tile] = _glyph(catalog, e)
+            cells[tile] = _glyph(catalog, e, letters)
     for port in plan["ports"]:
         cells[xy(port)] = "@" if port["direction"] == "input" else "O"
     xs = sorted({t[0] for t in cells})

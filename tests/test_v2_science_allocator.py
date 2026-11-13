@@ -4,10 +4,11 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from test_v2_production_layout import catalog as layout_catalog
 from test_v2_site_service import service
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder
-from factorio_agent.green_science import planned_green_cores
+from factorio_agent.green_science import planned_green_clusters
 from factorio_agent.science import legacy_science_candidates, planned_science_candidates
 from factorio_agent.site.geometry import Rect
 from factorio_agent.site.placement import settle
@@ -62,35 +63,26 @@ class ScienceAllocatorTests(unittest.TestCase):
 
 
 class GreenAllocatorTests(unittest.TestCase):
-    def test_default_district_depth_holds_the_narrow_green_core(self):
+    """The green unit (a direct-insertion cluster) takes a small allocator block on any district depth."""
+
+    LAB = {"position": {"x": 0.5, "y": 0.5}}
+
+    def test_default_district_depth_holds_the_green_cluster(self):
         with TemporaryDirectory() as directory:
             site, _, _ = service(Path(directory))
-            self.assertEqual(site.plan("w1").district_depth, 48)
-            cores = planned_green_cores(site, "w1", 3)
+            cores = planned_green_clusters(site, "w1", layout_catalog(), self.LAB)
             self.assertTrue(cores)
             for core in cores:
                 self.assertTrue(inside(core["reserved_area"], site.allocation(core["allocation"], "w1").rect))
+                boxes = [GEOMETRY._occupied_by_plan([e]) for e in core["entities"]]
+                self.assertEqual(sum(map(len, boxes)), len(set().union(*boxes)))
+                self.assertEqual(core["connections"], [])  # no internal routes
 
-    def test_shallower_district_strips_cannot_hold_the_green_core(self):
+    def test_shallow_district_strips_still_hold_the_green_cluster(self):
         config = SiteConfig(district_depth=32, district_depth_fallbacks=(24,))
         with TemporaryDirectory() as directory:
             site, _, _ = service(Path(directory), config=config)
-            self.assertEqual(planned_green_cores(site, "w1", 3), [])
-            self.assertEqual(site.plan("w1").allocations, [])
-
-    def test_deeper_districts_hold_a_turned_green_core(self):
-        config = SiteConfig(district_depth=56, district_depth_fallbacks=(48, 32))
-        with TemporaryDirectory() as directory:
-            site, _, _ = service(Path(directory), config=config)
-            if site.plan("w1").district_depth < 54:
-                self.skipTest("fake map has no land for 56-deep districts")
-            cores = planned_green_cores(site, "w1", 3)
-            self.assertTrue(cores)
-            for core in cores:
-                allocation = site.allocation(core["allocation"], "w1")
-                self.assertTrue(inside(core["reserved_area"], allocation.rect))
-                boxes = [GEOMETRY._occupied_by_plan([e]) for e in core["entities"]]
-                self.assertEqual(sum(map(len, boxes)), len(set().union(*boxes)))
+            self.assertTrue(planned_green_clusters(site, "w1", layout_catalog(), self.LAB))
 
 
 if __name__ == "__main__":
