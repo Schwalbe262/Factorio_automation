@@ -154,6 +154,38 @@ capabilities (like `produce`) get a `*_nodes` function called from
 `autopilot_nodes` instead of a fixed step. `tests/test_v2_progression.py`
 checks ids, `after` order, `requires` and that every step validates.
 
+## 6b. Declare how the block grows: `growth_options`
+
+Every producer block type answers the bottleneck auditor (`PLANNERS.md` "Bottleneck
+auditor") through one interface in `growth_providers.py`:
+
+```
+growth_options(bottleneck, observation, state) -> [option, ...]
+  bottleneck   a row of the observe receipt bottlenecks.bottlenecks: group ("<block>|<product>"),
+               block, item, kind (at_capacity | transport | no_power | no_producer |
+               consumer_capacity | partly_working), consumers [{group, block, item, n,
+               lost_seconds_per_minute}], chain, lost_seconds_per_minute, evidence
+  observation  the observe receipt (raw in observe, the summary in the supervisor): read receipts only
+  state        {"jobs": full ledger jobs, "queue_nodes": work queue nodes, "capabilities": CAPABILITIES}
+  option       growth_providers._option(provider, kind=in_place|copy|rebuild|upstream|follow_up,
+               capability=, parameters=, nodes=[queue nodes, ids "auto_..."], gain_per_minute=,
+               cost={item: n}, seconds_saved=, feasible=, reason=)
+```
+
+- Register it: `growth_providers.register(name, matches, provider, first=True)` or a row in
+  `PROVIDERS` (first match wins). `matches(bottleneck)` looks at `block`, `item`, `kind`.
+- Keep your planner's decision: compute wait-vs-spend / build-ahead / critical claims in your
+  receipt and return `feasible=False, reason=<its wait reason>` when it waits; return the nodes your
+  `*_nodes` function would add when it grows (one package; the auditor merges them every cycle,
+  outside the roadmap queue gate).
+- The auditor gates for you: transitional blocks, one package in flight per lane, `SETTLE_TICKS`
+  after a landed growth, ids already queued. Without a provider the gate is `no_provider`;
+  `production_row_*` blocks have the generic one (`produce` at a higher rate).
+- Science packs: `science_growth.growth_options` (same signature) takes every pack and lab bottleneck
+  once defined; until then only the staged red block grows (from the `science_growth` receipt).
+- Test it with a fixture in `tests/test_v2_bottleneck_audit.py` (`Scene().add(block, entity, count,
+  status, recipe=...)`, `scene.run(jobs, <receipt>=...)`) asserting `bottlenecks[0].proposal`.
+
 ## 7. Test offline
 
 | Need | Pattern |

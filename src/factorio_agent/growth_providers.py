@@ -297,8 +297,116 @@ def power_options(b, observation, state) -> list[dict]:
     ]
 
 
+# ----- generic: produce rows ---------------------------------------------------------------------
+def _produce_matches(b) -> bool:
+    return str(b.get("block") or "").startswith("production_row_") or (
+        b.get("kind") == "no_producer" and not b.get("raw") and not str(b.get("item") or "").endswith("science-pack")
+    )
+
+
+def _starved_share(b) -> float:
+    """Share of the window the consumers lose: lost machine-seconds over their machine-seconds."""
+    units = sum(float(c.get("n") or 0) for c in b.get("consumers") or ())
+    lost = sum(float(c.get("lost_seconds_per_minute") or 0) for c in b.get("consumers") or ())
+    return min(1.0, lost / (60.0 * units)) if units > 0 else 0.0
+
+
+def produce_options(b, observation, state) -> list[dict]:
+    """A ``produce`` row at a higher rate (``ProductionRows._extend`` grows it in place), sized by starvation.
+
+    A row at capacity whose consumers starve a share ``s`` of the time needs
+    ``1 / (1 - s)`` of its rate (at most ``GENERIC_STEP_MAX`` x per package);
+    an item without any producer gets a row only through ``produce_nodes``
+    (its bulk demand sizes it). No time comparison: the row's bill is small and
+    its demand already waits.
+    """
+    from .production_rows import MAX_RATE
+    from .progression import PRODUCE_CAPABILITY, PRODUCE_PRIORITY, produce_nodes
+
+    item = b.get("item")
+    capabilities = state["capabilities"]
+    if PRODUCE_CAPABILITY not in capabilities:
+        return [_option("produce_row", feasible=False, reason="no produce capability")]
+    succeeded = {j.get("capability") for j in state["jobs"] if j.get("status") == "succeeded"}
+    if not set(capabilities[PRODUCE_CAPABILITY].get("requires", [])) <= succeeded:
+        return [_option("produce_row", feasible=False, reason="produce requires are not done")]
+    if b.get("kind") == "no_producer":
+        nodes = [
+            n
+            for n in produce_nodes(state["jobs"], state["queue_nodes"], observation, capabilities)
+            if (n.get("parameters") or {}).get("item") == item
+        ]
+        if not nodes:
+            return [
+                _option(
+                    "produce_row",
+                    kind="copy",
+                    feasible=False,
+                    reason=f"no producer of {item}; produce_nodes sizes no row for it (bulk demand, plate sources)",
+                )
+            ]
+        return [
+            _option(
+                "produce_row",
+                kind="copy",
+                capability=PRODUCE_CAPABILITY,
+                parameters=nodes[0]["parameters"],
+                nodes=nodes,
+                reason=nodes[0]["reason"],
+            )
+        ]
+    if b.get("kind") != "at_capacity":
+        return [_option("produce_row", feasible=False, reason=f"row {b.get('kind')}: not a capacity limit")]
+    rates = [
+        _number((j.get("parameters") or {}).get("rate_per_minute"))
+        for j in state["jobs"]
+        if j.get("capability") == PRODUCE_CAPABILITY and (j.get("parameters") or {}).get("item") == item
+    ]
+    current = max((r for r in rates if r), default=None)
+    if current is None:
+        return [_option("produce_row", feasible=False, reason=f"no produce job for {item}")]
+    if float(b.get("lost_seconds_per_minute") or 0) < MIN_LOST_SECONDS:
+        return [_option("produce_row", feasible=False, reason=f"consumers lose < {MIN_LOST_SECONDS:g} s/min")]
+    share = _starved_share(b)
+    factor = GENERIC_STEP_MAX if share >= 1 - 1 / GENERIC_STEP_MAX else 1 / (1 - share)
+    target = round(min(float(MAX_RATE), current * factor), 1)
+    if target < current + 0.5:
+        return [
+            _option("produce_row", feasible=False, reason=f"{item} row already at {current:g}/min (cap {MAX_RATE})")
+        ]
+    parameters = {"item": item, "rate_per_minute": target}
+    node = {
+        "id": f"auto_produce_{item}_{int(target)}",
+        "capability": PRODUCE_CAPABILITY,
+        "parameters": parameters,
+        "priority": PRODUCE_PRIORITY,
+        "depends_on": [],
+        "reason": f"bottleneck: {item} row at capacity, consumers starve {share:.0%}; extend {current:g} -> {target:g}/min"[
+            :300
+        ],
+    }
+    if any(
+        j.get("capability") == PRODUCE_CAPABILITY
+        and j.get("parameters") == parameters
+        and j.get("status") in TERMINAL - {"succeeded"}
+        for j in state["jobs"]
+    ):
+        return [_option("produce_row", feasible=False, reason=f"extension to {target:g}/min stalled before")]
+    return [
+        _option(
+            "produce_row",
+            capability=PRODUCE_CAPABILITY,
+            parameters=parameters,
+            nodes=[node],
+            gain_per_minute=round(target - current, 1),
+            reason=node["reason"],
+        )
+    ]
+
+
 PROVIDERS: list[tuple[str, Callable[[Mapping], bool], Callable[..., list]]] = [
     ("power", _power_matches, power_options),
+    ("produce_row", _produce_matches, produce_options),
     ("science", _science_matches, science_options),
     ("steel", _steel_matches, steel_options),  # before plates: a furnace block's iron feed is its own
     ("plates", _plates_matches, plates_options),
