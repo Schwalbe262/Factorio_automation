@@ -45,13 +45,20 @@ RETRY_CLEARED_BY = {
     "production_row_input_source_missing": frozenset(
         {"planned_main_bus", "main_bus", "automation_science", "smelting_capacity", "produce"}
     ),
+    # District growth refused by the flow model: the feed head rework (head_rework.py) clears it.
+    "feed_head_bandwidth_below_next_slot_demand": frozenset({"feed_head_rework"}),
     # normal_research: no block makes one of the technology's packs yet.
     "research_pack_producer_missing": frozenset({"logistic_science", "chemical_science"}),
 }
 # Re-planning blockers (a route, a whole-plan preflight or a site search that found nothing):
 # the world, neighbours and the planning budget change the answer without any job success.
 REPLAN_SUFFIXES = ("_route_failed", "_preflight_failed")
-# Extra quiet-interval retries of such a blocker while no job at all is active.
+# A plan entity on ore or a mining reservation: the planner re-sites (power: the saved plan is dropped
+# and chosen again with the resource policy, FactoryBuilder._replan_power; fleet all-1113-2332 seed
+# 1561968568 stayed blocked from 4 to 45 game minutes on it).
+REPLAN_REASONS = frozenset(
+    {"new_entity_over_resource_or_mining_reservation", "new_underground_tunnel_over_resource_or_mining_reservation"}
+)  # Extra quiet-interval retries of such a blocker while no job at all is active.
 IDLE_RETRY_LIMIT = 10
 # Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan) are
 # re-planning blockers too. Past AUTO_RETRY_LIMIT every re-planning blocker is still retried,
@@ -73,7 +80,12 @@ SITE_RETRY_FACT_FILES = ("pcb-board.json", "material-sources.json", "site-plan.j
 
 
 def _replannable(reason: str) -> bool:
-    return reason.startswith("no_clear_") or reason.endswith(REPLAN_SUFFIXES) or _site_blocked(reason)
+    return (
+        reason.startswith("no_clear_")
+        or reason.endswith(REPLAN_SUFFIXES)
+        or reason in REPLAN_REASONS
+        or _site_blocked(reason)
+    )
 
 
 QUEUED = ("pending", "ready")

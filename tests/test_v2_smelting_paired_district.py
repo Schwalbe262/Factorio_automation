@@ -198,8 +198,22 @@ class DistrictReservationTests(unittest.TestCase):
             self.assertTrue(growth)
             self.assertFalse(occupied(result["plan"]["entities"]) & growth, seed)
             self.assertEqual(len(result["plan"]["growth_entities"]), 2 * 2 * BANK_SLOTS * 7 - 6 * 7, seed)
+            # Split feed heads (flow-model choice): their undergrounds are plan pairs (underground_proof).
+            self.assertEqual(result["bandwidth"]["head"], "split", seed)
+            head_pairs = [p for b in result["banks"] for p in b["underground_pairs"]]
+            self.assertEqual(len(head_pairs), 2, seed)
+            self.assertTrue(all(p in result["plan"]["underground_pairs"] for p in head_pairs), seed)
             for reserved in calls["belt"] + calls["power"]:
                 self.assertTrue(growth <= {xy(e) for e in reserved} | occupied(reserved), seed)
+            # The district -> bus head corridor is hard for the district's routes and poles and
+            # holds nothing of the district (all-1113-2332 seeds 3872030632, 2304149747).
+            from factorio_agent.smelting_site import bus_header_tiles
+
+            header = bus_header_tiles(master)
+            self.assertTrue(header, seed)
+            for reserved in calls["belt"] + calls["power"]:
+                self.assertTrue(header <= {xy(e) for e in reserved}, seed)
+            self.assertFalse(occupied(result["plan"]["entities"]) & header, seed)
 
     def test_later_routes_poles_and_sites_of_other_blocks_avoid_the_growth_footprint(self):
         site = district_candidate(8, 8, COUNTS)

@@ -17,10 +17,13 @@ from .site.transform import apply as apply_transform
 from .smelting_site import (
     DISTRICT_SIZE,
     ROUTE_DETOUR,
+    bus_header_tiles,
     canonical_bank,
     corridor_detour,
     corridor_guide,
     district_candidate,
+    district_head_choice,
+    pair_cells,
     plan_candidates,
 )
 
@@ -727,6 +730,14 @@ class SmeltingDistrict:
                 "reason": "paired_bank_full_next_growth_is_another_bank",
                 "evidence": {"capacity_slots": slots, "full_bank_rate_per_minute": 2 * slots * each},
             }
+        if resource in (self.state.get("head_rework") or {}):
+            return {"status": "waiting", "reason": "feed_head_rework_in_progress", "resource": resource}
+        from .head_rework import bank_growth_check
+
+        # The feed head must feed the grown rows (belt_flow); else feed_head_rework replaces it first.
+        refused = bank_growth_check(old, max(wanted, old["per_side_count"]))
+        if refused is not None:
+            return refused
         new = grown_bank(old, max(wanted, old["per_side_count"]))
         if new["entities"] != old["entities"]:
             board_path = self.path.parent / "pcb-board.json"
@@ -849,10 +860,15 @@ class SmeltingDistrict:
         unboarded_unbuilt = planned_unbuilt_hardware(self.builder, obs, unboarded)
         # Routes keep off those unbuilt entities (poles, drills are hard for the router).
         owned = [dict(e) for e in _unbuilt_entities(obs, unboarded) if e["name"] not in ("transport-belt",)]
+        # The district -> bus head corridor stays free of the district (its plate feeds use it).
+        header = bus_header_tiles(master)
+        header_keepouts = [entity(RESERVED_TILE, x, y) for x, y in sorted(header)]
         for candidate in planned + fallback:
             area = candidate["area"]
             growth = [e for b in candidate["banks"] for e in b.get("growth_entities", [])]
             if hardware_conflicts(self.builder, candidate["entities"] + growth, unbuilt):
+                continue
+            if header and any(area[0][0] < x < area[1][0] and area[0][1] < y < area[1][1] for x, y in header):
                 continue
             if any(
                 area[0][0] < b["reserved_area"][1][0]
@@ -932,6 +948,7 @@ return {ok=true,legal=legal}
             # area is hard for every other block's routes and poles).
             keepouts = growth_keepouts(self.builder, site["banks"])
             reserved_growth = {xy(e) for e in keepouts}
+            keepouts = keepouts + header_keepouts
             for source, destination in connections:
                 if budget.expired():
                     good = False
@@ -1013,6 +1030,12 @@ return {ok=true,legal=legal}
                     {"stage": "growth_footprint", "area": site["area"], "reason": "plan_entity_in_reserved_growth_slot"}
                 )
                 continue
+            tunnels = pair_cells(p for route in routes for p in route.get("underground_pairs", []))
+            if header and (set().union(*boxes) | tunnels) & header:
+                failures.append(
+                    {"stage": "bus_header", "area": site["area"], "reason": "plan_entity_in_bus_header_corridor"}
+                )
+                continue
             # Corridors may include exact approved natural clearances. A raw
             # can_place repeat rejects those trees and discards its own earlier
             # route approval. Recheck the complete resource/ownership footprint
@@ -1022,6 +1045,7 @@ return {ok=true,legal=legal}
                 failures.append({"stage": "whole_preflight", "area": site["area"], "reason": whole.get("reason")})
                 continue
             pairs = [pair for route in routes for pair in route.get("underground_pairs", [])]
+            pairs += [pair for bank in site["banks"] for pair in bank.get("underground_pairs", [])]  # split heads
             es = producer_first_order(es, site, connections, routes, powers)
             plan = _plan(
                 es,
@@ -1044,6 +1068,10 @@ return {ok=true,legal=legal}
                 "routes": [{"metrics": r["route_metrics"], "pairs": r["underground_pairs"]} for r in routes],
                 "nominal_input_rates": {"iron-ore": 60, "copper-ore": 30},
                 "coal_splitter_policy": "ordinary balanced outputs; existing power feed remains separate",
+                "bandwidth": {
+                    **district_head_choice(),
+                    "scope": "canonical district bank at full reserved growth through belt_flow",
+                },
                 # The bank ports this plan was routed from (re-plan or block when one changes).
                 "source_ports": dict(sources),
             }
@@ -1199,6 +1227,8 @@ return {ok=true,legal=legal}
                 return {"status": "blocked", "reason": "smelting_reservation_changed"}
             board["blocks"]["smelting_district"] = self.state["plan"]
             _atomic_json(board_path, board)
+        if self.state.get("head_rework"):  # feed_head_rework (head_rework.py) builds the republished head
+            return {"status": "waiting", "reason": "feed_head_rework_in_progress"}
         cleanup = self.clean_feed_baseline(obs)
         if cleanup is not None:
             return cleanup

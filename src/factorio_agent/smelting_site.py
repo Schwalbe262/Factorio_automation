@@ -8,9 +8,17 @@ reserved area is ``[x - 8, x + 40) x [y - 8, y + 24)`` (48 x 32, corner
     rows  0-11  iron bank: ore port (X0+0.5, Y0+0.5) facing east, upper and
                 lower furnace rows around the output belt at Y0+6.5
     rows 12-19  coal: input port (X0+0.5, Y0+15.5) facing east, splitter at
-                X0+1.5, branches up/down column X0+3.5 to both banks
+                X0+1.5, branches up/down column X0+5.5 into both banks' coal
+                ports (split head; the older shared head: column X0+3.5)
     rows 20-31  copper bank, the iron bank mirrored about y = Y0+16: ore port
                 (X0+0.5, Y0+31.5), output belt at Y0+25.5
+
+Feed head: the flow model's choice at full reserved growth (``district_head_choice``,
+``feed_head.rank_heads``), today the split head (``feed_head.split_feed_head``): ore split
+head-on first, each half side-loaded onto its row's belt, coal likewise on the other lane;
+each row gets a full lane of ore (450/min, 24 stone furnaces) instead of a quarter belt
+(225/min, 12 furnaces). Saved districts keep their recorded ``feed_head`` (``shared`` when
+absent); ``head_rework`` replaces a deficient one.
 
 Every input enters on the west edge and both plate ports sit on the east
 edge (facing east). Each bank has ``capacity_slots`` (12) furnace slots per
@@ -53,14 +61,58 @@ def per_row(count: int) -> int:
     return max(1, -(-count // 2))
 
 
-def district_candidate(x, y, counts):
-    """The canonical district candidate dict used by ``SmeltingDistrict.prepare`` (module doc)."""
-    from .smelting import BANK_DEPTH, merge_entities, paired_furnace_bank, port
+def _bank(x0, y0, count, resource, head):
+    from .feed_head import with_head
+    from .smelting import paired_furnace_bank
 
-    x0, y0 = x - 8, y - 8
-    iron = paired_furnace_bank(x0, y0, per_row(counts["iron-ore"]), "iron-ore", length=DISTRICT_WIDTH)
-    copper = paired_furnace_bank(x0, y0, per_row(counts["copper-ore"]), "copper-ore", length=DISTRICT_WIDTH)
-    copper = apply(Transform(0, "y", (x0, y0 + DISTRICT_HEIGHT // 2)), copper)
+    bank = paired_furnace_bank(x0, y0, per_row(count), resource, length=DISTRICT_WIDTH)
+    return with_head(bank, x0, y0, head)
+
+
+def district_bank_audit(head: str, resource: str = "iron-ore") -> dict:
+    """belt_flow audit of one canonical district bank with ``head`` at full reserved growth.
+
+    Stone furnace rates are the ones the district audit uses (``bandwidth_audit.district_rows``):
+    18.75 ore/min and 1.35 coal/min per furnace.
+    """
+    from .bandwidth_audit import COAL_JOULES, FURNACE_WATTS, PLATE_SECONDS, _with_growth, furnace_bank
+    from .smelting import BANK_SLOTS
+
+    bank = _bank(0, 0, 2 * BANK_SLOTS, resource, head)
+    ore = 60 / PLATE_SECONDS
+    return furnace_bank(
+        _with_growth(bank),
+        bank["ports"],
+        raw=resource,
+        raw_per_furnace=ore,
+        coal_per_furnace=FURNACE_WATTS["stone-furnace"] * 60 / COAL_JOULES,
+        product=bank["product"],
+        product_per_furnace=ore,
+    )
+
+
+_HEAD_CHOICE: dict = {}
+
+
+def district_head_choice() -> dict:
+    """The district banks' feed head, ranked by the flow model at full reserved growth (pure, cached)."""
+    if not _HEAD_CHOICE:
+        from .feed_head import rank_heads
+
+        _HEAD_CHOICE.update(
+            rank_heads(district_bank_audit, lambda head: len(_bank(0, 0, 2, "iron-ore", head)["entities"]))
+        )
+    return dict(_HEAD_CHOICE)
+
+
+def _coal_network(x0, y0, head):
+    """The district's coal input, splitter and fixed branches into both banks' coal ports.
+
+    Shared head: straight up/down the coal column x0 + 3.5 into each bank's coal stub.
+    Split head: each branch turns along its splitter row to column x0 + 5.5 and enters the
+    bank's coal port on the bank's inner edge (row 11 of the iron bank, row 20 of the
+    mirrored copper bank).
+    """
     middle = y0 + DISTRICT_HEIGHT // 2  # coal splitter rows middle - 1 and middle
     coal = [
         entity("transport-belt", x0 + 0.5, middle - 0.5, 4),
@@ -68,9 +120,31 @@ def district_candidate(x, y, counts):
         entity("transport-belt", x0 + 2.5, middle - 0.5, 4),
         entity("transport-belt", x0 + 2.5, middle + 0.5, 4),
     ]
-    # Fixed branches: straight up/down the coal column into each bank's coal stub.
+    if head == "split":
+        coal += [entity("transport-belt", x0 + dx + 0.5, middle - 0.5, 4) for dx in (3, 4)]
+        coal += [entity("transport-belt", x0 + dx + 0.5, middle + 0.5, 4) for dx in (3, 4)]
+        coal += [entity("transport-belt", x0 + 5.5, yy + 0.5, 0) for yy in range(y0 + 12, middle)]
+        coal += [entity("transport-belt", x0 + 5.5, yy + 0.5, 8) for yy in range(middle, y0 + DISTRICT_HEIGHT - 12)]
+        return coal
     coal += [entity("transport-belt", x0 + 3.5, yy + 0.5, 0) for yy in range(y0 + 4, middle)]
     coal += [entity("transport-belt", x0 + 3.5, yy + 0.5, 8) for yy in range(middle, y0 + DISTRICT_HEIGHT - 4)]
+    return coal
+
+
+def district_candidate(x, y, counts, head=None):
+    """The canonical district candidate dict used by ``SmeltingDistrict.prepare`` (module doc).
+
+    ``head`` is the banks' feed head; None takes the flow model's choice
+    (``district_head_choice``)."""
+    from .smelting import BANK_DEPTH, merge_entities, port
+
+    head = head or district_head_choice()["head"]
+    x0, y0 = x - 8, y - 8
+    iron = _bank(x0, y0, counts["iron-ore"], "iron-ore", head)
+    copper = _bank(x0, y0, counts["copper-ore"], "copper-ore", head)
+    copper = apply(Transform(0, "y", (x0, y0 + DISTRICT_HEIGHT // 2)), copper)
+    middle = y0 + DISTRICT_HEIGHT // 2
+    coal = _coal_network(x0, y0, head)
     if BANK_DEPTH * 2 > DISTRICT_HEIGHT - 4:
         raise ValueError("two banks and the coal band do not fit the district")
     banks = [iron, copper]
@@ -166,6 +240,39 @@ def plan_candidates(plan, counts, *, limit: int = PLAN_CANDIDATES) -> list[dict]
         placements += orientations(build, DISTRICT_SIZE, slot, wants)
     placements.sort(key=lambda p: p.score)
     return [oriented(p.plan, p.transform) for p in placements[:limit]]
+
+
+def bus_header_tiles(plan) -> set:
+    """Tile centres of the plan's ``corridor:smelting->bus`` (the district -> bus head feed corridor).
+
+    Nothing of the district may stand or tunnel there: its plate feeds run through it to the
+    lane heads (fleet all-1113-2332 seeds 3872030632 and 2304149747: the district's ore route
+    ran along the bus head row, ``planned_bus_feed_route_failed`` on every retry).
+    """
+    import math
+
+    from .planned_bus import HEADER_CORRIDOR
+
+    corridor = plan.corridor(HEADER_CORRIDOR) if plan is not None else None
+    if corridor is None or not corridor.segments:
+        return set()
+    return {
+        (x + 0.5, y + 0.5)
+        for r in corridor.rects
+        for x in range(math.floor(r.x0), math.ceil(r.x1))
+        for y in range(math.floor(r.y0), math.ceil(r.y1))
+    }
+
+
+def pair_cells(pairs) -> set:
+    """Tile centres an underground pair spans (both mouths included)."""
+    cells = set()
+    for pair in pairs or []:
+        (ax, ay), (bx, by) = pair["input"], pair["output"]
+        span = int(abs(bx - ax) + abs(by - ay))
+        for i in range(span + 1):
+            cells.add((ax + (bx - ax) * i / max(1, span), ay + (by - ay) * i / max(1, span)))
+    return cells
 
 
 ROUTE_DETOUR = 1.35  # routing.route_trunks' default max_detour_ratio

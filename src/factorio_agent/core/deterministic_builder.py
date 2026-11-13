@@ -48,6 +48,11 @@ COAL_FEED_TAKEN_REASONS = (
     "existing entity direction differs from reserved plan",
     "existing underground endpoint differs from reserved plan",
 )
+# Resource-policy refusals of a saved, wholly unbuilt power plan: it is dropped and planned again.
+POWER_REPLAN_REASONS = (
+    "new_entity_over_resource_or_mining_reservation",
+    "new_underground_tunnel_over_resource_or_mining_reservation",
+)
 # planning.preflight reasons meaning the same (resource-policy reasons are not a taken tile).
 COAL_FEED_PREFLIGHT_TAKEN = (
     "block_protected_entity_obstruction",
@@ -998,9 +1003,32 @@ return success{blocked=blocked,clearable=clearable}
                             continue
                         pipes = [{"name": "pipe", "position": p, "direction": 0} for p in path["path"]]
                         plan = _plan([pump] + bank["entities"] + pipes, bank["ports"], template="starter_power")
-                        if self.can_place(plan["entities"])["ok"]:
+                        if self.can_place(plan["entities"])["ok"] and self._power_plan_clear(plan["entities"]):
                             return plan
         return {"ok": False, "reason": "no clear starter coast supports connected steam power"}
+
+    def _power_plan_clear(self, entities: list[dict]) -> bool:
+        """Resource policy hook for a power plan candidate (the v2 builder rejects ore and mining reservations).
+
+        The native ``can_place`` lets a belt or pipe stand on ore, so a candidate passed
+        here and the saved plan then blocked forever in ``ensure_plan``'s resource policy
+        (fleet all-1113-2332 seed 1561968568: the boiler's coal stub on ore at 4 game min).
+        """
+        return True
+
+    def _replan_power(self, observation: dict, power: dict, result: dict) -> dict | None:
+        """Drop a saved, wholly unbuilt power plan the resource policy refuses; None otherwise."""
+        if result.get("status") != "blocked" or result.get("reason") not in POWER_REPLAN_REASONS:
+            return None
+        if any(_find(observation, e) is not None for e in power.get("entities", [])):
+            return None  # something stands: the built part may stand in the new way
+        self.state.pop("power_plan", None)
+        self._save()
+        return _report(
+            "waiting",
+            "starter power plan met ore or a mining reservation before anything was built; planning again",
+            refused={k: result.get(k) for k in ("reason", "entity", "position") if result.get(k) is not None},
+        )
 
     def _steam_bank_variants(self, anchor: dict, rotation: int) -> list[dict]:
         """Steam bank layouts ordered so the coal port faces the coal source.
@@ -1238,7 +1266,7 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
         power = self.state["power_plan"]
         result = self.ensure_plan(observation, power)
         if result.get("status") != "succeeded":
-            return result
+            return self._replan_power(observation, power, result) or result
         if coal_feed_mode(self.state) == HAND_FED:
             return self._ensure_hand_fed_power(observation, power)
         return self._ensure_belt_fed_power(observation, power, "power_sample_tick")

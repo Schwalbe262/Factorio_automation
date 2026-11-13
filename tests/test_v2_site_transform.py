@@ -102,6 +102,30 @@ class TransformTests(unittest.TestCase):
         self.assertEqual(turned["e"][0]["output_priority"], "left")
         self.assertEqual(turned["p"]["lane_items"], {"left": "a", "right": "b"})
 
+    def test_mirrored_splitters_keep_the_intended_side(self):
+        # Splitter entities carry splitter_input_priority / splitter_output_priority (native names);
+        # a mirror must swap them so a tap still serves its branch and a return feed its side belt.
+        from factorio_agent.planned_bus import branch_priorities, splitter_side
+        from factorio_agent.return_feed import layout_at
+
+        tap = entity("splitter", 10.5, 20.0, 0)
+        port = {"x": 9.5, "y": 18.5}
+        tap.update(branch_priorities(tap, port))
+        feed = layout_at(entity("transport-belt", 4.5, 6.5, 4), 1)
+        for t in variants((3, 7)):
+            if t.mirror is None:
+                continue
+            with self.subTest(t=t):
+                moved, moved_port = apply(t, tap), apply(t, port)
+                self.assertEqual(moved["splitter_output_priority"], splitter_side(moved, moved_port))
+                self.assertEqual(moved["splitter_input_priority"], "none")
+                layout = apply(t, feed)
+                splitter = layout["splitter"]
+                self.assertEqual(splitter["splitter_input_priority"], splitter_side(splitter, layout["side"]))
+                self.assertEqual(
+                    splitter["splitter_output_priority"], splitter_side(splitter, layout["belt"]["position"])
+                )
+
     def test_unsafe_inputs_raise(self):
         with self.assertRaises(ValueError):
             apply(Transform(0, "x"), [entity("chemical-plant", 0.5, 0.5, 0)])

@@ -184,6 +184,10 @@ class StarterExecutors:
         from .trunk_lane import TrunkLane
 
         self.trunk_lane = TrunkLane(game, self.builder, catalog, outposts=self.outposts, smelting=self.smelting)
+        from .head_rework import FeedHeadRework
+
+        # A built district bank's shared feed head replaced by the split head (head_rework.py).
+        self.feed_head_rework = FeedHeadRework(game, self.builder, catalog, smelting=self.smelting)
         self.chemical_coal = DedicatedMaterials(
             game,
             self.builder,
