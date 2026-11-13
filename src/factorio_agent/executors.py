@@ -180,6 +180,7 @@ class StarterExecutors:
             bus_factory=self.bus_factory,
             science=self.science,
             green=self.green,
+            site=self.site,
         )
         from .shared_coal_tap import SharedCoalTap
 

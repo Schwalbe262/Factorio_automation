@@ -66,8 +66,14 @@ Without a planned bus (no site plan, or no bus published for this world)
 red science takes the district plate ports and green its splitter branch at
 the district (`plate_supply.plate_bus` returns None).
 
+Steel and bricks plan from the site plan on this bus
+(`planned_furnaces.py`, see STEEL.md): the steel block taps iron with
+`connect_inputs`; its steel leaves on a board port, the reserved
+`steel-plate` lane is not built yet (it needs an injection: a branch from
+outside the band onto a reserved lane plus a trunk starting there, crossing
+the built trunks between, the reverse of a tap).
 Not yet: `bus_tap.BusTap`, `industrial.free_tap_parameters` and the
-consumers that require `planned_main_bus` (steel supply, engines, ammo,
+consumers that require `planned_main_bus` (engines, ammo,
 advanced circuits, construction mall) only read the development-map
 template below; on this bus they block with `planned_main_bus taps go
 through planned_tap.connect_inputs` until they plan sites from `SiteService`

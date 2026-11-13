@@ -121,8 +121,14 @@ class IndustrialOperations:
         tap=None,
         steel=None,
         brick=None,
+        site=None,
     ):
         self.game, self.builder, self.catalog, self.defense = game, builder, catalog, defense
+        # A world with a site service and a planned bus plans steel/bricks from
+        # its site plan (planned_furnaces.py); the rest of this class is the
+        # development-map path.
+        self.site = site
+        self._planned = {}
         self.path = Path(game.cfg.runtime_dir) / "industrial-operations.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         self.tap = (
@@ -132,6 +138,17 @@ class IndustrialOperations:
         )
         self.steel = steel if steel is not None else SteelProduction(game, builder, catalog)
         self.brick = brick if brick is not None else BrickProduction(game, builder, catalog)
+
+    def planned(self, kind, obs):
+        """The site-planned ``kind`` ("steel"/"brick") controller on a planned world, else None."""
+        if self.site is None:
+            return None
+        if kind not in self._planned:
+            from .planned_furnaces import PlannedFurnaces
+
+            self._planned[kind] = PlannedFurnaces(self.game, self.builder, self.catalog, site=self.site, kind=kind)
+        controller = self._planned[kind]
+        return controller if controller.active(obs) else None
 
     def _error(self, obs):
         if self.state and (
@@ -380,6 +397,9 @@ return {ok=true}"""
             return {"status": "blocked", "reason": "industrial_shared_coal_adoption_unavailable", "detail": str(exc)}
 
     def steel_supply(self, obs):
+        planned = self.planned("steel", obs)
+        if planned is not None:
+            return planned.supply_step(obs)
         error = self._error(obs)
         if error:
             return {"status": "blocked", **error}
@@ -414,6 +434,9 @@ return {ok=true}"""
             return {"status": "blocked", "reason": "industrial_steel_supply_changed", "detail": str(exc)}
 
     def steel_supply_proof(self, obs):
+        planned = self.planned("steel", obs)
+        if planned is not None:
+            return planned.supply_proof(obs)
         if self._error(obs):
             return None
         try:
@@ -563,18 +586,27 @@ return {ok=true}"""
         )
 
     def steel_production(self, obs):
+        planned = self.planned("steel", obs)
+        if planned is not None:
+            return planned.production_step(obs)
         try:
             return self._production(obs, "steel")
         except (OSError, KeyError, ValueError, TypeError) as exc:
             return {"status": "blocked", "reason": "industrial_steel_controller_unavailable", "detail": str(exc)}
 
     def brick_production(self, obs):
+        planned = self.planned("brick", obs)
+        if planned is not None:
+            return planned.production_step(obs)
         try:
             return self._production(obs, "brick")
         except (OSError, KeyError, ValueError, TypeError) as exc:
             return {"status": "blocked", "reason": "industrial_brick_controller_unavailable", "detail": str(exc)}
 
     def steel_production_proof(self, obs):
+        planned = self.planned("steel", obs)
+        if planned is not None:
+            return planned.proof(obs)
         supply = self.steel_supply_proof(obs)
         coverage = self.defense.coverage_proof(obs, "industrial:steel") if self.defense is not None else None
         production = self.steel.proof(obs) if not self._error(obs) else None
@@ -585,6 +617,9 @@ return {ok=true}"""
         )
 
     def brick_production_proof(self, obs):
+        planned = self.planned("brick", obs)
+        if planned is not None:
+            return planned.proof(obs)
         if self._error(obs):
             return None
         try:

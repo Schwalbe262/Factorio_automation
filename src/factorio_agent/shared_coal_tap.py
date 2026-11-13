@@ -458,7 +458,15 @@ return {ok=true,tick=game.tick,steel_coal=counts[1],brick_coal=counts[2]}"""
         self._save()
         return None
 
+    def _planned(self, obs):
+        """The site-planned steel block on a planned world: it routes its own coal outlet (planned_furnaces)."""
+        planned = getattr(self.industrial, "planned", None)
+        return planned("steel", obs) if planned is not None else None
+
     def step(self, obs):
+        planned = self._planned(obs)
+        if planned is not None:
+            return planned.coal_supply_step(obs)
         if not self.state:
             ready = self.prepare(obs)
             if not ready.get("ok"):
@@ -548,6 +556,9 @@ return {ok=true,tick=game.tick,steel_coal=counts[1],brick_coal=counts[2]}"""
         }
 
     def proof(self, obs):
+        planned = self._planned(obs)
+        if planned is not None:
+            return planned.coal_proof(obs)
         if (
             not self.state
             or not self.state.get("published")
