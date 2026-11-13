@@ -455,5 +455,25 @@ class StarterSecondIronCellTests(unittest.TestCase):
         self.assertEqual(starter_step(ex, {"tick": 1}, {}), {"type": "craft"})
 
 
+class EarlyJobsYieldTests(unittest.TestCase):
+    def test_a_pre_building_job_is_not_critical_while_the_work_it_runs_ahead_of_is(self):
+        # Fleet auto-1113-1618: early outposts and the early district took the
+        # plates of the research batches; research ended 2-5 minutes later.
+        from factorio_agent.jobs import _without_early
+
+        jobs = {
+            "power": {"capability": "power", "status": "succeeded"},
+            "research": {"capability": "bootstrap_research", "status": "waiting"},
+            "outpost": {"capability": "mining_outpost", "status": "waiting"},
+        }
+        obs = {"technologies": {"automation": True}}
+        self.assertEqual(_without_early({"research", "outpost"}, jobs, obs), {"research"})
+        # Nothing else critical: the early job keeps its claim.
+        self.assertEqual(_without_early({"outpost"}, jobs, obs), {"outpost"})
+        # Once the drill research is done the outpost is no longer early.
+        done = {"technologies": {"automation": True, "electric-mining-drill": True}}
+        self.assertEqual(_without_early({"research", "outpost"}, jobs, done), {"research", "outpost"})
+
+
 if __name__ == "__main__":
     unittest.main()

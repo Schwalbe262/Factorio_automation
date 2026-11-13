@@ -1036,6 +1036,21 @@ def _active_in_priority_order(ledger: Ledger) -> list[str]:
     return [job["key"] for job in active]
 
 
+def _without_early(critical: set, jobs: dict, obs: dict) -> set:
+    """Critical jobs minus those running ahead of an unfinished prerequisite (early start).
+
+    A pre-building job cannot finish before the research or the block it runs
+    ahead of, so it must not take the items those need: early outposts and the
+    early district took the plates of the research batches and research got
+    slower by 2-5 minutes on a 12-seed fleet (auto-1113-1618). Kept as they are
+    when nothing else is critical.
+    """
+    succeeded = {job["capability"] for job in jobs.values() if job.get("status") == "succeeded"}
+    technologies = obs.get("technologies")
+    ahead = {key for key in critical if runs_early(CAPABILITIES, jobs[key]["capability"], succeeded, technologies)}
+    return critical - ahead if critical - ahead else critical
+
+
 def _critical_split(ledger: Ledger, obs: dict, executors, order: list[str]):
     """Critical job keys of this pass and, per slack job, its (view, guard) (critical_path.py).
 
@@ -1051,6 +1066,7 @@ def _critical_split(ledger: Ledger, obs: dict, executors, order: list[str]):
         path = cp.critical_path(jobs.values(), obs, CAPABILITIES, catalog=catalog)
         known = cp.known_items(catalog, obs)
         critical = set(cp.critical_jobs({k: jobs[k] for k in order}, path, known_items=known))
+        critical = _without_early(critical, jobs, obs)
     except PLANNER_FAULTS:
         return set(), lambda key: (None, None)
     cache: dict = {}
