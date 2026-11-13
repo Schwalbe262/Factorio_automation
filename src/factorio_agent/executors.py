@@ -674,6 +674,7 @@ class StarterExecutors:
                 bus_factory=self.bus_factory,
                 science=self.science,
                 green=self.green,
+                site=getattr(self, "site", None),
             )
         return cache["fluid_products"]
 

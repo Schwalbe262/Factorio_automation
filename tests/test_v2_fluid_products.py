@@ -236,6 +236,29 @@ class FluidProductControllerTests(unittest.TestCase):
         self.assertFalse(self.controller.path.exists())
         self.assertEqual({p.name: p.read_bytes() for p in self.root.iterdir()}, before)
 
+    def test_a_site_service_supplies_the_cell_anchor(self):
+        from types import SimpleNamespace
+
+        from factorio_agent import block_sites
+        from factorio_agent.fluid_products import fluid_product_core
+        from factorio_agent.site.geometry import Rect
+
+        _, _, dx, dy = block_sites.footprint(lambda x, y: fluid_product_core(self.catalog, "lubricant", x, y))
+        sx, sy = self.source["position"]["x"], self.source["position"]["y"]
+        x0, y0 = int(sx + 10 - dx), int(sy + 8 - dy)  # a block near the source, as the master plan would give
+
+        class Site:
+            def allocate_candidates(self, kind, w, h, *, name, count, returns_to_bus, world_id):
+                return [SimpleNamespace(name=name + "#0", rect=Rect(x0, y0, x0 + w, y0 + h))]
+
+        self.controller.site = Site()
+        ready = self.prepare()
+        self.assertTrue(ready["ok"], ready)
+        self.assertEqual(ready["core"]["anchor"], {"x": x0 + dx, "y": y0 + dy})
+        self.assertEqual(ready["site_allocation"], "fluid_product_lubricant#0")
+        self.controller.site = SimpleNamespace(allocate_candidates=lambda *a, **k: [])
+        self.assertEqual(self.prepare()["reason"], "fluid_product_no_site_allocation")
+
     def test_tap_success_is_a_prerequisite_and_never_premature_product_success(self):
         params = dict(
             name="fluid-acid-iron", item="iron-plate", splitter_y=-10.5, priority="surplus", demand_per_minute=24

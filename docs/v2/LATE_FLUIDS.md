@@ -101,9 +101,11 @@ block (core reserved area on the block corner); the controller keeps its audits,
 land checks per anchor and `block_sites.keep` settles the chosen block (or releases all on a
 failed prepare). Without a site service the legacy relative anchors stay (development map).
 Done: `advanced_petroleum` (`site_allocation` in its state; `advanced_no_site_allocation`
-when the plan has no block). Still relative anchors + `survey_slots`: `fluid_distribution`,
-`gas_distribution`, `fluid_products`, `chemical_production`, `advanced_circuits`,
-`chemical_science`.
+when the plan has no block) and `fluid_products` (owner `fluid_product_<product>`,
+`fluid_product_no_site_allocation`). Still relative anchors + `survey_slots`:
+`chemical_production`, `advanced_circuits`, `chemical_science` (the same three-line change),
+and the headers `gas_distribution` / `fluid_distribution`, which are source attachments (an
+8-pipe manifold beside its outlet, like a tap) rather than district blocks.
 
 ## Known limits
 
