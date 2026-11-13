@@ -17,6 +17,17 @@ def main_bus_factory_proof(ex, obs, result, parameters):
     return ex.bus_factory.proof(obs)
 
 
+def planned_main_bus_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "planned_main_bus")
+    if early is not None:
+        return early
+    return ex.planned_bus.step(obs, parameters or {})
+
+
+def planned_main_bus_proof(ex, obs, result, parameters):
+    return ex.planned_bus.proof(obs)
+
+
 def green_bus_reroute_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "green_bus_reroute")
     if early is not None:
@@ -189,6 +200,7 @@ def validate_construction_mall(parameters):
 
 
 register("main_bus_factory", step=main_bus_factory_step, proof=main_bus_factory_proof)
+register("planned_main_bus", step=planned_main_bus_step, proof=planned_main_bus_proof)
 register("green_bus_reroute", step=green_bus_reroute_step, proof=green_bus_reroute_proof)
 register("steel_supply", step=steel_supply_step, proof=steel_supply_proof)
 register("steel_production", step=steel_production_step, proof=steel_production_proof)

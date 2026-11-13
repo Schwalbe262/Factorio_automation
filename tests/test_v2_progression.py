@@ -172,7 +172,7 @@ class AutopilotTests(unittest.TestCase):
         self.assertEqual(self.propose(done_through("chemical_science")), [])
 
     def test_depends_on_only_references_known_ids(self):
-        jobs = done_through("main_bus_factory")
+        jobs = done_through("main_bus")
         queue = [{"id": "q1", "capability": "power", "parameters": {}}]
         nodes = self.propose(jobs, queue, limit=10)
         known = {"q1"} | set(ids(nodes))

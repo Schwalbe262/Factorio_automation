@@ -108,6 +108,10 @@ class StarterExecutors:
 
         self.radars = RadarNetwork(game, self.builder, catalog, self.perimeter)
         self.outposts.perimeter = self.perimeter
+        from .planned_bus import PlannedBus
+
+        # Fresh-map bus from the site plan; BusFactory below is the old development-map migration.
+        self.planned_bus = PlannedBus(game, self.builder, catalog, self.smelting, site=self.site)
         from .bus_factory import BusFactory
 
         self.bus_factory = BusFactory(game, self.builder, catalog, self.smelting, self.science, self.green)
