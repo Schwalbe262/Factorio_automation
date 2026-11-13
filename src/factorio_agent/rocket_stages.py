@@ -118,6 +118,17 @@ def producer_of(catalog, item: str) -> dict:
         return _PRODUCERS[key]
     from .jobs import CAPABILITIES
 
+    bill_key = (getattr(catalog, "fingerprint", None), "__bill__")
+    if bill_key not in _PRODUCERS:
+        try:  # the bill classifies in production order (belt sources known): its row wins
+            bill = rocket_plan.rocket_bill(catalog, researched=(), capabilities=CAPABILITIES)
+            _PRODUCERS[bill_key] = {r["item"]: r["producer"] for r in bill["items"] if r["type"] == "item"}
+        except Exception:  # noqa: BLE001 - fall back to the per-item rule below
+            _PRODUCERS[bill_key] = {}
+    row = _PRODUCERS[bill_key].get(item)
+    if row is not None:
+        _PRODUCERS[key] = {"capability": row["capability"], "status": row["status"]}
+        return _PRODUCERS[key]
     try:
         recipe = catalog.recipe_for_product(item)
         if recipe is None:
@@ -135,18 +146,49 @@ def producer_of(catalog, item: str) -> dict:
     return found
 
 
-def published_ports(board: dict | None, item: str) -> list[str]:
-    """Board blocks with an output port (belt or stock chest) carrying ``item``."""
+PLATES = frozenset({"iron-plate", "copper-plate"})  # collected from furnace outputs / bus collection points
+
+
+def published_ports(board: dict | None, item: str, *, kind: str = "any") -> list[str]:
+    """Board blocks with an output port carrying ``item``.
+
+    ``kind``: ``stock`` only stock-chest ports (a port with the chest ``name``: the produce stock
+    tail, collectable by ``V2Bootstrap``); ``belt`` only belt ports (no ``name``: a belt-output row
+    or a district/bus plate port, which feeds its consumer and is never collected); ``any`` both.
+    """
     found = []
     for name, block in ((board or {}).get("blocks") or {}).items():
         if not isinstance(block, dict):
             continue
-        if any(p.get("direction") == "output" and p.get("item") == item for p in block.get("ports") or ()):
-            found.append(name)
+        for p in block.get("ports") or ():
+            if p.get("direction") != "output" or p.get("item") != item:
+                continue
+            chest = "name" in p
+            if kind == "any" or (kind == "stock") == chest:
+                found.append(name)
+                break
     bus = (board or {}).get("shared_main_bus")
-    if isinstance(bus, dict) and any(t.get("item") == item for t in bus.get("trunks") or () if isinstance(t, dict)):
+    if (
+        kind != "stock"
+        and isinstance(bus, dict)
+        and any(t.get("item") == item for t in bus.get("trunks") or () if isinstance(t, dict))
+    ):
         found.append("shared_main_bus")
     return found
+
+
+def collectable(board: dict | None, item: str) -> bool:
+    """A stage can collect ``item``: a stock-chest port publishes it, or it is a plate (bus/furnaces)."""
+    return bool(published_ports(board, item, kind="stock")) or (item in PLATES and bool(published_ports(board, item)))
+
+
+def _producer_status(board, item: str, fallback: str) -> str:
+    """``published_stock``, ``belt_row_only`` (a row exists but feeds its consumer), else the bill status."""
+    if published_ports(board, item, kind="stock"):
+        return "published_stock"
+    if published_ports(board, item, kind="belt"):
+        return "belt_row_only"
+    return fallback
 
 
 def _handcraft_recipe(catalog, obs, item: str) -> dict | None:
@@ -234,8 +276,10 @@ class StageSupply:
                 if units <= 0:
                     return
             recipe = _handcraft_recipe(self.catalog, obs, name) if depth < 16 else None
-            # Hand crafting stops above HANDCRAFT_LIMIT where a row publishes the item (AGENTS.md).
-            row = stocked and bool(published_ports(board, name))
+            # Hand crafting stops above HANDCRAFT_LIMIT where a row stocks the item in a chest (AGENTS.md).
+            # A belt-output row (produce ``tail.mode == "belt"``) feeds its consumer: its output is
+            # neither collected nor a reason to stop hand crafting.
+            row = stocked and bool(published_ports(board, name, kind="stock"))
             if recipe is None or (row and units > HANDCRAFT_LIMIT):
                 missing[name] += units
                 return
@@ -261,7 +305,12 @@ class StageSupply:
         for name in walk["order"]:
             if walk["collect"].get(name):
                 target = int((obs.get("inventory") or {}).get(name, 0)) + walk["collect"][name]
-                result = self.bootstrap.ensure_item(obs, name, target)
+                view = obs
+                if name not in PLATES:
+                    # Belt ports of belt-output rows feed their consumers: never collect from a belt
+                    # (plates keep the bus collection points, V2Bootstrap._collection_points).
+                    view = dict(obs, entities=[e for e in obs.get("entities", []) if e.get("name") != "transport-belt"])
+                result = self.bootstrap.ensure_item(view, name, target)
                 if isinstance(result, dict) and result.get("type"):
                     return result
                 waits.append((name, result))
@@ -277,7 +326,7 @@ class StageSupply:
                         "need": walk["missing"][name],
                         "held": int((obs.get("inventory") or {}).get(name, 0)),
                         "producer": producer["capability"],
-                        "producer_status": "published" if ports else producer["status"],
+                        "producer_status": _producer_status(board, name, producer["status"]),
                         "producer_blocks": ports[:4],
                         "needs": needs,
                         "for": f"{count} {item}",
@@ -315,7 +364,10 @@ CRAFTED_STAGES = ("rocket_silo", "rocket_launch")  # their item is hand-crafted;
 
 
 def inputs_ready(catalog, obs, board, items: dict, *, crafted: bool = True) -> dict:
-    """``{"ready", "missing": [{item, producer, status}]}``: every hand-craft leaf is held or published.
+    """``{"ready", "missing": [{item, producer, status}]}``: every hand-craft leaf is held or collectable.
+
+    Collectable: a stock-chest port publishes it, or it is a plate (``collectable``). A leaf only a
+    belt-output row makes is missing with status ``belt_row_only`` (its output feeds its consumer).
 
     ``crafted``: the listed items are crafted by the stage itself (their own stock is not looked at).
     """
@@ -327,12 +379,13 @@ def inputs_ready(catalog, obs, board, items: dict, *, crafted: bool = True) -> d
         if name in seen or units <= held.get(name, 0):
             return
         seen.add(name)
-        if depth > 0 and published_ports(board, name):
+        if depth > 0 and collectable(board, name):
             return
         recipe = _handcraft_recipe(catalog, obs, name) if depth < 16 else None
         if recipe is None:
             producer = producer_of(catalog, name)
-            missing.append({"item": name, "producer": producer["capability"], "status": producer["status"]})
+            status = _producer_status(board, name, producer["status"])
+            missing.append({"item": name, "producer": producer["capability"], "status": status})
             return
         out = sum(float(p["amount"]) for p in recipe["products"] if p["name"] == name)
         runs = math.ceil(units / out)

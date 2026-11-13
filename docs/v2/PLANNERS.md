@@ -413,6 +413,17 @@ queue    only technologies whose every pack has a producer (an assembler with th
 | `build_seconds_per_machine` | 20.0 |
 | `min_saving_seconds` / `max_ratio` / `min_remaining_seconds` | 60.0 / 0.85 / 120.0 |
 
+Real unit (`expansion_costs(unit_bill=...)`, receipt `units`): the ratio rule above assumes shared
+upstream machines (a belt between them), right for red's one gear machine. A pack block whose
+intermediates are direct-inserted or whose next unit is a reserved slot passes its real unit from
+its geometry (`pack_growth.unit_bills`): a split row's free slot = pack machine + 2 inserters +
+pole (the sub-clusters already carry the frame), a cluster or a full frame = a whole second unit
+(six machines for a green cluster). The plate evidence is lifted by the district's unclaimed
+capacity while a district furnace holds full output (`with_spare`, `science_growth.district_spare`).
+eval-1575138435 (~185 min): "+1 assemblers takes 3681s" against a 3613 s wait - the extra green
+rate was capped to nothing by a measured plate net of ~0 and the option paid its build and fund
+with no gain; with the spare and the slot unit the same queue saves ~3000 s (`pack_growth`).
+
 `recommended_science_rate`: `rate = floor(min(30, min_items net / raw_per_pack))`,
 `labs = ceil(rate * sum(units*unit_seconds) / (60 * lab_speed * sum(units*packs)))`.
 Used by the observe receipt (`research_capacity_receipt`) and by
@@ -500,13 +511,64 @@ widens the reservation to six slots (republished) and builds the third machine; 
 once every lab works (8 lab slots). Its taps were declared for 2 machines (iron 24, copper 12/min):
 the decision to grow declares +12 iron and +6 copper per minute to throughput_growth.
 
+A lab missing packs that holds red misses another pack: `starving` (red) needs a short lab with no
+red, and when red backs up while a short lab lacks another pack of the running research the
+receipt says `chain: packs:<pack>`, `missing_pack` and "labs miss <pack> while red packs back up:
+the <pack> block is the limit (pack_growth receipt)" (eval-1575138435 said "the lab feed, not a
+stage": 8 labs, red 24/min backing up, green 5/min; the lab feed audit, `lab_feed.py`, finds
+`source_short` on green and nothing wrong with the feed).
+
 A lab is never added while a built lab is idle. The startup cell (`industry._extend_labs`,
 `_grow_cell`) adds no slot lab while research runs and a powered lab is idle without packs (its
 machines may still grow by its time model: labs starving for packs are a pack shortage), and neither
 grows once the bus science block takes over (`industry.permanent_science_due`: `planned_main_bus`
-succeeded, an `automation_science` job not failed, or the permanent block planned). Green science is
-one cluster (`blocks.cluster`), not a slot row: its growth is a second cluster, not modelled yet.
-Pinned by `tests/test_v2_science_growth.py`, `tests/test_v2_template_power.py`.
+succeeded, an `automation_science` job not failed, or the permanent block planned). Every other
+pack block grows by the next section. Pinned by `tests/test_v2_science_growth.py`,
+`tests/test_v2_template_power.py`.
+
+## Pack block growth (`pack_growth.py`, capability `science_growth {pack, machines}`)
+
+The same chain for every pack block beside the red row (green today; `PACK_STATES` names the
+block state per pack, chemical has a fixed 2-4 machine core without slots and no entry yet):
+
+```
+view     built pack machines, reserved slot groups (core.growth_slots), frame = built + slots,
+         sub-assembler limit = floor(min sub-cluster rate / pack rate), declared tap draw,
+         unit = one slot's entities, else a whole second unit (cluster / split start bill)
+labs     the red block's built labs: missing = status missing_science_packs and none of this pack held
+backlog  lab belt >= 8 of this pack, or every lab >= 2, or a pack machine full_output
+starving missing > 0 and no backlog; short = a pack machine lacks ingredients
+wanted   max(built, min(frame, sub limit, ceil(lab_pack_rate(queue using the pack, labs) / pack rate)))
+declare  plate_draw = per-machine plates x max(built, target, wanted while the labs starve);
+         undeclared = draw - declared taps -> throughput_growth growth_taps (before the build)
+limit    min(frame, sub limit, plate_machine_limit with the district spare)
+how many plan_research_capacity(queue, observed hardware + this pack's stock, unit = the real
+         unit (raw cost, machines), max_step = free slots, labs fixed); build_ahead to
+         recommended_rates[pack] (owner: build-ahead margin when growing)
+no slot  next_step: second_unit_k (k = 1..2) | rebuild_split_k (cluster -> split row of k
+         machines, built beside the running cluster, its entities mined after and reused; no
+         output lost) by the wait-vs-spend rule; implemented: false (needs a second lab entry,
+         or the cluster's guarded removal after the split runs)
+node     science_growth {pack, machines} at SCIENCE_GROWTH_PRIORITY (red growth first, one open)
+build    LogisticScience.grow: plan_growth (pure, dry run) adds the slot groups in order (pole
+         chain), preflight (trees -> clear obstacles); grown plan saved, board block republished
+         over its own previous plan only, built; core.count / growth_slots / rated rate committed
+         once every entity stands powered; grown machines join the supply proof without a first craft
+```
+
+eval-1575138435 at ~185 min (split row: 1 built, 5 slots; 8 labs; queue engine,
+electric-energy-distribution-1, fluid-handling, oil-gathering): the labs draw ~20 green/min,
+wanted 4; with plate headroom the receipt grows 1 -> 6 machines in one go (build ahead to
+30/min: +5 = 100 s build, ~1246 s against a 4332 s wait), with only a district spare of 120
+iron/min 1 -> 5 (the plate limit); with plates short it holds the build and declares 4 machines'
+draw (iron 110/min, copper 30/min: 55 / 22.5 above the declared taps) to throughput_growth. Remedy ladder: `replan` only (slots are
+fixed by the frame; a slot that meets something is a preflight need, no slot is a site need
+naming the next unit); dry run `postmortem.DRY_RUN["science_growth"]`. Bottleneck auditor hook:
+`science_growth.growth_options(bottleneck, observation, state)` routes every science-pack and lab
+bottleneck (any pack) to these receipts (`growth_providers._option` fields); a red/lab bottleneck
+whose receipt names a `missing_pack` gets that pack's option; labs without research in progress are
+a research-queue problem (infeasible option), never a lab or pack surplus. Pinned by
+`tests/test_v2_pack_growth.py`.
 
 ## Plate throughput growth (`throughput_growth.py`, capabilities `mining_outpost`, `smelting_capacity`)
 
@@ -624,6 +686,10 @@ risk  = assess_risk(survey): enemies within 96 tiles of a producer, evolution, d
 posts = 0                                   quiet and evolution < QUIET_EVOLUTION (0.1)
       = tier reserve (early 0, mid 1, adv 2) quiet and evolution >= 0.1
       = 2 / 3 / 4                           approaching (<=64) / high (<=40, damage) / critical
+      = 2 (approaching, "attack expected")  attack_sources: charted nest with pollution within 384
+                                            of the spawn, or a unit group >24 from any nest within 192
+risk level >= 1 -> defense_urgency_nodes: research_gun_turret, then defense_perimeter, at
+      URGENT_DEFENSE_PRIORITY ahead of their roadmap after steps (one node at a time)
 quiet and posts == 0: defense_perimeter succeeds "quiet map, no posts required"
 each new post:
   focus     = producers ranked (damaged, nearest threat, density), FOCUS_TRIES (8) tried
@@ -640,7 +706,9 @@ growth:
 no site plan for this world: legacy POSTS / FUTURE_AREAS (development map only)
 ```
 
-Pinned by `tests/test_v2_defense_sizing.py`, `tests/test_v2_defense_policy.py`.
+Pinned by `tests/test_v2_defense_sizing.py`, `tests/test_v2_defense_policy.py`, `tests/test_v2_actor_death.py`
+(attack sources, urgency nodes, the `trip_target_threatened` move check: every `move` fails while an
+enemy unit, nest or worm stands within `TRIP_THREAT_RADIUS` (32) of its target).
 
 ## Native research queue (`research_queue.py`)
 
@@ -867,6 +935,94 @@ published taps; its tap cutover splices the bus, so it would need a splice
 hold like the bus), `logistic_science` (after its research), `steel_production`
 (after steel processing), `dedicated_materials_*`. Pinned by
 `tests/test_v2_early_start.py`, `tests/test_v2_early_outposts.py`.
+
+## Bottleneck auditor (`bottleneck_audit.py`, `growth_providers.py`; receipt `bottlenecks`)
+
+One online rule for "it should act without being pointed at each thing": sustained starvation,
+back-pressure and idleness of ANY block, diagnosed upstream to the limit, with the growth (or the
+gate that holds it) named in one receipt. Before, each case needed its own planner (plates short while
+a single-step rule said wait; labs idle for packs read as no need; science growth without a slot;
+green 3.7x short with no growth path; the queue-low gate starving every proposal).
+
+```
+evidence  every CLI observe adds <= 1 sample per SAMPLE_TICKS (300) to bottleneck-samples.json
+          (world-bound, WINDOW_TICKS 18000 = 5 game min, <= 64 samples; observer.lock like rate-samples):
+          groups  = assembler/furnace/drill/lab by board block (the plan entity at that position) and product
+                    (recipe main product; a furnace without recipe takes its nearest same-block sibling's;
+                    drills the block's resource; labs "research"): counts working / starved per missing item
+                    (ingredient below its amount; no_fuel -> coal; packs of the current research a lab lacks) /
+                    full (full_output, waiting_for_space_in_destination) / no_power / no_research / other;
+                    labs: backlog (every pack >= 2) and packs on the lab block's belts
+          jobs    = waiting jobs -> items they claim (critical_path.claims minus own products; only
+                    makeable or mined items)
+          ports   = belt_lane_observation lane fill (count / 4 per tile lane); stock = chest contents of
+                    every product/missing item; actions = the jobs' action total (last_action: tick it moved)
+sustained >= MIN_SAMPLES (3) samples over >= MIN_SPAN_TICKS (1800); else status "sampling"
+diagnose  consumer group starved on item i for >= STARVED_SHARE (0.25) of the window, or a waiting job:
+            lost = 60 x units x share   (a job: 60 s/min shared over its items)
+          walk i upstream: producers = groups whose product is i (registered blocks before transitional)
+            no producer            -> no_producer (raw: no mine)
+            no_power >= 0.5        -> no_power
+            starved on j >= 0.25   -> walk j (depth <= 6)
+            full >= BACKED_SHARE   -> transport (belt_bandwidth findings attached); when the consumer
+                                      block's own feed has a SHORTFALL finding the consumer feed is the limit
+            working >= 0.7         -> at_capacity (else partly_working)
+          labs working >= 0.7 while pack producers are full >= 0.5, or >= 8 packs on the lab belts, or
+            half the labs back up   -> consumer_capacity at the labs (lost = pack machines full, floor 6 s/min)
+          labs no_research >= 0.5   -> idle entry no_research (follow-up: the research queue)
+          one row per (limit group, kind, item): consumers, longest chain, lost seconds/min, evidence
+          (samples, window, measured rate, chest stock, port fill); ranked by lost, <= 8
+proposal  growth_providers.assess (below): provider, chosen option or gate, seconds saved, node ids
+watchdog  idle_with_work when the jobs' action total has not moved for IDLE_SECONDS (60) and work exists:
+            bottleneck with lost > 0     gate = its proposal gate; a "propose" not merged yet ->
+                                         growth_pass_next_cycle (without the pass: queue_not_low |
+                                         autopilot_limit)
+            blocked job with next_remedy gate remedy_pending; blocked without needs: no_remedy_rule
+            ready node not dispatched    gate lane_busy:<lane> | job_slots_full | dispatch_pending
+          Supervisor._idle_watch logs event idle_with_work (top item, top gate, gates) per episode start,
+          gate change or IDLE_WATCH_SECONDS (60) more; waste_report type idle_with_work and the fleet
+          report line "idle with work: seconds in runs; top gates" sum the episodes (idle_episodes)
+```
+
+Growth pass (`Supervisor._growth`, every cycle after the autopilot, not gated by `LOW_QUEUE`):
+`growth_providers.growth_nodes` over the ranked bottlenecks merges at most `GROWTH_LIMIT` (2) packages
+per cycle (source `bottleneck`, event `bottleneck_growth`), one per bottleneck, the provider's own
+nodes and priorities. The autopilot still calls the same node functions for forecast growth (build
+ahead without starvation); both dedupe on open nodes/jobs of the lane, so a package is proposed once.
+`jobs.summary` now carries `mine_trunks` and `produce_plate_sources`: both were computed in observe
+and dropped before the supervisor, so `mine_trunk_nodes`, `power_coal_tap_nodes` and the plate-source
+check of `produce_nodes` never fired live.
+
+Providers (`growth_providers.PROVIDERS`, first match wins; interface in ADDING_A_CAPABILITY.md 6b):
+`power` (follow-up only), `produce_row` (generic: a `production_row_*` block at capacity -> `produce
+{item, rate}` at `current / (1 - starved share)`, at most 2x, needs >= `MIN_LOST_SECONDS` 10 s/min;
+an item without producer -> `produce_nodes`' row), `science` (`science_growth.growth_options` hook,
+else the red receipt), `steel` (steel_capacity; furnace-block transport -> rework, not a capability),
+`plates` (throughput_growth; district transport -> head_rework), `mine` (mine_trunk).
+
+Gates of `assess` (in order): `transitional_block` (the limit is the startup science cell, the supply
+cell or an unregistered starter cell: its replacement grows, never it), `consumer_transitional`
+(every consumer is transitional), `no_provider`, `<provider>_wait` (every option infeasible: the
+wrapped planner's own reason, e.g. throughput_growth's wait-vs-spend), `growth_in_flight` (an open
+node or job of the option's lane), `settling` (one succeeded < `SETTLE_TICKS` 3600 ago),
+`provider_rule_holds` (the planner's node rule refuses: requires, stalled before).
+
+Live cases (fixtures in `tests/test_v2_bottleneck_audit.py`):
+
+| Case | Auditor names | Proposal |
+|---|---|---|
+| eval-4177156614 ~67 min, bus waits for iron | `smelting_district|iron-plate` at_capacity (job consumer 60 s/min) | plates: throughput_growth +1 pair +2 furnaces -> 150/min, saves 103 s (mining_outpost then smelting_capacity) |
+| furnaces idle for ore | `iron-ore_mining|iron-ore` at_capacity, chain iron-plate -> iron-ore | plates (the ore's plate row) |
+| ~82 min, a lab missing red | `automation_science|automation-science-pack` at_capacity, labs lose 60 s/min | science_growth 2 -> 3 machines |
+| ~127 min, 128 packs on the lab belt | `laboratories|research` consumer_capacity (2 machines output-full) | science_growth labs 2 -> 4 |
+| ~185 min, green short for 8 labs | `logistic_science|logistic-science-pack` at_capacity, 480 s/min | wait: no green rule until `science_growth.growth_options` exists (hook) |
+| steel/brick block, feed side-loaded before the splitter | `steel_production|steel-plate` transport (single_lane_feed) | wait: rework_feed_head is not a capability yet |
+| brick short of stone | `stone_mining|stone` at_capacity | mine: mine_trunk growth (mining_outpost) |
+| eval-1575138435 93.5 min, 8 labs no research | no bottleneck; idle no_research 480 s/min | follow-up: research queue |
+
+Not modelled yet: per-port supply routing (producers of an item are all groups making it, same block
+first only through the registered/transitional split), fluids beyond ingredient fill, the generic
+produce-row provider's time comparison (it sizes by starved share only).
 
 ## Supervisor and incidents (`supervisor.py`, `incidents.py`, `IncidentConfig`)
 

@@ -76,6 +76,8 @@ def main(argv=None) -> int:
     for row in bill["items"]:
         producer = row["producer"]
         params = f" {producer['parameters']}" if producer["parameters"] else ""
+        if producer.get("layout"):
+            params += " " + "/".join(f"{k}={v}" for k, v in sorted(producer["layout"].items()))
         machines = f"{row['machines']:g}" if "machines" in row else "-"
         name = row["item"] if row["type"] == "item" else f"{row['item']} (fluid)"
         print(

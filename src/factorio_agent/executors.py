@@ -616,6 +616,78 @@ class StarterExecutors:
             )
         return self.water_distribution
 
+    # ----- late fluid blocks (rocket tail): lazy, one instance per profile -----------------
+    def _fluid_cache(self) -> dict:
+        if not hasattr(self, "_fluid_instances"):
+            self._fluid_instances = {}
+        return self._fluid_instances
+
+    def _oil_source(self, source_key: str | None):
+        """``OilGathering`` for the canonical crude source or a namespaced one (``advanced-crude``)."""
+        if not source_key or source_key == "crude-oil":
+            return self.oil_gathering
+        cache = self._fluid_cache()
+        if ("oil", source_key) not in cache:
+            from .oil_gathering import OilGathering
+
+            cache["oil", source_key] = OilGathering(
+                self.game, self.builder, self.catalog, self.perimeter, source_key=source_key
+            )
+        return cache["oil", source_key]
+
+    def _water_source(self, source_key: str | None):
+        """``WaterGathering`` for the canonical intake or a namespaced one (``advanced-water``, ``acid-water``)."""
+        if not source_key or source_key == "water":
+            return self.water
+        cache = self._fluid_cache()
+        if ("water", source_key) not in cache:
+            from .water_gathering import WaterGathering
+
+            cache["water", source_key] = WaterGathering(
+                self.game, self.builder, self.catalog, self.perimeter, source_key=source_key
+            )
+        return cache["water", source_key]
+
+    def _advanced_petroleum(self):
+        cache = self._fluid_cache()
+        if "advanced_petroleum" not in cache:
+            from .advanced_petroleum import AdvancedPetroleum
+
+            cache["advanced_petroleum"] = AdvancedPetroleum(self.game, self.builder, self.catalog, self.perimeter)
+        return cache["advanced_petroleum"]
+
+    def _fluid_products(self):
+        cache = self._fluid_cache()
+        if "fluid_products" not in cache:
+            from .fluid_products import FluidProducts
+
+            cache["fluid_products"] = FluidProducts(
+                self.game,
+                self.builder,
+                self.catalog,
+                self.perimeter,
+                bus_factory=self.bus_factory,
+                science=self.science,
+                green=self.green,
+            )
+        return cache["fluid_products"]
+
+    def _fluid_distribution(self, parameters: dict):
+        cache = self._fluid_cache()
+        key = ("distribution", parameters["source_key"], tuple(parameters["aliases"]))
+        if key not in cache:
+            from .fluid_distribution import FluidDistribution
+
+            cache[key] = FluidDistribution(
+                self.game,
+                self.builder,
+                self.catalog,
+                self.perimeter,
+                source_key=parameters["source_key"],
+                aliases=tuple(parameters["aliases"]),
+            )
+        return cache[key]
+
     def _critical_coal_upkeep(self, obs):
         if obs.get("tick", 0) < getattr(self, "coal_retry_tick", 0):
             return getattr(self, "coal_retry_diagnostic", None)

@@ -262,6 +262,11 @@ DRY_RUN = {
         lambda ex, obs, p: ex.material_supply.prepare(obs, p), lambda ex, obs, p: ex.material_supply.step(obs, p)
     ),
     "logistic_science": DryRun(lambda ex, obs, p: ex.green.prepare(obs, p)),
+    # Another pack block's reserved slots (science_growth {pack, machines}); the red block's growth has no
+    # pure planner (its frame extension writes the widened reservation first).
+    "science_growth": DryRun(
+        lambda ex, obs, p: ex.green.plan_growth(obs, p) if (p or {}).get("pack") else {"reason": "no_pure_planner"}
+    ),
     "brick_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "brick")),
     "steel_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "steel")),
     # steel_supply plans the same planned furnace block (planned_furnaces.supply_step) on a planned world.
@@ -272,7 +277,8 @@ DRY_RUN = {
     "steam_expansion": DryRun(lambda ex, obs, p: ex.steam_expansion.prepare(obs)),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
     "oil_gathering": DryRun(
-        lambda ex, obs, p: ex.oil_gathering.prepare(obs), lambda ex, obs, p: ex.oil_gathering.step(obs)
+        lambda ex, obs, p: ex._oil_source(p.get("source_key")).prepare(obs),
+        lambda ex, obs, p: ex._oil_source(p.get("source_key")).step(obs),
     ),
     # The rocket tail (rocket_stages / rocket_feed): the silo site and the stage-ii belt feed.
     "rocket_silo": DryRun(
@@ -281,6 +287,11 @@ DRY_RUN = {
     "rocket_parts": DryRun(
         lambda ex, obs, p: ex._rocket_parts().prepare_feed(obs, p), lambda ex, obs, p: ex._rocket_parts().step(obs, p)
     ),
+    "water_gathering": DryRun(lambda ex, obs, p: ex._water_source(p.get("source_key")).prepare(obs)),
+    # Late fluids (rocket tail): every prepare is read-only (advanced_petroleum, fluid_products, fluid_distribution).
+    "advanced_petroleum": DryRun(lambda ex, obs, p: ex._advanced_petroleum().prepare(obs)),
+    "fluid_product": DryRun(lambda ex, obs, p: ex._fluid_products().prepare(obs, p)),
+    "fluid_distribution": DryRun(lambda ex, obs, p: ex._fluid_distribution(p).prepare(obs)),
 }
 
 

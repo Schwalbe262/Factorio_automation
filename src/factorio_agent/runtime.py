@@ -67,6 +67,14 @@ class WorldBoundGame(DeterministicGame):
                 "emulate_player_presence": actor_client.execute_presence,
             }[action["type"]]
             return self._record_action(action, body(self, action))
+        if action.get("type") in ("respawn_client_free_actor", "recover_client_free_belongings"):
+            from . import actor_death
+
+            body = {
+                "respawn_client_free_actor": actor_death.execute_respawn,
+                "recover_client_free_belongings": actor_death.execute_belongings,
+            }[action["type"]]
+            return self._record_action(action, body(self, action))
         if action.get("type") == "seed_paid_burner":
             from .paid_burner_seed import execute_paid_burner_seed
 
@@ -131,6 +139,14 @@ class WorldBoundGame(DeterministicGame):
             from .defense_relocation import execute_reconcile_retirement
 
             return self._record_action(action, execute_reconcile_retirement(self, action))
+        if action.get("type") == "build_fluid_distribution":
+            from .fluid_distribution import execute_build_fluid_distribution
+
+            return self._record_action(action, execute_build_fluid_distribution(self, action))
+        if action.get("type") == "configure_advanced_petroleum":
+            from .advanced_petroleum import execute_configure_advanced_petroleum
+
+            return self._record_action(action, execute_configure_advanced_petroleum(self, action))
         if action.get("type") == "build_furnace_gap":
             from .furnace_gap import execute_gap_build
 

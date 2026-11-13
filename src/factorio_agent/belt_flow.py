@@ -420,7 +420,11 @@ def solve(
         for i in out_edges.get(n, []):
             outflow[i] = got
     flow = Flow(net, lanes, offered, demand, findings, [])
-    findings += _consumer_findings(flow, consumer_at, in_edges, margin)
+    produced: dict = {}
+    for s in sources:
+        rate = s.get("rate")
+        produced[s["item"]] = produced.get(s["item"], 0.0) + (math.inf if rate is None else float(rate))
+    findings += _consumer_findings(flow, consumer_at, in_edges, margin, produced)
     findings += _side_load_before_splitter(flow, in_edges, out_edges, consumer_at, live)
     findings += _group_findings(flow, groups)
     flow.ports = [port_capacity(flow, p) for p in ports]
@@ -572,8 +576,14 @@ def _node_of_tile(net, tile):
     return node(unit) if unit else None
 
 
-def _consumer_findings(flow: Flow, consumer_at: dict, in_edges: dict, margin: float) -> list:
+def _consumer_findings(flow: Flow, consumer_at: dict, in_edges: dict, margin: float, produced=None) -> list:
+    """Shortfalls per consumer; ``produced`` (item -> total finite source rate, inf for a full belt).
+
+    A line that delivers everything its finite sources make (``source_short``) is short of
+    producers, not of lanes or belts: a second lane or belt would carry nothing more.
+    """
     net = flow.network
+    produced = produced or {}
     rows = []
     for tile, own in sorted(consumer_at.items()):
         n = _node_of_tile(net, tile)
@@ -602,9 +612,11 @@ def _consumer_findings(flow: Flow, consumer_at: dict, in_edges: dict, margin: fl
             used = [lane for lane in LANES if lanes[lane].get(item, 0.0) > EPS]
             cap = net.units[tile].cap if tile in net.units else LANE_PER_MINUTE["transport-belt"]
             single = len(used) == 1 and need * margin <= 2 * cap + EPS
+            made = produced.get(item, math.inf)
+            source = math.isfinite(made) and have + EPS >= made
             rows.append(
                 {
-                    "kind": "single_lane_feed" if single else "capacity_shortfall",
+                    "kind": "source_short" if source else "single_lane_feed" if single else "capacity_shortfall",
                     "tile": list(tile),
                     "item": item,
                     "delivered_per_minute": round(have, 3),

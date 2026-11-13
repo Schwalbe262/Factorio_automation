@@ -31,7 +31,7 @@ research flags that a real run never uses.
 | `mine_entity`, `can_reach_entity`, `teleport`, `walking_state` | yes | tree mined (+4 wood), 8.3 tiles walked in 62 ticks |
 | `create_entity{..., raise_built=true, player=a.player}` | yes | built; `last_user` is nil instead of the player |
 | Main/ammo/gun inventories | yes | 10 magazines in the ammo slot, pistol selected |
-| Death | partly | `a.die()` leaves a `character-corpse` with the whole inventory (`character_corpse_player_index` 65536 = none); nothing respawns, so `recover-actor` (player successor) has no successor to bind |
+| Death | partly | `a.die()` leaves a `character-corpse` with the whole inventory (`character_corpse_player_index` 65536 = none); nothing respawns, so `recover-actor` (player successor) has no successor to bind; client-free runs end `errored: agent_dead`, or emulate the player respawn with the optional switch ("Death and respawn" below) |
 | Offline player keeps the actor | **no** | killing the client "logs off" the controlled character: `d.actor` invalid, `p.character` nil, as the API documents for associated characters |
 | Detach, then disconnect | yes | `p.set_controller{type=spectator}` while connected leaves the actor in the world; after the client is closed the actor stays valid and crafts (not credited, as above) |
 
@@ -102,6 +102,8 @@ No item is granted, no other research is touched, lab research stays real.
 
 The written exception has exactly two parts (AGENTS.md): (a) the hand-craft
 trigger credit above; (b) the player-presence emulation below. Nothing else.
+The respawn emulation after a death ("Death and respawn" below) is optional,
+requires the owner's approval (not yet given) and is off by default.
 
 #### (b) Player presence: chart and generate around the actor
 
@@ -137,9 +139,80 @@ actor. The first call writes `presence_emulation` (radii, start tick) into
 
 Other player-dependent behaviour checked: alerts and `last_user` (nil for
 player-less builds) are read by no framework code; `auto_pause=false` is set by
-`runtime.start`; respawn does not exist without a player (death rule below);
+`runtime.start`; respawn does not exist without a player (optional emulation, below);
 freeplay's `created_items` go to the player's own join character, which the
 bind discards, so neither mode gives them to the actor.
+
+#### Death and respawn (optional, requires the owner's approval (not yet given), off by default)
+
+Switch: `actor-client.json` `respawn: true|false` (default false), written by
+`tools/fleet.py start --respawn` into each client-free run and recorded in the
+fleet manifest (`respawn`); `fleet.py status` / `report` headers then show
+"respawn emulation on". It would widen exception (b) of AGENTS.md, so it stays
+off until the owner approves it. With it **off** (default) a client-free death
+is recorded (`actor-client.json` `deaths`, cause "respawn emulation off",
+belongings `not_attempted`, event `actor_death_recorded`), the supervisor
+stops the run through its safe stop (active jobs paused, world saved,
+`stop_reason` `actor_death_unrecoverable:...`, `last_error` `agent_dead`), the
+watcher ends that run at once (`fleet.death_stopped`) and the triage says
+`errored: agent_dead`. With it **on** the rest of this section applies
+(`respawn_client_free_actor` refuses `respawn_emulation_off` otherwise).
+
+What the engine gives a connected player whose character dies: after the
+respawn delay (`LuaPlayer.ticks_to_respawn`, 10 s) a new character at the
+force spawn with an empty inventory; the old character's items stay in a
+`character-corpse` where it died. Freeplay's `on_player_respawned` also
+inserts a pistol and ten magazines: those are items and are **not**
+reproduced (like its crash site and starting items).
+
+Incident all-1114-0107-1075833632 (client-free, commit 7bb8ff3): the actor
+died at 30.6 game min; every `observe` then failed `agent_dead` before
+`actor-status` was read, so the old rule (record `actor_dead_without_player`,
+safe stop) never fired, the supervisor looped in error backoff for 75+ real
+minutes and the fleet watcher (waiting for the target minute) never ended the
+run. Now:
+
+- `respawn_client_free_actor` (`actor_death.RESPAWN_LUA`, `WorldBoundGame.act`,
+  receipt in `actions.jsonl` and `job-events.jsonl`) refuses unless the runtime
+  mode is `none`, the action carries exactly the fixed constants of
+  `actor_death` (delay 600 ticks, corpse search radii, threat radius), the
+  world id matches, the recorded actor is the adopted client-free actor
+  (`d.detached_actor.mode == "none"`) and no character of the old unit is
+  alive. The first call records the death (`d.client_free_death`: the newest
+  unrecorded corpse within 64 tiles of `d.actor_last_known_position`, which
+  the presence update writes, else within 256 of the spawn; its death tick,
+  item count and the enemies within 32 tiles of it as the likely cause) and
+  waits (`respawn_delay`) until death tick + 600. Then it creates one
+  `character` at `find_non_colliding_position` of the force spawn (empty,
+  `inventory_empty` in the receipt), binds it (`d.actor`,
+  `d.crafting_actor_unit_number`, `d.detached_actor.unit_number`,
+  `respawns`) and appends the death to `d.client_free_deaths`. The corpse is
+  not touched.
+- The corpse items come back only by `recover_client_free_belongings`
+  (`recover-belongings` in client-free mode): the actor's own corpse of that
+  death (position and death tick from the record), no enemy within 32 tiles of
+  it (else `waiting` `belongings_unsafe_enemies_near_corpse`), empty crafting
+  queue; the assisted actor moves to the corpse (a teleport, as every assisted
+  move), each stack goes into its main inventory with counts per item and
+  quality conserved (else `blocked`), and it moves back; the character backend
+  must already be in reach. A corpse that is gone is recorded `lost`.
+- The supervisor treats `agent_dead` as its own state (`actor_dead`, never
+  error backoff, `Supervisor._actor_dead`): `respawn-actor` every cycle until it
+  succeeds, then every job whose last action has an unknown outcome is
+  reconciled (`reconcile`, never retried), and the corpse items are owed
+  (`belongings_due`): tried between slices every 30 s while unsafe, at most 60
+  times, while the jobs continue from base stock. A refused respawn stops the
+  run (`actor_death_unrecoverable`). Events: `actor_died`,
+  `actor_respawn_waiting`, `actor_respawned`, `death_reconcile`,
+  `belongings_deferred`, `belongings_recovered` / `belongings_unrecovered`;
+  the record is `actor-client.json` `deaths` (read by `fleet.py report` and
+  `waste_report.py` `actor_death`).
+- A connected player (`always`) is respawned by the engine; the supervisor
+  binds the successor with `recover-actor` once `actor-status` says
+  `recovery_ready`, then recovers the corpse with the existing
+  `recover-belongings` (`corpse_recovery`). `until_lab_trigger` after the
+  detach has an offline spectator player and no emulation: the run stops
+  (`actor_dead_without_player`).
 
 ### `until_lab_trigger`
 
@@ -172,11 +245,13 @@ blocked), lifecycle (`_client`, `_record` of the closed client, `status`
 reports `client.expected=false`), `tools/fleet.py` (alive, cost, client
 column). `checkpoint` reads only the world id and tick (unchanged).
 
-Death after the detach / in client-free mode: the corpse keeps the inventory
+Death after the detach (`until_lab_trigger`): the corpse keeps the inventory
 and nothing respawns, so the supervisor writes `actor_dead` (reason
 `actor_dead_without_player`) to `actor-client.json`, logs
 `actor_dead_without_player` and safe-stops the run. No replacement character
-is created.
+is created. In client-free mode (`none`) the death ends the run as
+`errored: agent_dead`, or, with the optional respawn switch on, is respawned as
+a player's would be ("Death and respawn" above).
 
 Production statistics after the detach / in client-free mode count only
 machine output: the observation reads iron/copper plates, coal, science packs,

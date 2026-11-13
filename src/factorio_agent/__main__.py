@@ -26,6 +26,16 @@ class OneShotServices:
         return StarterExecutors(game, catalog)
 
 
+def _client_free(root) -> bool:
+    """A client-free TEST run (``actor-client.json`` ``client: none``): no player owns the actor."""
+    from . import actor_client
+
+    try:
+        return actor_client.mode(root) == actor_client.NONE
+    except (OSError, ValueError):
+        return False
+
+
 def execute(argv=None, services=None):
     """Run one typed command and return its receipt. Raises on failure; never prints."""
     services = services or OneShotServices()
@@ -45,6 +55,7 @@ def execute(argv=None, services=None):
         "checkpoint",
         "detach-client",
         "client-free-presence",
+        "respawn-actor",
     ):
         commands.add_parser(command)
     recovery = commands.add_parser("recover-actor")
@@ -126,6 +137,14 @@ def execute(argv=None, services=None):
 
         with RunLock(root / "writer.lock"):
             result = presence(root, services.game(root))
+    elif args.command == "respawn-actor":
+        # Client-free only: the engine's player respawn, emulated (actor_death, docs/v2/HEADLESS.md).
+        from .actor_death import respawn
+
+        with RunLock(root / "writer.lock"):
+            result = respawn(root, services.game(root))
+            if result.get("status") == "succeeded" and not result.get("alive"):
+                Ledger(root).event("actor-lifecycle", "actor_respawned", tick=result.get("tick"), result=result)
     elif args.command == "watch":
         from factorio_agent.core.deterministic_character import set_client_visibility
 
@@ -169,6 +188,16 @@ def execute(argv=None, services=None):
             action = return_to_spawn_action(game, args.world_id, args.expected_actor_unit)
             result = game.act(action) if action.get("type") else action
             Ledger(root).event("actor-lifecycle", "return_to_base", result=result)
+    elif args.command == "recover-belongings" and _client_free(root):
+        # No player owns a client-free corpse: the paid trip of actor_death (safe only without enemies near it).
+        from .actor_death import recover
+
+        with RunLock(root / "writer.lock"):
+            game = services.game(root)
+            if getattr(game, "expected_world", None) not in (None, args.world_id):
+                raise ValueError("belongings world disagrees with bound game")
+            result = recover(root, game, args.expected_actor_unit, args.death_tick)
+            Ledger(root).event("actor-lifecycle", "belongings_recovery", tick=result.get("tick"), result=result)
     elif args.command == "recover-belongings":
         from .corpse_recovery import execute_corpse_recovery
 
@@ -330,7 +359,13 @@ def execute(argv=None, services=None):
 
             try:
                 jobs_list = list(Ledger(root).data["jobs"].values())
-                obs["research_capacity"] = research_capacity_receipt(services.catalog(root, game), jobs_list, obs)
+                from .pack_growth import receipt_inputs
+
+                # The real growth unit of each built pack block and the district's unclaimed plates.
+                units, spare = receipt_inputs(root, services.catalog(root, game), obs)
+                obs["research_capacity"] = research_capacity_receipt(
+                    services.catalog(root, game), jobs_list, obs, units=units, plate_spare=spare
+                )
             except Exception as exc:  # a sizing estimate must never break observe
                 obs["research_capacity_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .science_growth import growth_receipt
@@ -342,6 +377,15 @@ def execute(argv=None, services=None):
                     obs["science_growth"] = growth
             except Exception as exc:  # a growth estimate must never break observe
                 obs["science_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .pack_growth import growth_receipt as pack_growth_receipt
+
+            try:  # every other pack block (green split row): science_growth {pack, machines}
+                jobs_list = list(Ledger(root).data["jobs"].values())
+                packs = pack_growth_receipt(root, services.catalog(root, game), jobs_list, obs)
+                if packs is not None:
+                    obs["pack_growth"] = packs
+            except Exception as exc:  # a growth estimate must never break observe
+                obs["pack_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .throughput_growth import growth_receipt as throughput_growth_receipt
 
             try:
@@ -375,6 +419,14 @@ def execute(argv=None, services=None):
                     obs["defense_growth"] = defense
             except (OSError, ValueError, KeyError, TypeError) as exc:  # a growth estimate must never break observe
                 obs["defense_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .bottleneck_audit import receipt as bottleneck_receipt
+
+            try:  # sustained starvation / back-pressure -> bottlenecks, proposals, idle watchdog (PLANNERS.md)
+                obs["bottlenecks"] = bottleneck_receipt(
+                    root, services.catalog(root, game), list(Ledger(root).data["jobs"].values()), obs
+                )
+            except Exception as exc:  # an audit must never break observe
+                obs["bottlenecks_error"] = f"{type(exc).__name__}: {exc}"[:200]
         from .early_start import inputs_receipt
 
         # Early start: which blocks have their inputs planned (progression.autopilot_nodes).

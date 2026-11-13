@@ -98,6 +98,15 @@ PAUSED_PROBLEM, KEPT, REVIVED = "paused_problem", "kept", "revived"
 HELD = (PAUSED_PROBLEM, KEPT, REVIVED)
 RELEASE_SETTLE_SECONDS = 2.0
 
+# Stall timeout (watcher, ``Fleet.enforce_stall``): a running run whose observed game tick has not
+# advanced for this long is finished as a problem run, so a round always completes
+# (all-1114-0107: a dead actor looped on agent_dead for 75 real minutes). Default: the fleet's own
+# pace (median real minutes per game minute of its runs) times STALL_PACE_FACTOR, at least
+# STALL_FLOOR_MINUTES; ``start --stall-minutes`` stores a fixed value in the manifest.
+STALL_FLOOR_MINUTES = 10.0
+STALL_PACE_FACTOR = 5.0
+STALL_MIN_GAME_MINUTES = 2.0
+
 
 # ---------------------------------------------------------------- pure parts
 
@@ -271,6 +280,74 @@ def milestones(jobs, ends, roadmap, same):
     return reached, furthest
 
 
+def stall_limit_minutes(fleet, ticks, now):
+    """Real minutes without game-tick progress after which the watcher ends a run.
+
+    ``fleet["stall_minutes"]`` when set; else max(``STALL_FLOOR_MINUTES``, ``STALL_PACE_FACTOR``
+    x the median real minutes per game minute of the fleet's runs that played at least
+    ``STALL_MIN_GAME_MINUTES``). ``ticks``: seed -> observed tick."""
+    fixed = fleet.get("stall_minutes")
+    if isinstance(fixed, (int, float)) and fixed > 0:
+        return float(fixed)
+    paces = []
+    for run in fleet.get("runs", []):
+        tick, started = ticks.get(run.get("seed")), run.get("started_at")
+        if (
+            type(tick) is int
+            and isinstance(started, (int, float))
+            and tick >= STALL_MIN_GAME_MINUTES * TICKS_PER_MINUTE
+        ):
+            paces.append((now - started) / 60 / (tick / TICKS_PER_MINUTE))
+    pace = statistics.median(paces) if paces else 0.0
+    return max(STALL_FLOOR_MINUTES, STALL_PACE_FACTOR * pace)
+
+
+def stalled_runs(fleet, ticks, memory, now):
+    """Running runs whose tick stood still for the stall limit: (runs, limit minutes).
+
+    ``memory`` (seed -> [tick, since]) is the watcher's record of each run's last tick change."""
+    limit = stall_limit_minutes(fleet, ticks, now)
+    due = []
+    for run in fleet.get("runs", []):
+        seed = run.get("seed")
+        if run.get("status") != "running":
+            memory.pop(seed, None)
+            continue
+        tick = ticks.get(seed)
+        seen = memory.get(seed)
+        if seen is None or seen[0] != tick:
+            memory[seed] = [tick, now]
+        elif now - seen[1] >= 60 * limit:
+            due.append(run)
+    return due, limit
+
+
+def death_stopped(root):
+    """The run's supervisor safe-stopped itself after an unrecovered actor death (``Supervisor._stop_for_death``)."""
+    state = _read(Path(root) / "logs" / "controller-state.json", {}) or {}
+    reason = str(state.get("stop_reason") or "")
+    return state.get("state") == "stopped" and reason.startswith(("actor_death_unrecoverable", "actor_dead"))
+
+
+def death_lines(runs, top=6):
+    """``actor deaths: n, causes`` over the runs' ``deaths`` (``actor_death.deaths``)."""
+    rows = [(r["seed"], d) for r in runs for d in r.get("deaths") or []]
+    if not rows:
+        return ["actor deaths: 0"]
+    causes = {}
+    for seed, d in rows:
+        cause = causes.setdefault(str(d.get("cause") or "unknown")[:90], dict(count=0, seeds=[], lost=0.0))
+        cause["count"] += 1
+        cause["lost"] += d.get("lost_seconds") or 0
+        if seed not in cause["seeds"]:
+            cause["seeds"].append(seed)
+    lost = sum(d.get("lost_seconds") or 0 for _, d in rows)
+    lines = [f"actor deaths: {len(rows)} in {len({s for s, _ in rows})} runs, {lost:.0f} game s lost; causes:"]
+    for cause, row in sorted(causes.items(), key=lambda kv: -kv[1]["count"])[:top]:
+        lines.append(f"  {row['count']:3d}  {cause}  ({row['lost']:.0f} s) e.g. {row['seeds'][0]}")
+    return lines
+
+
 def layout_settings(root, explore):
     """Write the run's ``layout-settings.json`` (``layout_selection.settings``) before its supervisor starts.
 
@@ -369,6 +446,8 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     tests = [r for r in runs if r.get("test_mode")]
     if tests:
         lines[0] += f" | TEST MODE client_free in {len(tests)} runs (script-credited hand-craft triggers; not a proof)"
+    if fleet.get("respawn") or any(r.get("respawn_emulation") for r in runs):
+        lines[0] += " | respawn emulation on"
     if fleet.get("explore"):
         lines[0] += " | layout EXPLORATION on (runner-up variants by seed)"
     lines.append(
@@ -417,6 +496,7 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     lines.append("controller errors (count -> example seed), top 5:")
     rows = list(agg["controller_errors"].items())[:5]
     lines += [f"  {v['count']:3d}  {reason}  e.g. {v['seeds'][0]}" for reason, v in rows] or ["  none"]
+    lines += death_lines(runs)
     if tests:
         credits = [
             f"{r['seed']}:"
@@ -432,6 +512,9 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     from factorio_agent.bandwidth_audit import format_counts
 
     lines += format_counts(runs)  # belt lane bandwidth findings per block type (bandwidth_audit)
+    from factorio_agent.bottleneck_audit import format_idle
+
+    lines += format_idle(runs)  # "idle with work: seconds, top gates" (bottleneck_audit idle watchdog)
     failed = [r for r in runs if r.get("launch_error")]
     for r in failed[:4]:
         lines.append(f"launch failed {r['seed']}: {r['launch_error'][:100]}")
@@ -773,6 +856,8 @@ class Fleet:
             postmortem=self.postmortem,
             keep_problem=self.keep_problem,
             keep_timeout_minutes=self.keep_timeout,
+            stall_minutes=getattr(self, "stall_minutes", None),
+            respawn=bool(getattr(self, "respawn", False)) and self.client == actor_client.NONE,
             runs=[
                 dict(seed=s, runtime=str(r), server_port=u, rcon_port=t, status="planned")
                 for s, r, (u, t) in zip(seeds, roots, pairs)
@@ -799,6 +884,8 @@ class Fleet:
                     )
                 if self.client != actor_client.ALWAYS:
                     actor_client.set_mode(root, self.client)
+                    if self.client == actor_client.NONE and getattr(self, "respawn", False):
+                        actor_client.set_respawn(root, True)  # optional, owner approval pending (HEADLESS.md)
                 layout_settings(root, explore)
                 self._set_run(name, run["seed"], status="starting")
                 result = self.lifecycle()._start(root, visible=False, automation_config=options, select=False)
@@ -969,6 +1056,7 @@ class Fleet:
         self.lifecycle()
         while True:
             self.enforce(name, postmortem=True)
+            self.enforce_stall(name)
             fleet = self.load(name)
             if not any(r["status"] in ("planned", "creating", "starting", "running") for r in fleet["runs"]):
                 self.settle_kept(name)
@@ -976,6 +1064,36 @@ class Fleet:
                 if not any(r["status"] in HELD for r in self.load(name)["runs"]):
                     return 0
             sleep(WATCH_SECONDS)
+
+    def enforce_stall(self, name, *, now=None, out=print):
+        """Watcher: finish every running run whose game tick stood still for the stall limit (``stalled_runs``).
+
+        The run is paused, triaged (its last controller error, e.g. ``agent_dead``, leads the
+        verdict) and snapshotted like a run at the target minute, so the round always completes."""
+        fleet = self.load(name)
+        now = time.time() if now is None else now
+        ticks = {r["seed"]: run_tick(r["runtime"]) for r in fleet["runs"] if r.get("status") == "running"}
+        memory = self.__dict__.setdefault("_stall_memory", {})
+        dead = [r for r in fleet["runs"] if r.get("status") == "running" and death_stopped(r["runtime"])]
+        if dead:
+            # The supervisor stopped itself after an unrecovered actor death: end it now, no stall wait.
+            for run in dead:
+                memory.pop(run["seed"], None)
+            return self._finish_due(
+                name, fleet, dead, "errored: agent_dead (supervisor stopped after an actor death)", out
+            )
+        due, limit = stalled_runs(fleet, ticks, memory, now)
+        if not due:
+            return []
+        for run in due:
+            memory.pop(run["seed"], None)
+            self._set_run(name, run["seed"], stalled=dict(tick=ticks.get(run["seed"]), limit_minutes=round(limit, 1)))
+        return self._finish_due(name, fleet, due, f"stalled: no game-time progress for {limit:.0f} real min", out)
+
+    def _finish_due(self, name, fleet, due, reason, out):
+        if fleet.get("postmortem", True) or fleet.get("keep_problem"):
+            return self.finish_runs(name, due, reason=reason, out=out)
+        return [self.stop_run(name, run, reason=reason, out=out) for run in due]
 
     # post-mortem (docs/v2/DEBUGGING_A_STALL.md "Post-mortem of a fleet run") ------
     def finish_runs(self, name, due, *, reason, out=print):
@@ -1323,6 +1441,10 @@ class Fleet:
         label = actor_client.test_mode(root) if root.exists() else None
         if label:
             row.update(label)
+        if root.exists():
+            from factorio_agent.actor_death import deaths
+
+            row["deaths"] = deaths(root)
         row["problem"] = problem_row(run, root) if root.exists() else None
         if not (root / "jobs.json").exists():
             return row
@@ -1331,6 +1453,9 @@ class Fleet:
         from factorio_agent.bandwidth_audit import run_counts
 
         row["bandwidth"] = run_counts(root)
+        from factorio_agent.bottleneck_audit import run_idle
+
+        row["idle_with_work"] = run_idle(root)  # idle watchdog seconds and gates (bottleneck_audit)
         tick = run_tick(root)
         row["game_minutes"] = round(tick / TICKS_PER_MINUTE, 1) if tick is not None else None
         timeline = cp_tool.Run(root)
@@ -1378,6 +1503,8 @@ def _status_lines(value):
     ]
     if any(r.get("test_mode") for r in value["runs"]):
         lines[0] += " TEST MODE client_free (C: n = no client by design, d = detached)"
+    if any(r.get("respawn_emulation") for r in value["runs"]):
+        lines[0] += " | respawn emulation on"
     if value.get("explore"):
         lines[0] += " | layout EXPLORATION on"
     lines.append("seed        state          S C V  gmin  act blk done  last milestone")
@@ -1435,6 +1562,17 @@ def main(argv=None):
     )
     start.add_argument("--keep-timeout", type=float, default=KEEP_TIMEOUT_MINUTES, help="minutes a kept run stays up")
     start.add_argument("--no-postmortem", action="store_true", help="no triage snapshot of problem runs at the stop")
+    start.add_argument(
+        "--stall-minutes",
+        type=float,
+        help="real minutes without game-time progress before the watcher ends a run (default: from the fleet's pace)",
+    )
+    start.add_argument(
+        "--respawn",
+        action="store_true",
+        help="client-free runs: emulate the player respawn after an actor death (off by default; owner approval"
+        " pending, docs/v2/HEADLESS.md)",
+    )
     for command in ("inspect", "revive", "postmortem"):
         one = sub.add_parser(command)
         one.add_argument("--name", required=True)
@@ -1460,6 +1598,8 @@ def main(argv=None):
         fleet.keep_problem = max(0, args.keep_problem)
         fleet.keep_timeout = args.keep_timeout
         fleet.postmortem = not args.no_postmortem
+        fleet.stall_minutes = args.stall_minutes
+        fleet.respawn = args.respawn
         value = fleet.start(
             args.count,
             args.seeds,

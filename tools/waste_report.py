@@ -33,6 +33,14 @@ overlap, they are views, not a partition):
   roadmap ``after`` steps; only the requires are checked).
 - ``rework``: an entity built and then mined at the same position (any job)
   within ``REWORK_WINDOW`` (both actions' actor seconds).
+- ``actor_death``: per actor death (``factorio_agent.actor_death.deaths``), the
+  seconds from the death to its recovery (respawn, then the corpse items back or
+  given up), or to the run end when it was never recovered; the example names
+  the cause seen at the corpse and the items lost.
+- ``idle_with_work``: the supervisor's idle watchdog (``logs/controller-events.jsonl``
+  event ``idle_with_work``, ``bottleneck_audit``): actor seconds without an action
+  beyond ``IDLE_SECONDS`` while a bottleneck, an untried remedy or ready queue work
+  existed; the row names the top item and the gates that held it.
 
 Not measurable from current logs (need a new log field): supply counted that
 cannot reach the consumer (needs per-machine ingredient status over time in the
@@ -366,6 +374,20 @@ def analyse(root: Path) -> dict:
                     n,
                 )
 
+    # --- idle with work: the supervisor's idle watchdog (bottleneck_audit) ------------------------
+    for episode in idle_with_work(root):
+        gates = sorted(episode["gates"].items(), key=lambda kv: -kv[1])
+        w.add(
+            "idle_with_work",
+            episode["seconds"],
+            {
+                "tick": episode["since_tick"],
+                "job": gates[0][0] if gates else "-",
+                "reason": f"{episode.get('top_item') or '-'}; gates "
+                + ", ".join(f"{g} {round(s)}s" for g, s in gates[:3]),
+            },
+        )
+
     # --- remedy ladder: seconds blocked per needs kind, remedies applied and resolved ---------
     remedies = remedy_summary(run.events, end, w, cap)
 
@@ -427,6 +449,8 @@ def analyse(root: Path) -> dict:
                     },
                 )
 
+    actor_death_waste(root, end, w)
+
     return {
         "run": str(root),
         "seed": seed,
@@ -434,6 +458,40 @@ def analyse(root: Path) -> dict:
         "waste": w.as_dict(),
         "remedies": remedies,
     }
+
+
+def actor_death_waste(root, end, w) -> list[dict]:
+    """``actor_death`` rows: game seconds from each death to its recovery (respawn, then the corpse items
+    back or given up), or to the run end when never recovered; ``items_lost`` = corpse items not recovered."""
+    try:
+        from factorio_agent.actor_death import deaths
+    except ImportError:
+        return []
+    rows = deaths(root, end_tick=end or None)
+    for d in rows:
+        lost = d.get("items_lost")
+        w.add(
+            "actor_death",
+            max(0.0, d.get("lost_seconds") or 0.0),
+            {
+                "tick": d["death_tick"],
+                "job": "actor",
+                "reason": f"{d.get('cause')}; belongings {d.get('belongings') or '-'}"
+                + (f", {lost} items lost" if lost else "")
+                + ("" if d.get("recovered_tick") is not None else ", never recovered"),
+                "items_lost": lost,
+            },
+        )
+    return rows
+
+
+def idle_with_work(root) -> list[dict]:
+    """Idle episodes of the supervisor's ``idle_with_work`` events (``bottleneck_audit.idle_episodes``)."""
+    try:
+        from factorio_agent.bottleneck_audit import _events, idle_episodes
+    except ImportError:
+        return []
+    return idle_episodes(_events(root))
 
 
 def remedy_summary(events, end, w=None, cap=str) -> dict:

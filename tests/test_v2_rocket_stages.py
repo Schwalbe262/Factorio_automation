@@ -269,7 +269,28 @@ class RocketSiloTests(Base):
         obs = observation(inventory={"steel-plate": 1000, "processing-unit": 200, "iron-plate": 100})
         result = self.silo.step(obs, {})
         self.assertEqual(result["reason"], "rocket_silo_waits_for_pipe")
-        self.assertEqual(result["evidence"]["producer_status"], "published")
+        self.assertEqual(result["evidence"]["producer_status"], "published_stock")
+
+    def test_belt_output_rows_feed_their_consumer_and_are_never_collected(self):
+        # A belt row (produce tail.mode == "belt") publishes a port without a chest name.
+        belt = {"direction": "output", "item": "pipe", "position": {"x": 10.5, "y": 0.5}, "facing": 4}
+        pu = dict(belt, item="processing-unit")
+        self.board({"production_row_pipe": {"ports": [belt]}, "production_row_pu": {"ports": [pu]}})
+        on_belt = {"name": "transport-belt", "position": {"x": 10.5, "y": 0.5}, "unit_number": 5}
+        on_belt["belt_inventory"] = {"pipe": 8, "processing-unit": 8}
+        obs = observation(inventory={"steel-plate": 1000, "processing-unit": 200})
+        obs["entities"] += [on_belt, chest("iron-plate", 100)]
+        result = self.silo.step(obs, {})
+        # pipes are not capped by the belt row: their plates are collected for a hand craft
+        self.assertEqual((result["type"], result["item"]), ("take", "iron-plate"))
+        result = self.silo.step(observation(inventory={"steel-plate": 1000, "iron-plate": 100}), {})
+        self.assertEqual(result["reason"], "rocket_silo_waits_for_processing_unit")
+        self.assertEqual(result["evidence"]["producer_status"], "belt_row_only")
+        row = rocket_stages.receipt(self.root, observation(), self.catalog)["rocket_silo"]
+        statuses = {m["item"]: m["status"] for m in row["missing"]}
+        self.assertEqual(statuses["processing-unit"], "belt_row_only")
+        taken = [c for c in self.bootstrap.calls if c[0] in ("pipe", "processing-unit")]
+        self.assertEqual(taken, [])  # nothing is taken off a belt row's port
 
     def test_power_shortfall_waits_and_reaches_the_receipt(self):
         self.game.query.return_value = {"ok": True, "offered_watts": 1e6, "demand_watts": 9.5e5, "headroom_watts": 5e4}
@@ -337,7 +358,13 @@ class RocketPartsTests(Base):
         result = self.parts.step(self.obs(), {})
         self.assertEqual(result["status"], "waiting")
         self.assertEqual(result["reason"], "rocket_parts_waits_for_low_density_structure")
-        self.assertEqual(result["evidence"]["producer"], "produce_merged")
+        # The producer is the rocket bill's classification of the item (rocket_plan.classify).
+        from factorio_agent import rocket_plan
+
+        bill = rocket_plan.rocket_bill(self.catalog, researched=())
+        row = next(r for r in bill["items"] if r["item"] == "low-density-structure")
+        self.assertEqual(result["evidence"]["producer"], row["producer"]["capability"])
+        self.assertNotEqual(result["evidence"]["producer"], "unknown")
 
     def test_everything_delivered_waits_for_the_silo(self):
         full = {"processing-unit": 50, "low-density-structure": 50, "rocket-fuel": 50}
@@ -836,8 +863,8 @@ class RegistryAndReceiptTests(Base):
         self.board(
             {
                 "smelting_district": {"ports": [out("iron-plate"), out("copper-plate")]},
-                "steel": {"ports": [out("steel-plate")]},
-                "pu": {"ports": [out("processing-unit")]},
+                "steel": {"ports": [dict(out("steel-plate"), name=CHEST)]},
+                "pu": {"ports": [dict(out("processing-unit"), name=CHEST)]},
             }
         )
         row = rocket_stages.receipt(self.root, observation(), self.catalog)

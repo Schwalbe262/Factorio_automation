@@ -12,6 +12,8 @@
   empty chest (starved input, lost power): callers fall back to hand crafting;
 * "broken": verified, but the chest or a machine is missing from the map.
 
+A belt-output row (``produce`` with ``output: belt``) has no chest: None.
+
 The chest is published on the PCB board as the row's ``output`` port, so the
 ordinary batched ``take_many`` collection (``construction_supply``) is
 allowed to take the product from it; no new transfer action is needed.
@@ -35,6 +37,8 @@ class MachineStock:
         state = self.rows.state(item)
         if state.get("world_id") != observation.get("world_id"):
             return None
+        if (state.get("line") or {}).get("tail", {}).get("mode") == "belt":
+            return None  # a belt-output row feeds other rows; it holds no stock (production_layout.belt_tail)
         if state.get("phase") != "verified":
             return {"status": "building", "item": item}
         actual = {(e.get("name"), *xy(e)): e for e in observation.get("entities", []) if "position" in e}

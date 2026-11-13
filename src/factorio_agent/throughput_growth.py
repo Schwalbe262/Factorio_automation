@@ -877,8 +877,8 @@ def _science_growth_rates(catalog, observation) -> tuple[str, dict[str, float]] 
     if isinstance(decision, Mapping) and decision.get("expand") and decision.get("pack"):
         pack, source = decision["pack"], "research_capacity"
         extra = int(decision.get("target_assemblers") or 0) - int(decision.get("current_assemblers") or 0)
-    if extra <= 0:
-        return None
+    if extra <= 0 or pack in (observation.get("pack_growth") or {}):
+        return None  # a pack block with its own growth receipt declares its draw (growth_taps)
     rate = extra * pack_rate_per_assembler(catalog, pack)
     plates = {p: v for p, v in raw_cost(catalog, {pack: rate}).items() if p in PLATES}
     return f"{source}: +{extra} {pack} machines", plates
@@ -1101,6 +1101,11 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
     from .science_growth import undeclared_plate_draw
 
     growth_taps = undeclared_plate_draw(read("automation-science.json"), observation.get("science_growth"))
+    # Every other pack block's draw beyond its taps (pack_growth: the labs' target, declared before the build).
+    from .pack_growth import undeclared_plate_draw as pack_draw
+
+    for plate, rate in pack_draw(observation.get("pack_growth")).items():
+        growth_taps[plate] = round(growth_taps.get(plate, 0.0) + rate, 3)
     try:
         # Build ahead: what the next blocks add after the horizon (science growth is in growth_taps).
         growth = expected_growth(catalog, jobs, observation, stations)

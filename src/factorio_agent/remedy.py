@@ -107,6 +107,10 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
         Rung("shrink:two_drills", "shrink", {"count_max": 2}, kinds=("bank",), note="one drill pair now, grow later"),
     ),
     "dedicated_materials": (ROUTE_RELAX_1,),
+    # Pack block growth builds slots its frame reserved: no route or site to relax. A slot that meets
+    # something (preflight) is re-planned once the blocker moved (replan); no slot left is the next unit
+    # (pack_growth next_step), never a relaxation.
+    "science_growth": (),
     "produce": (
         Rung("layout:next_variant", "layout", {"layout_rotate": 1}, note="the next ranked row layout first"),
         ROUTE_RELAX_1,
@@ -178,6 +182,10 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     ),
     # rocket_feed.RocketParts.prepare_feed routes with transport.plan_connection (route_relax).
     "rocket_parts": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    # Late fluids: their typed pipe routes (chemical_production.plan_typed_fluid_connection) read route_relax.
+    "advanced_petroleum": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    "fluid_product": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    "fluid_distribution": (ROUTE_RELAX_1, ROUTE_RELAX_2),
 }
 
 

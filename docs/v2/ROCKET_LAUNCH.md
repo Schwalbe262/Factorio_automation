@@ -103,8 +103,16 @@ while they wait (`<stage>_waits_for_<item>`, evidence `producer`,
 
 - Producer rows publish a board output port with `item` at a stock chest
   (`production_rows` contract: `{"direction": "output", "item", "name": <chest>}`)
-  or a belt port; `V2Bootstrap._unreserved_stock_observation` makes the chest
-  stock collectable. Steel comes from `steel_production`'s port.
+  or a belt port (`tail.mode == "belt"`: no `name`). Only stock-chest ports
+  (and plates from furnaces / bus collection points) are collected and count
+  for the gate; a belt-output row feeds its consumer, is never collected from
+  (belts are removed from the collection view for non-plates), does not stop
+  a hand craft, and a leaf made only by one is a named wait with
+  `producer_status: belt_row_only`. Example: electronic circuits become a belt
+  row when the processing-unit row consumes them; no stage needs circuits
+  directly (processing units are a non-hand-craftable leaf), and if a hand
+  craft ever did, it would craft them from plates instead of draining the belt.
+  Steel comes from `steel_production`'s port.
 - No capability grows the power plant again (`steam_expansion` adds one pair
   once): a short grid is a named wait with `short_watts` in the receipt.
 - The silo's 3.99 MW launch draw is reported, not required.

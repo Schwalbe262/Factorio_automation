@@ -25,6 +25,7 @@ from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane, slot_group, slo
 from factorio_agent.early_start import admission_requires
 from factorio_agent import incidents as incident_rules
 from factorio_agent import actor_client
+from factorio_agent import actor_death
 from factorio_agent import plan_needs, remedy
 
 
@@ -119,6 +120,8 @@ INCIDENT_LOG_BYTES = 5_000_000
 INTENT_TAIL_BYTES = 262_144
 LOW_QUEUE = 2
 AUTOPILOT_LIMIT = 3
+IDLE_WATCH_SECONDS = 60  # game seconds between idle_with_work events of one episode and gate
+GROWTH_LIMIT = 2  # bottleneck growth packages merged per cycle (Supervisor._growth)
 FORBIDDEN = {
     "x",
     "y",
@@ -666,6 +669,16 @@ class ActorDeadWithoutPlayer(ValueError):
     """The detached actor died: no player can respawn it (actor_client)."""
 
 
+class ActorDeathPending(Exception):
+    """The actor is dead and its respawn is not done yet: the cycle ends without error backoff."""
+
+
+# Wall seconds between attempts to recover a dead actor's corpse items, and how many attempts
+# (unsafe corpse, full inventory) before they count as lost.
+BELONGINGS_RETRY_SECONDS = 30
+BELONGINGS_ATTEMPTS = 60
+
+
 def _detached_binding(value, old, owner):
     """The actor recorded at the client detach, with the identity checks of the pinned-owner case."""
     record = value.get("detached_record") or {}
@@ -1004,7 +1017,16 @@ class Supervisor:
 
     def _snapshot(self):
         self._world_guard()
-        observation = self.cli.invoke(["observe"])
+        try:
+            observation = self.cli.invoke(["observe"])
+        except CLIError as exc:
+            if str(exc) != actor_death.AGENT_DEAD:
+                raise
+            # Its own state, never error backoff: respawn or rebind by rule, then observe again.
+            self._actor_dead()
+            observation = self.cli.invoke(["observe"])
+        if self.state.get("actor_death"):
+            self._save(actor_death=None, status="running")
         if actor_client.detach_due(self.root, observation):
             self._detach_client()
         self._client_free_presence()
@@ -1083,6 +1105,188 @@ class Supervisor:
             }
             self.stopping = True
             self._save(status="stopping", stop_reason=actor_client.DEAD_WITHOUT_PLAYER)
+
+    def _stop_for_death(self, reason):
+        """A death no rule can recover: record it and stop the run (never a hang)."""
+        self._event("actor_death_unrecoverable", reason=str(reason)[:200])
+        if not self.stopping:
+            self.stop_marker = {"request_id": "actor-dead-" + self.controller_id, "world_id": self.world}
+            self.stop_marker["source"] = "actor_death_unrecoverable"
+            self.stopping = True
+            self._save(
+                status="stopping",
+                stop_reason="actor_death_unrecoverable:" + str(reason)[:120],
+                last_error=actor_death.AGENT_DEAD,
+            )
+
+    def _actor_dead(self):
+        """``observe`` reported ``agent_dead``: the death state machine (actor_death).
+
+        client-free (``none``): ``respawn-actor`` waits the engine's respawn delay,
+        then binds a new empty character at the force spawn (the emulated player
+        respawn). Connected player: the engine respawned it; ``recover-actor``
+        binds the successor once ``actor-status`` says it is ready. Detached
+        (``until_lab_trigger``): no player and no emulation, the run stops.
+        Then unknown action outcomes are reconciled (never retried) and the
+        corpse items are owed to ``_belongings``. Raises ``ActorDeathPending``
+        while the respawn is not done.
+        """
+        now = self.clock()
+        death = self.state.get("actor_death")
+        if not isinstance(death, dict):
+            death = dict(
+                detected_at=now,
+                last_tick=self.state.get("last_observed_tick"),
+                client_mode=actor_client.mode(self.root),
+            )
+            self._save(status="actor_dead", actor_death=death)
+            self._event("actor_died", last_tick=death["last_tick"], client_mode=death["client_mode"])
+        if death["client_mode"] == actor_client.NONE and not actor_client.respawn_enabled(self.root):
+            # The respawn emulation needs the owner's approval (off by default): record and end the run.
+            if not death.get("recorded"):
+                row = actor_death.record_unrecovered(
+                    self.root, death["last_tick"], "respawn emulation off", detected_at=death["detected_at"]
+                )
+                self._save(actor_death=dict(death, recorded=True))
+                self._event("actor_death_recorded", death_tick=row["death_tick"], respawn="off", cause=row["cause"])
+            self._stop_for_death("agent_dead: respawn emulation off")
+            raise ActorDeathPending("respawn_emulation_off")
+        if death["client_mode"] == actor_client.NONE:
+            receipt = self.cli.invoke(["respawn-actor"])
+            status, reason = receipt.get("status"), receipt.get("reason")
+            if status == "waiting":
+                if death.get("waiting") != reason:
+                    self._save(actor_death=dict(death, waiting=reason))
+                    self._event("actor_respawn_waiting", reason=reason, ready_tick=receipt.get("ready_tick"))
+                raise ActorDeathPending(reason or "respawn_waiting")
+            if status != "succeeded":
+                self._stop_for_death(reason)
+                raise ActorDeathPending(reason or "respawn_blocked")
+            if not receipt.get("alive"):
+                row = actor_death.record_respawn(self.root, receipt, detected_at=death["detected_at"])
+                self._event(
+                    "actor_respawned",
+                    mode="client_free_emulated",
+                    seconds=round(now - death["detected_at"], 1),
+                    **{k: row.get(k) for k in ("death_tick", "respawn_tick", "old_unit", "new_unit", "corpse")},
+                    corpse_items=row.get("corpse_items"),
+                    cause=row.get("cause"),
+                )
+                # No corpse found: the recovery records the items as lost (``belongings_lost_no_corpse``).
+                items = row.get("corpse_items") if row.get("corpse") else None
+                self._owe_belongings(row.get("death_tick"), row.get("new_unit"), items)
+        else:
+            inspected = self.cli.invoke(["actor-status"])
+            if inspected.get("detached_record") is not None:
+                self._actor_dead_without_player(inspected)
+                raise ActorDeathPending(actor_client.DEAD_WITHOUT_PLAYER)
+            if not inspected.get("recovery_ready"):
+                classification = inspected.get("classification")
+                if death.get("waiting") != classification:
+                    self._save(actor_death=dict(death, waiting=classification))
+                    self._event("actor_respawn_waiting", reason=classification)
+                raise ActorDeathPending("waiting_for_player_respawn")
+            old, new = inspected.get("old_unit"), (inspected.get("successor") or {}).get("unit_number")
+            self.cli.invoke(
+                [
+                    "recover-actor",
+                    "--world-id",
+                    self.world,
+                    "--expected-old-unit",
+                    str(old),
+                    "--expected-new-unit",
+                    str(new),
+                ]
+            )
+            corpses = inspected.get("matching_owner_corpses")
+            corpses = [c for c in corpses if isinstance(c, dict)] if isinstance(corpses, list) else []
+            ticks = [c["tick_of_death"] for c in corpses if type(c.get("tick_of_death")) is int]
+            tick = max(ticks) if ticks else None
+            corpse = next((c.get("position") for c in corpses if c.get("tick_of_death") == tick), None)
+            if tick is not None:
+                actor_death.record_player_death(
+                    self.root, tick, old_unit=old, new_unit=new, corpse=corpse, detected_at=death["detected_at"]
+                )
+            self._event(
+                "actor_respawned",
+                mode="player",
+                seconds=round(now - death["detected_at"], 1),
+                death_tick=tick,
+                old_unit=old,
+                new_unit=new,
+                corpse=corpse,
+            )
+            if tick is not None:
+                self._owe_belongings(tick, new, None)
+        self._reconcile_after_death()
+        self.errors = 0
+        self._save(status="running", actor_death=None, last_error=None)
+
+    def _owe_belongings(self, death_tick, actor_unit, items):
+        if type(death_tick) is not int or type(actor_unit) is not int:
+            return
+        if items == 0:
+            actor_death.record_belongings(
+                self.root, death_tick, dict(status="succeeded", belongings=dict(status="recovered", recovered_items=0))
+            )
+            return
+        self._save(belongings_due=dict(death_tick=death_tick, actor_unit=actor_unit, next_at=self.clock(), attempts=0))
+
+    def _reconcile_after_death(self):
+        """A job whose last action has an unknown outcome is reconciled (fresh observation, re-plan), never retried."""
+        status = self.cli.invoke(["status"])
+        for job in (status.get("jobs") or {}).values():
+            if job.get("status") != "blocked" or job.get("reason") != "action_outcome_unknown_reconcile_required":
+                continue
+            try:
+                self.cli.invoke(["reconcile", "--key", job["key"]])
+            except CLIError as exc:  # e.g. a registered repair that needs its reviewed epoch: left to the planner
+                self._event("death_reconcile_refused", key=job["key"], reason=str(exc)[:200])
+                continue
+            self._event("death_reconcile", key=job["key"], capability=job.get("capability"))
+
+    def _belongings(self):
+        """Recover the dead actor's corpse items when owed and due; the run goes on from base stock meanwhile."""
+        due = self.state.get("belongings_due")
+        if not isinstance(due, dict) or self.clock() < due.get("next_at", 0) or self._stop_requested():
+            return False
+        try:
+            receipt = self.cli.invoke(
+                [
+                    "recover-belongings",
+                    "--world-id",
+                    self.world,
+                    "--expected-actor-unit",
+                    str(due["actor_unit"]),
+                    "--death-tick",
+                    str(due["death_tick"]),
+                ]
+            )
+        except CLIError as exc:
+            receipt = dict(status="blocked", reason=str(exc)[:200])
+        status, reason = receipt.get("status"), receipt.get("reason")
+        attempts = due.get("attempts", 0) + 1
+        if status == "waiting" and attempts < BELONGINGS_ATTEMPTS:
+            actor_death.record_belongings(self.root, due["death_tick"], receipt)
+            if reason != due.get("last_reason"):
+                self._event("belongings_deferred", death_tick=due["death_tick"], reason=reason)
+            self._save(
+                belongings_due=dict(
+                    due, attempts=attempts, last_reason=reason, next_at=self.clock() + BELONGINGS_RETRY_SECONDS
+                )
+            )
+            return bool(receipt.get("moved"))
+        if status == "waiting":
+            receipt = dict(receipt, status="blocked", reason="belongings_attempts_exhausted:" + str(reason))
+        actor_death.record_belongings(self.root, due["death_tick"], receipt)
+        self._event(
+            "belongings_recovered" if status == "succeeded" else "belongings_unrecovered",
+            death_tick=due["death_tick"],
+            reason=receipt.get("reason"),
+            items=(receipt.get("belongings") or {}).get("recovered_items", receipt.get("total_transferred_items")),
+        )
+        self._save(belongings_due=None)
+        return True
 
     def _note_technologies(self, observation):
         """Researched technologies in the order this controller first saw them; receipts list them sorted."""
@@ -1730,9 +1934,14 @@ class Supervisor:
         context = self._snapshot()
         if self._stop_requested():
             return True
+        if self._belongings():
+            context = self._snapshot()
+        self._idle_watch(context)
         if self._resume_known(context):
             context = self._snapshot()
         if self._autopilot(context):
+            context = self._snapshot()
+        if self._growth(context):
             context = self._snapshot()
         if self._auto_retry(context):
             context = self._snapshot()
@@ -1748,6 +1957,65 @@ class Supervisor:
             return True
         # Approved queue work runs while a model call is pending.
         return self._run_authorized(context)
+
+    def _growth(self, context):
+        """Merge the bottleneck auditor's growth packages every cycle, whatever the roadmap queue holds.
+
+        ``growth_providers.growth_nodes`` over the receipt's ranked ``bottlenecks``: one package per
+        bottleneck, at most ``GROWTH_LIMIT`` per cycle, none while one of its lane is in flight or
+        settling. Before, growth nodes came only from the autopilot, which runs only while fewer
+        than ``LOW_QUEUE`` nodes could dispatch: a full roadmap queue starved every growth.
+        """
+        observation, status, capabilities, _ = context
+        receipt = observation.get("bottlenecks")
+        rows = receipt.get("bottlenecks") if isinstance(receipt, dict) else None
+        if not rows:
+            return False
+        try:
+            from .growth_providers import growth_nodes
+
+            jobs = list(status.get("jobs", {}).values())
+            known = {q["id"] for q in self.work.data["nodes"]}
+            nodes = [
+                n
+                for n in growth_nodes(
+                    rows, jobs, deepcopy(self.work.data["nodes"]), observation, capabilities, limit=GROWTH_LIMIT
+                )
+                if str(n.get("id", "")).startswith("auto_") and n.get("id") not in known
+            ]
+            if not nodes:
+                return False
+            self._merge(nodes, capabilities, observation, "bottleneck")
+        except Exception as exc:
+            self._event("bottleneck_growth_rejected", reason=str(exc)[:600])
+            return False
+        self.work.refresh(jobs, capabilities)
+        self._event("bottleneck_growth", task_ids=[n["id"] for n in nodes])
+        return True
+
+    def _idle_watch(self, context):
+        """Log the observe receipt's ``bottlenecks.idle_with_work`` (bottleneck_audit): the actor is idle while
+        work exists; the event names the item that should have been proposed and its gate.
+
+        One event per episode start, top-gate change or ``IDLE_WATCH_SECONDS`` more idle time, so
+        ``tools/waste_report.py`` and the fleet report can sum the seconds per gate.
+        """
+        from .bottleneck_audit import event_fields
+
+        observation = context[0]
+        fields = event_fields(observation.get("bottlenecks") or {})
+        if fields is None:
+            return
+        last = getattr(self, "_idle_logged", None) or {}
+        idle = fields.get("idle_seconds") or 0
+        if (
+            last.get("since_tick") == fields.get("since_tick")
+            and last.get("top_gate") == fields.get("top_gate")
+            and idle - (last.get("idle_seconds") or 0) < IDLE_WATCH_SECONDS
+        ):
+            return
+        self._idle_logged = fields
+        self._event("idle_with_work", tick=observation.get("tick"), **fields)
 
     def _auto_retry(self, context):
         """Retry a blocked job once another job has succeeded since it blocked.
@@ -2068,6 +2336,9 @@ class Supervisor:
                     try:
                         if not self._cycle():
                             self._idle(2)
+                    except ActorDeathPending:
+                        # Dead actor, respawn pending: its own state (actor_dead), no error backoff.
+                        self._idle(1)
                     except Exception as exc:
                         self.errors += 1
                         self.backoff_until = self.clock() + min(300, 10 * 2 ** min(5, self.errors - 1))

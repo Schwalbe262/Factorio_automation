@@ -155,10 +155,11 @@ CAPABILITIES = {
     "science_growth": {
         "parameters": {
             "labs": "integer [1,8], built labs of the staged red science block after growth",
-            "machines": "integer [1,8], built red science machines after growth",
+            "machines": "integer [1,8] (red) or [1,12] (pack), built pack machines after growth",
+            "pack": "optional instead of labs: another pack's block (pack_growth.PACK_STATES, today logistic-science-pack)",
         },
         "requires": ["automation_science"],
-        "effect": "build reserved lab and science machine slots of the staged red science block (science_growth.py); proposed only on observed lab activity",
+        "effect": "build reserved lab and science machine slots of the staged red science block (science_growth.py), or the reserved pack slots of another pack block ({pack, machines}: the green split row, pack_growth.py); proposed only on observed lab activity",
     },
     "logistic_science": {
         "parameters": {
@@ -305,12 +306,12 @@ CAPABILITIES = {
         "effect": "normally build defended automatic stone/coal brick furnaces with fixed ports and prove native output",
     },
     "oil_gathering": {
-        "parameters": {},
+        "parameters": {"source_key": "optional: an independent namespaced crude source (advanced-crude)"},
         "requires": ["steel_production"],
         "effect": "normally build a defended powered pumpjack and real crude pipe outlet; naturally trigger native oil-processing research by extraction",
     },
     "water_gathering": {
-        "parameters": {},
+        "parameters": {"source_key": "optional: an independent namespaced intake (advanced-water, acid-water)"},
         "requires": ["power"],
         "effect": "normally build an independent defended shore intake with a typed water output while preserving existing steam-water pumps and their connections",
     },
@@ -339,6 +340,22 @@ CAPABILITIES = {
         "requires": ["basic_petroleum"],
         "effect": "normally build a protected shared gas header before chemical consumers, preserve the original outlet and publish separate plastic/sulfur edges without multiplying source capacity",
     },
+    "advanced_petroleum": {
+        "parameters": {},
+        "requires": ["basic_petroleum", "oil_gathering", "water_gathering"],
+        "native_recipes": ["advanced-oil-processing", "heavy-oil-cracking", "light-oil-cracking"],
+        "effect": "normally build a defended advanced refinery with circuit-controlled heavy and light cracking plants on the namespaced advanced-crude/advanced-water sources; prove all three products and publish heavy-oil, light-oil and advanced-petroleum-gas outlets",
+    },
+    "fluid_product": {
+        "parameters": {"product": "sulfuric-acid|lubricant"},
+        "requires": ["basic_petroleum", "water_gathering"],
+        "effect": "normally build chemical cells for sulfuric acid (water, gas, sulfur, iron tap) or lubricant (heavy oil) on exact published fluid sources; prove native fluid output and publish it",
+    },
+    "fluid_distribution": {
+        "parameters": {"source_key": "published fluid source", "aliases": "two new distinct outlet names"},
+        "requires": ["basic_petroleum"],
+        "effect": "normally build a same-fluid two-outlet header on an unclaimed published source and publish both outlets without multiplying source capacity",
+    },
     "advanced_circuit_production": {
         "parameters": {},
         "requires": ["chemical_production", "planned_main_bus"],
@@ -362,8 +379,11 @@ CAPABILITIES = {
     "produce": {
         "parameters": {
             "item": "product of an unlocked solid assembler recipe with at most two solid ingredients "
-            "(three when two are in-line intermediates of one shared input)",
+            "(three when all three are belt-fed through a lane merge, or two are in-line intermediates "
+            "of one shared input)",
             "rate_per_minute": "finite number (0,600], absolute nominal target",
+            "output": "optional: stock_chest (default, construction stock) or belt (a published belt "
+            "output port other rows route from)",
         },
         "requires": ["smelting_district", "power"],
         "native_recipes": ["assembling-machine-1"],
@@ -529,6 +549,9 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "research_capacity": obs.get("research_capacity"),
         "research_capacity_error": obs.get("research_capacity_error"),
         "science_growth": obs.get("science_growth"),
+        # Growth of the other pack blocks (pack_growth.py): science_growth {pack, machines} nodes.
+        "pack_growth": obs.get("pack_growth"),
+        "pack_growth_error": obs.get("pack_growth_error"),
         # Plate throughput growth (throughput_growth.py): the autopilot reads it from this summary.
         "throughput_growth": obs.get("throughput_growth"),
         "science_growth_error": obs.get("science_growth_error"),
@@ -542,6 +565,13 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "rocket_plan": obs.get("rocket_plan"),
         "rocket_stages": obs.get("rocket_stages"),
         "launch": obs.get("launch"),
+        # Rule inputs the autopilot reads (mine_trunk_nodes, power_coal_tap_nodes, produce_nodes); they
+        # were computed in observe but dropped here, so those rules never fired in the supervisor.
+        "mine_trunks": obs.get("mine_trunks"),
+        "produce_plate_sources": obs.get("produce_plate_sources"),
+        # Bottleneck auditor (bottleneck_audit.py): diagnosis, proposals, idle_with_work for the supervisor.
+        "bottlenecks": obs.get("bottlenecks"),
+        "bottlenecks_error": obs.get("bottlenecks_error"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {

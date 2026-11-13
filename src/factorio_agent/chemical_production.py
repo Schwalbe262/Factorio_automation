@@ -547,6 +547,10 @@ def fluid_crossing_proof(game, obs, plan, *, owned_bindings=None):
     return game.query(CHEMICAL_CROSSING_PROOF_LUA.replace("PAYLOAD", _payload(args)))
 
 
+PIPE_TURNS = 6  # typed pipe route caps without a remedy rung
+PIPE_DETOUR = 1.35
+
+
 def plan_typed_fluid_connection(game, builder, obs, source, destination, core, prior_groups=(), *, owned_prior=None):
     """Bounded ordinary pipe route. Source and all other fluid networks stay fixed."""
     if (
@@ -559,8 +563,14 @@ def plan_typed_fluid_connection(game, builder, obs, source, destination, core, p
         return {"ok": False, "reason": "exact_matching_typed_fluid_source_required"}
     a, b = source["position"], destination["position"]
     distance = abs(a["x"] - b["x"]) + abs(a["y"] - b["y"])
+    # Remedy ladder (remedy.ROUTE_RELAX, rungs of the late fluid planners): more turns and detour, hard maxima.
+    from . import remedy
+
+    relax = remedy.route_limits()
+    turns = max(PIPE_TURNS, relax["long_route_turns"] or PIPE_TURNS)
+    detour = max(PIPE_DETOUR, relax["max_detour_ratio"] or PIPE_DETOUR)
     # Leaving the endpoint rectangle by n tiles costs at least 2*n extra steps.
-    margin = max(12, math.floor(((1.35 - 1) * distance + 4) / 2))
+    margin = max(12, math.floor(((detour - 1) * distance + 4) / 2))
     bounds = {
         "min_x": min(a["x"], b["x"]) - margin,
         "max_x": max(a["x"], b["x"]) + margin,
@@ -728,8 +738,8 @@ for _,c in pairs(b.pipe_connections)do if c.connection_type=="underground"then s
         start_direction=source["facing"],
         end_direction=destination["facing"],
         max_nodes=200000,
-        max_turns=6,
-        max_detour_ratio=1.35,
+        max_turns=turns,
+        max_detour_ratio=detour,
         candidate_validator=accepts,
         minimum_start_run=minimum_start_run,
     )

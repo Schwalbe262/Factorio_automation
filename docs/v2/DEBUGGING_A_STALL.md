@@ -79,7 +79,13 @@ a placed plan: `blocks.render.render_ascii(catalog, state["plan"])`.
 
 A fleet round does not just switch its runs off. At the target game minute the
 watcher (`tools/fleet.py watch`, spawned by `start --minutes`) handles every due
-run in two passes:
+run in two passes. A run whose observed game tick (`controller-state.json`
+`last_observed_tick`) has not advanced for the stall limit is due as well
+(`Fleet.enforce_stall`, stop reason `stalled: no game-time progress for N real
+min`, manifest field `stalled`): the limit is `start --stall-minutes`, else 5x
+the fleet's median real minutes per game minute, at least 10 real minutes. Its
+triage leads with the last controller error (`errored: agent_dead (1
+unrecovered actor death)`), so a round always completes:
 
 1. **Pause** each due run: lifecycle safe stop (supervisor ACK, `game.tick_paused`,
    checkpoint save). The server stays up; nothing changes in the world any more.
@@ -195,6 +201,7 @@ paused when the run was paused (`/c game.tick_paused=false` to let it run).
 | Startup science retirement blocked (seeds 1024125955, 4031765348) | `startup_science_retirement_without_permanent_science` with no green science: research needs green packs, permanent labs idle | idle powered labs holding machine-made red packs verify the takeover; otherwise `waiting` | `test_v2_science_retirement.StepTests` |
 | Chest tile littered by its own inserter (seeds 1024125955, 1188507449) | magazine row `reserved block placement is obstructed` on its iron chest, `terrain_or_entity_collision` | `containers_before_their_inserters` in `ensure_plan`; ground stacks on a reserved tile are picked up first (`_recover_ground_items`) | `test_v2_build_ahead.ChestOrderTests` |
 | RCON latency with a GUI client | observe ~580 ms, query ~110 ms | `runtime.NETWORK_SEGMENT_SETTINGS` (16384-byte segments) | - |
+| Dead actor hangs the run (all-1114-0107-1075833632, 30.6 min) | every `observe` fails `agent_dead`, controller `error` every second, job ticks stop while the game ticks on, the watcher never ends the run | `agent_dead` is the supervisor's own state (`Supervisor._actor_dead`): client-free, the death is recorded and the run ends `errored: agent_dead` (the optional respawn emulation `respawn-actor`, off by default, owner approval pending: HEADLESS.md "Death and respawn") or `recover-actor` for a player, unknown outcomes reconciled, corpse items by `recover-belongings` when no enemy is near; the watcher's stall timeout ends a run without game-time progress; `fleet.py report` "actor deaths", `waste_report` `actor_death`; an expected attack (polluted nest, moving group) pulls gun turrets forward (DEFENSE_POLICY.md) | `test_v2_actor_death` |
 
 Known gap: a job that only *waits* (no actions) raises no `no_progress`
 incident (`incidents.py` needs repetitive actions); look for long
