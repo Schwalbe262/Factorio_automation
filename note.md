@@ -252110,3 +252110,12 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: new map eval-283895142 started on 9542691; logistic_science and main_bus not yet run live.
 - failure reason: dev-map templates relied on incidental power routes; migrations read state files nothing writes.
 - next action: watch the new seed to red/green science and bus; bus taps in the bus frame and science on taps (Opus worker).
+
+## 2026-11-13 Part 45 - pace work after the user's live review (seeds 283895142 -> 2099054105 -> 4176033748)
+- goal: get through the progression faster (user benchmark: smelting area within 20 min), remove layout defects the user saw live.
+- hypothesis: the early game is serial and plate-starved by rules, not by the map.
+- actions: startup science site ring search (d01e906); frozen WIP committed (2979c1e); dashboard (tools/dashboard.py); bus taps in the bus frame, bus before science (0a36b7d); coal cells could not expand for lack of a wood price, plate cap 4 -> demand up to 8, build-ahead (19ec9c6, 3d0a1dc); admission lanes per resource (5b8849e); coal cells capped by burner need, lagging cells at nominal rate (27c89b3); power coal drill fuelled before its belt (e2beeb0); paired smelting banks with reserved growth (cd3003b); temporary supply cell with retire (b700116) and stocked intermediates + measured demand (d742c69); research capacity counts the next research (d910590); staged labs 2 first + science_growth, science routes published, bus avoids planned belts (703a79d); hauling batches follow production (31ee433, e43c787); research step waits instead of blocking (db8300e).
+- metrics (283895142 -> 2099054105): power 18.0 -> 12.5 min, EMD research 35.4 -> 20.3, outposts 36-38 -> 21.5-23.3, logistics 41.3 -> 25.4, smelting district 48.8 -> 31.9, main bus 56.9 -> 35.5; first live: supply cell 22.9 (retired 35.8), produce row on a bus tap 38.4, red science on bus taps 43.4. Hauling was 43% of 818 actions in 28 min. Tests 2330 PASS.
+- result: early game about 17 min faster to the smelting district; still 12 min behind the 20 min target. Live defects found: 8 idle labs built at once, iron on the copper lane (unpublished science routes), single-row furnace bank with its growth strip crossed by feed belts, coal over-expansion.
+- failure reason: fixed caps and one-technology horizons in planners; plans not published before building; templates built at full size.
+- next action: long-run map 4176033748 toward steel/green science; research queue and burner-cell retirement workers.
