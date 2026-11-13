@@ -252128,3 +252128,9 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: the 20-minute target is still missed; cause measured (capacity and supply cell took the critical path's plates; batches funded all-or-nothing; outposts planned only after research). All three are changed but unmeasured on a fresh seed.
 - failure reason: slack jobs outranked critical ones; proofs and receipts with gaps (bus proof, summary dropping a receipt).
 - next action: fleet pace1 (8 seeds x 45 min) report; fix the commonest blockers; then later stages.
+
+## 2026-11-13 site: trees never move a planned site
+- goal: owner rule, bus-side blocks are not routed around forests.
+- actions: new site/nature.py (ranked/tiebreak, CLEARANCE_BATCH, batches); free_sites drops MAX_CLEARABLE and the per-tree distance penalty; search_bus drops clear_weight from the score (tie-break only); caps removed in planning.preflight (96), transport corridor (64), starter coal corridor (128); V2FactoryBuilder clears clear_obstacles in 96-obstacle batches, one paid mine per step, cleared batches memoised per world.
+- metrics: tests/test_v2_site_nature.py (8); bus/strips identical with a dense forest on the bus (old code moved the bus 24 tiles).
+- next action: live fleet in a forested seed to confirm clearing time and inventory (wood) headroom.

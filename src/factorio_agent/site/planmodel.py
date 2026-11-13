@@ -91,7 +91,6 @@ class SiteConfig:
     side_weight: float = 150.0
     feed_weight: float = 1.0
     start_weight: float = 0.25
-    clear_weight: float = 0.05
     smelting_penalty: float = 300.0
     band_penalty: float = 120.0
 

@@ -32,6 +32,19 @@ every expansion, with the dismantling, the rebuild and the lost output counted a
 it never removes the only supply of a critical consumer. Not implemented as a general
 capability yet; the retirement code (`obsolete.py`) has the guarded dismantle it needs.
 
+## Trees never move a planned site (`site/nature.py`)
+
+Owner's rule (2026-11-13): the layout is not routed around trees. The bus, bus-side block
+slots (smelting, produce rows, science, clusters, mall), their feed/tap routes and growth
+strips keep the position the plan gives them; trees and rocks there are cleared. Position is
+scored first and the tree count only breaks exact ties (`nature.ranked`, `nature.tiebreak`;
+`candidates.free_sites`, `siteselect.search_bus`). No plan has a tree cap any more (`planning.preflight`,
+`transport` corridors, the starter coal corridor): the builder clears every `clear_obstacles`
+entry first, one paid `mine` per step, checking `CLEARANCE_BATCH` obstacles per query
+(`V2FactoryBuilder._next_clearance`). Water, cliffs, ore, non-minable or player entities and other
+blocks still block. Mining outposts and off-bus temporary cells (startup science cell, startup lab,
+supply cell, coal hub) have a free position and may still prefer clear ground.
+
 ## The cluster (`blocks/cluster.py`)
 
 Machines on a square grid with a one-tile gap (pitch = machine size + 1);

@@ -112,8 +112,8 @@ return {ok=true,clear_obstacles=obstacles}
     )
     if not result.get("ok"):
         return result
-    if len(result.get("clear_obstacles", [])) > 96:
-        return {"ok": False, "reason": "block_clearance_budget_exceeded"}
+    # No cap: trees and rocks never reject a planned site (site.nature); the
+    # builder clears every listed obstacle in batches before building.
     obstacles = result.get("clear_obstacles", [])
     if obstacles == {}:
         obstacles = []

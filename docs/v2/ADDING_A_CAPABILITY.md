@@ -105,7 +105,7 @@ In this order, against the same entity list (`production_site.py:116-129`):
 | plates on the planned bus | `planned_tap.connect_inputs(...)` plans taps + routes with the block; in `step` call `planned_tap.publish` and `planned_tap.cutover` before `ensure_plan` (see `MAIN_BUS.md`, taps); no route may enter the bus band |
 | merge | `smelting.merge_entities(entities, route["entities"])` |
 | power | `manufacturing.connect_power_groups(game, builder, obs, groups, entities)` |
-| whole-block check | `planning.preflight(game, builder, obs, entities)` (overlap, ore keepout, owned-entity configuration, clearable trees/rocks) |
+| whole-block check | `planning.preflight(game, builder, obs, entities)` (overlap, ore keepout, owned-entity configuration, clearable trees/rocks, no tree cap: `site/nature.py`) |
 | plan | `core.deterministic_builder._plan(entities, ports, reserved_area=..., clear_obstacles=..., clearance_world_id=obs["world_id"], underground_pairs=...)` |
 
 ## 5. Persist state, register the block

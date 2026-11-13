@@ -2,20 +2,20 @@
 
 This replaces lists of fixed map coordinates: a block asks for rectangles of
 its footprint size, nearest first, that hold no ore, water, cliffs or
-entities. Trees and rocks are allowed (the builder clears them) up to a limit.
+entities. Trees and rocks never reject or move a site (``site.nature``): the
+builder clears them in batches, and their count only breaks distance ties.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
+from . import nature
 from .geometry import Rect
 from .survey import survey_area
 from .worldmap import WorldMap
 
 SEARCH_MARGIN_TILES = 128
-MAX_CLEARABLE = 80  # the builder clears at most 96 trees and rocks per plan, routes included
-CLEARING_PENALTY_TILES = 0.25  # location decides; clearing only breaks near-ties
 
 
 def free_sites(
@@ -32,9 +32,9 @@ def free_sites(
 
     Candidates lie on a ``step``-tile grid inside the surveyed bounds. A site is
     accepted when the rectangle plus ``margin`` tiles on every side has no
-    blocked tile, no resource tile and at most MAX_CLEARABLE trees or rocks.
+    blocked tile and no resource tile; trees and rocks are allowed in any number.
     Distance is the sum of Manhattan distances from the rectangle centre to
-    every point in ``around``.
+    every point in ``around``; the tree/rock count only orders equal distances.
     """
     points = list(around)
     bounds = world.bounds()
@@ -53,21 +53,20 @@ def free_sites(
         centre_y = origin[1] + height / 2
         return sum(abs(centre_x - px) + abs(centre_y - py) for px, py in points)
 
-    found: list[tuple[float, Rect]] = []
+    found: list[tuple[float, int, Rect]] = []
     for x, y in sorted(origins, key=lambda origin: (distance(origin), origin)):
         rect = Rect(x, y, x + width, y + height)
         # Overlapping neighbours fail for the same reason (the same blocked
         # belt corridor), so offer distinct places instead of one cluster.
-        if any(rect.intersects(other) for _, other in found):
+        if any(rect.intersects(other) for _, _, other in found):
             continue
         report = world.free_rect(x - margin, y - margin, x + width + margin, y + height + margin)
-        if report.free and not report.resources and len(report.clearable) <= MAX_CLEARABLE:
-            # Trees and rocks are simply cleared before building. Position is
-            # what matters; the small penalty only separates near-equal sites.
-            found.append((distance((x, y)) + CLEARING_PENALTY_TILES * len(report.clearable), rect))
+        if report.free and not report.resources:
+            # Trees and rocks are cleared before building; position decides.
+            found.append((distance((x, y)), len(report.clearable), rect))
             if len(found) == limit:
                 break
-    return [rect for _, rect in sorted(found, key=lambda row: (row[0], row[1].x0, row[1].y0))]
+    return nature.ranked(found)
 
 
 def survey_around(game, points: Iterable[tuple[float, float]], *, margin: int = SEARCH_MARGIN_TILES) -> WorldMap:
