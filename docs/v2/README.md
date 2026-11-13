@@ -138,7 +138,8 @@ behaviour of those controllers, not a rule to copy.
   ENGINE_CAPACITY, ADVANCED_CIRCUITS, CHEMICAL_SCIENCE.
 - Fluids: OIL_GATHERING, PETROLEUM, CHEMICAL_PRODUCTION, GAS_DISTRIBUTION,
   WATER, WATER_DISTRIBUTION (status line "intended to be" is stale: the
-  capability is wired), FLUID_HANDOFFS.
+  capability is wired), FLUID_HANDOFFS, LATE_FLUIDS (advanced petroleum with
+  cracking, acid/lubricant, fluid headers, the tail's supply rule), ADVANCED_PETROLEUM.
 - Defense and repair: DEFENSE_POLICY, DEFENSE_DEPLOYMENT, DEFENSE_HARDENING,
   DEFENSE_RELOCATION, BASTION_MAINTENANCE, NEARBY_THREATS, NEST_SWEEP,
   NEST_ASSAULT (retired capability), RADAR, RADAR_COVERAGE, AMMO,

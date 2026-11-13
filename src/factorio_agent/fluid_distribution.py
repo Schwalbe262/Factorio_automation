@@ -288,7 +288,16 @@ return{ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototype
                 return dict(status="blocked", reason="fluid_distribution_unbound_asset_present")
         return None
 
+    def _reload(self):
+        """The checkpoint on disk is the truth: ``execute_build_fluid_distribution`` records the ACK
+        (binding, cleared ``pending_build``) through its own instance, so a long-lived controller
+        must re-read it, or it keeps the stale pending build and later overwrites the binding."""
+        self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        if self.state and self.state.get("profile") != self.profile:
+            raise ValueError("fluid distribution profile changed")
+
     def step(self, obs):
+        self._reload()
         if not self.state:
             prepared = self.prepare(obs)
             if not prepared.get("ok"):

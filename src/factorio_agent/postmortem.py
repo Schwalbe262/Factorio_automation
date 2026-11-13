@@ -277,8 +277,14 @@ DRY_RUN = {
     "steam_expansion": DryRun(lambda ex, obs, p: ex.steam_expansion.prepare(obs)),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
     "oil_gathering": DryRun(
-        lambda ex, obs, p: ex.oil_gathering.prepare(obs), lambda ex, obs, p: ex.oil_gathering.step(obs)
+        lambda ex, obs, p: ex._oil_source(p.get("source_key")).prepare(obs),
+        lambda ex, obs, p: ex._oil_source(p.get("source_key")).step(obs),
     ),
+    "water_gathering": DryRun(lambda ex, obs, p: ex._water_source(p.get("source_key")).prepare(obs)),
+    # Late fluids (rocket tail): every prepare is read-only (advanced_petroleum, fluid_products, fluid_distribution).
+    "advanced_petroleum": DryRun(lambda ex, obs, p: ex._advanced_petroleum().prepare(obs)),
+    "fluid_product": DryRun(lambda ex, obs, p: ex._fluid_products().prepare(obs, p)),
+    "fluid_distribution": DryRun(lambda ex, obs, p: ex._fluid_distribution(p).prepare(obs)),
 }
 
 

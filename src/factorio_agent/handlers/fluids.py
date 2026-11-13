@@ -10,22 +10,29 @@ def oil_gathering_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "oil_gathering")
     if early is not None:
         return early
-    return ex.oil_gathering.step(obs)
+    return ex._oil_source((parameters or {}).get("source_key")).step(obs)
 
 
 def oil_gathering_proof(ex, obs, result, parameters):
-    return ex.oil_gathering.proof(obs)
+    return ex._oil_source((parameters or {}).get("source_key")).proof(obs)
 
 
 def water_gathering_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "water_gathering")
     if early is not None:
         return early
-    return ex.water.step(obs)
+    return ex._water_source((parameters or {}).get("source_key")).step(obs)
 
 
 def water_gathering_proof(ex, obs, result, parameters):
-    return ex.water.proof(obs)
+    return ex._water_source((parameters or {}).get("source_key")).proof(obs)
+
+
+def validate_source_profile(parameters):
+    """``{}`` (the canonical source) or ``{"source_key": <registry name>}`` (an independent namespaced source)."""
+    from .late_fluids import validate_source_key
+
+    validate_source_key(parameters)
 
 
 def water_distribution_step(ex, obs, parameters):
@@ -78,8 +85,8 @@ def gas_distribution_proof(ex, obs, result, parameters):
     return ex.gas_distribution.proof(obs)
 
 
-register("oil_gathering", step=oil_gathering_step, proof=oil_gathering_proof)
-register("water_gathering", step=water_gathering_step, proof=water_gathering_proof)
+register("oil_gathering", step=oil_gathering_step, proof=oil_gathering_proof, validate=validate_source_profile)
+register("water_gathering", step=water_gathering_step, proof=water_gathering_proof, validate=validate_source_profile)
 register("water_distribution", step=water_distribution_step, proof=water_distribution_proof)
 register("basic_petroleum", step=basic_petroleum_step, proof=basic_petroleum_proof)
 register(
