@@ -83,6 +83,7 @@ plates and an intermediate at once.
 
 from __future__ import annotations
 
+from collections import Counter
 from copy import deepcopy
 from itertools import permutations
 import json
@@ -92,12 +93,21 @@ from pathlib import Path
 from . import obsolete
 from .blocks.params import pole_radius, pole_reach
 from .blocks.stock_tail import STOCK_STACKS
-from .board import Board, entity, hardware_conflicts, planned_unbuilt_hardware, pole_chain
+from .board import (
+    LINK_POLE_LUA,
+    Board,
+    _mining_zones,
+    entity,
+    hardware_conflicts,
+    planned_unbuilt_hardware,
+    pole_chain,
+)
+from .plan_needs import make as make_needs
 from .construction_supply import COLLECT_BATCH, HANDCRAFT_LIMIT
 from .core.deterministic_builder import FactoryBuilder, _plan
 from .core.deterministic_state import _atomic_json
 from .machine_stock import STALL_TICKS
-from .power_grid import supplied_networks
+from .power_grid import plan_connection, supplied_networks
 from .routing import VECTORS
 
 # ----- constants (tuning = change here and the pinning test) -----------------
@@ -128,8 +138,18 @@ FEED_RESERVE = 50  # plates a job's own upkeep feed leaves in the character's ha
 PROOF_UNITS = 2  # first batch: enough for two products of each kind
 OUTPUT_STACKS = STOCK_STACKS
 SITE_PITCH = 8  # candidate origins on an 8-tile grid around the powered pole
-SITE_REACH = 6  # ... up to 48 tiles each way, nearest first
+# ... up to 80 tiles each way, nearest first. Origins whose cell meets water, cliffs or ore on the site
+# map are dropped before the native survey, so the far ring costs no survey slot (seed 4058652641:
+# 48 tiles around a lakeside power pole held 31 origins off the plan zones, all of them in the lake).
+SITE_REACH = 10
 MAX_SITE_CANDIDATES = 40
+# Site-plan zones the relaxed cell may use: built long after the cell retires (owner name prefixes).
+LATE_ZONE_PREFIXES = ("districts", "rail")
+# A pole-hop link (power_grid.plan_connection, which already prices zone poles) may cross every zone but
+# the dense belt land: the smelting zone, the bus band and the belt corridors.
+HOP_LINK_HARD_ZONES = ("smelting", "bus", "corridor")
+HOP_LINK_BELOW = 6  # fewer straight-linked candidates than this: route some links by pole hops
+HOP_LINK_SITES = 4  # ... for at most this many nearest sites (one native survey each)
 PROGRESS_WRITE_TICKS = 600  # at most one progress write per 10 game seconds
 DRAIN_TICKS = 3600  # retiring waits at most one game minute for machines to use the plates inside
 ABANDON_TICKS = 36000  # a build blocked this long (10 game minutes, auto-retry had its chances) is retired
@@ -624,9 +644,60 @@ def _overlaps(a, b):
     return a[0][0] < b[1][0] and b[0][0] < a[1][0] and a[0][1] < b[1][1] and b[0][1] < a[1][1]
 
 
-SURVEY_LUA = """local plans=helpers.json_to_table(PAYLOAD);local legal={};local clearable={}
+def _linked(design, chain, target):
+    """The cell's entities plus its power link (the cell pole ``target`` is not repeated)."""
+    return design["entities"] + [e for e in chain if e["position"] != target["position"]]
+
+
+class SiteLand:
+    """Static site-map facts (terrain, solid ore) for a cheap filter before the native survey.
+
+    The filter only drops what ``SURVEY_LUA`` refuses anyway: ore inside the reserved area or under a
+    link pole, an entity on water or unbuildable terrain. Unsurveyed tiles pass (the survey decides).
+    Without a site map nothing is filtered.
+    """
+
+    def __init__(self, world=None):
+        from .site.worldmap import LAND
+
+        self.world, self.land = world, LAND
+        self.ore = world.ore_tiles() if world is not None else {}
+
+    def _terrain_blocked(self, tile):
+        terrain = self.world.peek_terrain(math.floor(tile[0]), math.floor(tile[1]))
+        return terrain is not None and terrain != self.land
+
+    def design_error(self, builder, entities, area):
+        if self.world is None:
+            return None
+        (x0, y0), (x1, y1) = area
+        for x in range(math.floor(x0), math.ceil(x1)):
+            for y in range(math.floor(y0), math.ceil(y1)):
+                if (x, y) in self.ore:
+                    return "ore_in_area"
+        for e in entities:
+            if any(self._terrain_blocked(t) for t in builder._occupied_by_plan([e])):
+                return "water_or_unbuildable"
+        return None
+
+    def link_error(self, chain):
+        if self.world is None:
+            return False
+        for e in chain:
+            tile = (math.floor(e["position"]["x"]), math.floor(e["position"]["y"]))
+            if tile in self.ore or self._terrain_blocked(tile):
+                return True
+        return False
+
+
+SURVEY_LUA = (
+    """local plans=helpers.json_to_table(PAYLOAD);local legal={};local clearable={};local zones=helpers.json_to_table(ZONES)
+"""
+    + LINK_POLE_LUA
+    + """
 for i,p in ipairs(plans) do
  local ok=s.count_entities_filtered{area=p.reserved_area,type="resource"}==0
+ if ok and link_closed(p.entities,zones) then ok=false end
  if ok then for _,e in pairs(s.find_entities_filtered{area=p.reserved_area,force=f}) do
   if e.type~="character" and e.type~="electric-pole" then ok=false;break end end end
  local natural=false
@@ -643,6 +714,7 @@ for i,p in ipairs(plans) do
  if ok and natural then clearable[#clearable+1]=i elseif ok then legal[#legal+1]=i end
 end
 return {ok=true,legal=legal,clearable=clearable}"""
+)
 
 
 def _indices(value):
@@ -805,41 +877,78 @@ class SupplyCell:
         zones = self._zones(obs)
         if isinstance(zones, dict):
             return zones
+        land = self._site_land(obs)
+        rejected = Counter()
         reference = poles[0]["position"]
         bx, by = math.floor(reference["x"]) + 0.5, math.floor(reference["y"]) + 0.5
         reach = range(-SITE_REACH, SITE_REACH + 1)
         offsets = sorted(
             ((SITE_PITCH * i, SITE_PITCH * j) for i in reach for j in reach), key=lambda o: (math.hypot(*o), o)
         )
-        found = []
+        found, link_only = [], []
         for dx, dy in offsets:
             design = _shift(canonical, bx + dx - 0.5, by + dy - 0.5)
             area = _area(design["entities"])
             if any(_overlaps(area, b["reserved_area"]) for b in blocks.values() if b.get("reserved_area")):
                 continue
             if any(_overlaps(area, z) for z in zones):
+                rejected["plan_zone"] += 1
+                continue
+            why = land.design_error(self.builder, design["entities"], area)
+            if why:
+                rejected[why] += 1
                 continue
             cell_poles = [e for e in design["entities"] if e["name"] == POLE]
             target = min(cell_poles, key=lambda e: min(math.dist(_xy(e), _xy(p)) for p in poles))
             source = min(poles, key=lambda p: math.dist(_xy(p), _xy(target)))
+            # Both chain shapes are candidates: the survey takes the first legal one, so a chain that
+            # meets ore or a mine (LINK_POLE_LUA) leaves the other shape (seed 1032498969).
+            shapes = 0
             for horizontal_first in (True, False):
                 chain = pole_chain(source["position"], target["position"], horizontal_first=horizontal_first)
-                entities = design["entities"] + [e for e in chain if e["position"] != target["position"]]
-                tiles = [self.builder._occupied_by_plan([e]) for e in entities]
-                if sum(map(len, tiles)) != len(set().union(*tiles)):
+                why = self._link_error(design, area, chain, target, zones, land, planned)
+                if why:
+                    rejected[why] += 1
                     continue
-                if any(_overlaps(_area([e], 0), z) for e in chain for z in zones):
-                    continue
-                if hardware_conflicts(self.builder, entities, planned):
-                    continue
-                found.append(dict(design, entities=entities, reserved_area=area))
-                break
+                found.append(dict(design, entities=_linked(design, chain, target), reserved_area=area))
+                shapes += 1
+            if not shapes:
+                link_only.append((design, area, target))
             if len(found) >= MAX_SITE_CANDIDATES:
                 break
+        if len(found) < HOP_LINK_BELOW:
+            # Straight chains cross plan zones or ore around a lakeside plant (seed 4058652641: 105 chain
+            # shapes in a plan zone, 2 sites left): the nearest such sites get a pole-hop route that keeps
+            # off ore, mines and other blocks (power_grid.plan_connection) instead.
+            hop_zones = self._zones(obs, hop_link=True)
+            for design, area, target in link_only[:HOP_LINK_SITES]:
+                others = [e for e in design["entities"] if e is not target]
+                hop = plan_connection(
+                    self.game, self.builder, obs, target["position"], reserved=others, keep_out=hop_zones
+                )
+                if not hop.get("ok"):
+                    rejected["hop_link_" + str(hop.get("reason"))[:40]] += 1
+                    continue
+                why = self._link_error(design, area, hop["entities"], target, hop_zones, land, planned)
+                if why:
+                    rejected["hop_" + why] += 1
+                    continue
+                found.append(dict(design, entities=_linked(design, hop["entities"], target), reserved_area=area))
         if not found:
-            return {"ok": False, "reason": "no_supply_cell_site_off_ore_and_plan_zones"}
+            return {
+                "ok": False,
+                "reason": "no_supply_cell_site_off_ore_and_plan_zones",
+                "rejected_by": dict(rejected),
+                "plan_needs": make_needs(
+                    "site",
+                    "no_supply_cell_site_off_ore_and_plan_zones",
+                    block=BLOCK,
+                    rejected_by=dict(rejected),
+                ),
+            }
         payload = json.dumps(json.dumps(found, separators=(",", ":")))
-        surveyed = self.game.query(SURVEY_LUA.replace("PAYLOAD", payload))
+        mines = json.dumps(json.dumps(_mining_zones(self.game, obs), separators=(",", ":")))
+        surveyed = self.game.query(SURVEY_LUA.replace("ZONES", mines).replace("PAYLOAD", payload))
         if not isinstance(surveyed, dict) or not surveyed.get("ok"):
             return {"ok": False, "reason": (surveyed or {}).get("reason", "supply_cell_site_survey_failed")}
         chosen, clear = None, None
@@ -855,7 +964,12 @@ class SupplyCell:
                     chosen, clear = found[index - 1], check["clear_obstacles"]
                     break
         if chosen is None:
-            return {"ok": False, "reason": "no_clear_supply_cell_site", "candidates": len(found)}
+            return {
+                "ok": False,
+                "reason": "no_clear_supply_cell_site",
+                "candidates": len(found),
+                "rejected_by": dict(rejected),
+            }
         extra = {"clear_obstacles": clear, "clearance_world_id": obs["world_id"]} if clear else {}
         plan = _plan(
             chosen["entities"],
@@ -875,8 +989,36 @@ class SupplyCell:
             "phase": "build",
         }
 
-    def _zones(self, obs):
-        """Site-plan zone rects (bus band, mining, smelting, corridors, allocations) as areas."""
+    def _link_error(self, design, area, chain, target, zones, land, planned):
+        """Why the power link ``chain`` (poles to the cell pole ``target``) cannot serve ``design``, or None."""
+        entities = _linked(design, chain, target)
+        tiles = [self.builder._occupied_by_plan([e]) for e in entities]
+        if sum(map(len, tiles)) != len(set().union(*tiles)):
+            return "link_overlap"
+        if any(_overlaps(_area([e], 0), z) for e in chain for z in zones):
+            return "link_in_plan_zone"
+        if land.link_error(chain):
+            return "link_on_site_map_ore_or_water"
+        if hardware_conflicts(self.builder, entities, planned):
+            return "planned_hardware"
+        return None
+
+    def _site_land(self, obs):
+        """:class:`SiteLand` of this world's site map (no filter without a site service or map)."""
+        if self.site is None:
+            return SiteLand()
+        from .site.planmodel import SiteError
+
+        try:
+            return SiteLand(self.site.world(obs["world_id"]))
+        except (SiteError, OSError, ValueError, KeyError, AttributeError):
+            return SiteLand()
+
+    def _zones(self, obs, *, hop_link=False):
+        """Site-plan zone rects (bus band, mining, smelting, corridors, allocations) as areas.
+
+        ``hop_link``: only the zones a pole-hop power link must keep out of (``HOP_LINK_HARD_ZONES``).
+        """
         if self.site is None:
             return []
         from .site.planmodel import SiteError
@@ -885,7 +1027,17 @@ class SupplyCell:
             world = self.site.world(obs["world_id"])
         except SiteError as exc:
             return {"ok": False, "reason": "supply_cell_site_plan_unavailable", "detail": str(exc)[:200]}
-        return [[[r.x0, r.y0], [r.x1, r.y1]] for _, r in world.zones()]
+        from .remedy import option
+
+        # Declared relaxation (remedy rung ``relax:supply_cell_late_zones``): the temporary cell may stand
+        # in zones that are built long after it retires (district rows, rail).
+        skip = LATE_ZONE_PREFIXES if option("supply_cell_late_zones") else ()
+        keep = HOP_LINK_HARD_ZONES if hop_link else None
+        return [
+            [[r.x0, r.y0], [r.x1, r.y1]]
+            for owner, r in world.zones()
+            if not (skip and str(owner).startswith(skip)) and (keep is None or str(owner).startswith(keep))
+        ]
 
     def _publish(self, obs, state):
         board = Board(self.game, self.builder, self.catalog)

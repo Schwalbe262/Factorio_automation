@@ -108,6 +108,17 @@ def feed_trace(coal_plan: dict, power_plan: dict) -> dict:
     return {"ok": True, "entities": traced["entities"], "destination": destination}
 
 
+def join_rank(tap, joins) -> tuple:
+    """Sort key of a tap: (faces away from its nearest join, tiles to that join); joins absent: (0, 0)."""
+    if not joins:
+        return (0, 0)
+    tx, ty = xy(tap["port"])
+    qx, qy = min((xy(j["port"]) for j in joins), key=lambda q: abs(q[0] - tx) + abs(q[1] - ty))
+    vx, vy = VECTORS.get(tap["port"].get("facing"), (0, 0))
+    away = (qx - tx) * vx + (qy - ty) * vy < 0
+    return (int(away), abs(qx - tx) + abs(qy - ty))
+
+
 def join_candidates(rows, occupied) -> list[dict]:
     """Straight feed belts a branch may side-load onto: ``{"index", "target", "port"}``.
 
@@ -305,6 +316,10 @@ class PowerCoalTap:
                 failures.append({"reason": route.get("reason"), "stage": "route", "join": join["index"]})
             return False
 
+        # Every feasible tap row first, then routed nearest a join and facing it first: the route
+        # budget is spent where a branch is short (seed 3111291866: two south-facing taps used all
+        # six routes; the north-facing ones beside the feed were never routed).
+        taps = []
         planned = mine_trunk.plan_tap(
             bank,
             obs,
@@ -313,8 +328,11 @@ class PowerCoalTap:
             demand=demand,
             serve="first",
             stations=mine_trunk.stations(self.root, obs["world_id"], key, exclude=TAP_NAME),
-            accept=accept,
+            accept=lambda tap: taps.append(tap) and False,
         )
+        for tap in sorted(taps, key=lambda t: join_rank(t, joins)):
+            if accept(tap) or attempts[0] >= ROUTE_ATTEMPTS:
+                break
         if not chosen:
             failure = planned if not planned.get("ok") else {"reason": "power_coal_tap_no_route"}
             return dict(failure, ok=False, failures=failures[-6:], route_attempts=attempts[0])

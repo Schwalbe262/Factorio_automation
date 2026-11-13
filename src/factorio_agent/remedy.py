@@ -167,7 +167,16 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     "brick_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "steel_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "steel_supply": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
-    "supply_cell": (ROUTE_RELAX_1,),
+    "supply_cell": (
+        ROUTE_RELAX_1,
+        Rung(
+            "relax:supply_cell_late_zones",
+            "relax",
+            {"supply_cell_late_zones": True},  # supply_cell.LATE_ZONE_PREFIXES
+            kinds=("site", "power", "plan"),
+            note="the temporary cell may stand in district and rail zones, built long after it retires",
+        ),
+    ),
     "oil_gathering": (
         Rung(
             "site:wider_survey",
