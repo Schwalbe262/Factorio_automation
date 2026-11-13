@@ -55,8 +55,10 @@ Pipeline sizing uses the existing source segment's native bounding box plus the
 new crude network. The 2.1.20 runtime exposes
 `prototypes.utility_constants.default_pipeline_extent == 320`; the inspected source
 and proposed central district fit that limit. A larger extent returns
-`pipeline_requires_explicit_pump_segment`; this controller does not pretend that a
-longer network works without a separately planned powered pump. Runtime methods
+inline powered pumps that split the crude pipe into segments below the extent
+(`pump_segments`, `plan_pumps`; the fluid edges join each pump to the pipes behind and
+in front of it; the proof checks each pipe's own segment, the pump's direction and power).
+Without a straight spot or power it still returns `pipeline_requires_explicit_pump_segment`. Runtime methods
 are documented on [LuaEntity](https://lua-api.factorio.com/latest/classes/LuaEntity.html).
 
 Proof uses `get_fluid_box_neighbours(index)`, `get_fluid(index)` and
