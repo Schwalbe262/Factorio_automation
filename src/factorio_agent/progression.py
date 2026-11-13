@@ -254,7 +254,16 @@ ROADMAP: tuple[Step, ...] = (
     _research("engine"),
     _research("fluid-handling"),
     _research("oil-gathering"),
-    Step("dedicated_materials_coal", "dedicated_materials", {"resource": "coal"}, after=("main_bus",)),
+    # The hand-served starter coal cells stand on the best coal sites; the
+    # dedicated bank found its only site obstructed by them (seed 4176033748),
+    # so it waits until they are retired.
+    Step(
+        "dedicated_materials_coal",
+        "dedicated_materials",
+        {"resource": "coal"},
+        after=("main_bus",),
+        gate="starter_coal_retired",
+    ),
     Step("dedicated_materials_stone", "dedicated_materials", {"resource": "stone"}, after=("main_bus",)),
     # On a planned world steel and bricks are site-planned furnace blocks
     # (planned_furnaces.py): the steel block routes the dedicated "coal"
@@ -403,12 +412,37 @@ def gate_ready(step: Step, jobs, observation: Mapping) -> bool:
     ``machine_made_belts``: ``power_coal_feed.feed_step_ready`` (belts come
     from a supply cell or produce row, the fallback time passed, or the power
     job of an old map already built the feed).
+    ``starter_coal_retired``: see ``_starter_coal_retired``.
     """
     if step.gate == "machine_made_belts":
         from .power_coal_feed import feed_step_ready
 
         return feed_step_ready(jobs, observation)
+    if step.gate == "starter_coal_retired":
+        return _starter_coal_retired(jobs, observation)
     return step.gate is None
+
+
+# Game ticks after the main bus before the dedicated coal bank stops waiting
+# for the starter coal cells (30 min): a map where they are never retired
+# must still get its coal bank attempt.
+STARTER_COAL_WAIT_TICKS = 108000
+
+
+def _starter_coal_retired(jobs, observation: Mapping) -> bool:
+    """The starter coal cells are gone (their retirement job succeeded), or the wait ran out."""
+    bus_tick = None
+    for job in jobs:
+        if job.get("status") != "succeeded":
+            continue
+        if job.get("capability") == "starter_retirement" and job.get("parameters", {}).get("resource") == "coal":
+            return True
+        if job.get("capability") == "planned_main_bus":
+            bus_tick = job.get("last_tick")
+    tick = observation.get("tick")
+    if isinstance(bus_tick, (int, float)) and isinstance(tick, (int, float)):
+        return tick - bus_tick >= STARTER_COAL_WAIT_TICKS
+    return bus_tick is None
 
 
 def _research_ready(step: Step, observation: Mapping) -> bool:
