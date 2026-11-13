@@ -27,7 +27,7 @@ from factorio_agent.core.deterministic_builder import _plan
 
 from .manufacturing import connect_power_groups
 from .planning import overlap, preflight
-from . import planned_tap
+from . import planned_tap, remedy
 from .production_layout import audit_line, design_line, input_demand, rows
 from .production_sources import resolve
 from .site.fit import orientations
@@ -227,7 +227,8 @@ def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner:
     options, choice = _choose(obs, catalog, site, design, owner, returns_to_bus)
     if not options:
         return {"ok": False, "reason": "no_layout_candidate_fits_a_site", "infeasible": choice["infeasible"][-6:]}
-    chosen = options[choice["index"]]
+    # Remedy ladder rung "layout:next_variant" (remedy.RELAXATIONS): start with the next ranked candidate.
+    chosen = options[(choice["index"] + int(remedy.option("layout_rotate", 0) or 0)) % len(options)]
     order = [chosen] + [o for o in options if o is not chosen]
     tried = []
     result = None

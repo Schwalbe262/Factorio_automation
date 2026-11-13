@@ -167,6 +167,17 @@ checked / fitted / applied / resolved, so a fleet shows which planners still
 dead-end. A capability without a pure `prepare` keeps the older auto-retry
 rules (`_auto_retry`, `_replan_retry`).
 
+On the ladder today (pure `prepare` + declared rungs): `mining_outpost` (shrink
+drills), `dedicated_materials` (trunk-tap failure named in `change`),
+`smelting_district`, `planned_main_bus`, `produce` (next row layout, routes),
+`logistic_science` (other green form, routes), `supply_cell`, `steam_expansion`,
+`brick_production` / `steel_production` (planned furnace block), `trunk_return_feed`.
+Route rungs use one shared lever (`remedy.ROUTE_RELAX` read by
+`transport.plan_connection`). Not yet: a `clear` rung (no planner declares one;
+trees and rocks are already cleared by every plan, `site/nature.py`; rerouting
+another block's bridge or belt needs a guarded rebuild rule first) and
+`steel_supply` (no pure prepare on a planned world).
+
 Inside a job, `StarterExecutors.step` first runs shared upkeep before the
 capability's own controller: `pending_repair` and `_approved_initial_defense`
 (`executors.py:734-751`); most handlers then call `handlers.upkeep.shared_upkeep`
