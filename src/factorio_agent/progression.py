@@ -709,48 +709,69 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
 
 
 def science_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
-    """One ``science_growth`` node when the receipt's ``science_growth`` decision grows the staged block.
+    """One ``science_growth`` node when a growth receipt grows a staged science block.
 
-    The decision (``science_growth.growth_decision``) already holds the
-    evidence rule; here only: the capability exists, its ``requires``
-    succeeded, no growth node or job is open, and the same target has not
-    stalled (blocked/failed) before.
+    The red block (receipt ``science_growth``, ``science_growth.growth_decision``:
+    ``{labs, machines}``) first, then every other pack block (receipt ``pack_growth``,
+    ``pack_growth.growth_decision``: ``{pack, machines}``). The decisions hold the
+    evidence rule; here only: the capability exists, its ``requires`` succeeded, no
+    growth node or job is open, and the same target has not stalled (blocked/failed).
     """
     if SCIENCE_GROWTH_CAPABILITY not in capabilities:
-        return []
-    row = observation.get("science_growth")
-    if not isinstance(row, Mapping) or not row.get("grow"):
         return []
     succeeded = {job.get("capability") for job in jobs if job.get("status") == "succeeded"}
     if not set(capabilities[SCIENCE_GROWTH_CAPABILITY].get("requires", [])) <= succeeded:
         return []
-    labs, machines = row.get("target_labs"), row.get("target_machines")
-    if type(labs) is not int or type(machines) is not int:
-        return []
-    parameters = {"labs": labs, "machines": machines}
+    # The red block (labs and red machines) first, then every other pack block (pack_growth receipt).
+    wanted = []
+    row = observation.get("science_growth")
+    if isinstance(row, Mapping) and row.get("grow"):
+        labs, machines = row.get("target_labs"), row.get("target_machines")
+        if type(labs) is int and type(machines) is int:
+            wanted.append(({"labs": labs, "machines": machines}, f"{labs}_{machines}", row))
+    packs = observation.get("pack_growth")
+    for pack, pack_row in sorted(packs.items()) if isinstance(packs, Mapping) else ():
+        machines = (pack_row or {}).get("target_machines")
+        if isinstance(pack_row, Mapping) and pack_row.get("grow") and type(machines) is int:
+            wanted.append(({"pack": pack, "machines": machines}, f"{pack}_{machines}", pack_row))
     for node in queue_nodes:
         if node.get("capability") == SCIENCE_GROWTH_CAPABILITY and node.get("status", "pending") in OPEN_NODE_STATUSES:
             return []
     for job in jobs:
-        if job.get("capability") != SCIENCE_GROWTH_CAPABILITY:
-            continue
-        if job.get("status") not in TERMINAL_STATUSES:
+        if job.get("capability") == SCIENCE_GROWTH_CAPABILITY and job.get("status") not in TERMINAL_STATUSES:
             return []
-        if job.get("status") in STALLED_STATUSES and job.get("parameters") == parameters:
-            return []
-    node_id = f"{NODE_PREFIX}science_growth_{labs}_{machines}"
+    for parameters, suffix, row in wanted:
+        node = _science_growth_node(jobs, queue_nodes, parameters, suffix, row)
+        if node is not None:
+            return [node]
+    return []
+
+
+def _science_growth_node(jobs, queue_nodes, parameters, suffix, row) -> dict | None:
+    """The node for one growth target, unless the same target stalled before or is queued."""
+    target = (
+        f"{parameters['labs']} labs, {parameters['machines']} machines"
+        if "labs" in parameters
+        else f"{parameters['machines']} {parameters['pack']} machines"
+    )
+    for job in jobs:
+        if (
+            job.get("capability") == SCIENCE_GROWTH_CAPABILITY
+            and job.get("status") in STALLED_STATUSES
+            and job.get("parameters") == parameters
+        ):
+            return None
+    node_id = f"{NODE_PREFIX}science_growth_{suffix}"
     if node_id in {node.get("id") for node in queue_nodes}:
-        return []
-    return [
-        {
-            "id": node_id,
-            "capability": SCIENCE_GROWTH_CAPABILITY,
-            "parameters": parameters,
-            "priority": SCIENCE_GROWTH_PRIORITY,
-            "depends_on": [],
-            "reason": f"science growth to {labs} labs, {machines} machines: {row.get('reason', '')}"[:300],
-        }
-    ]
+        return None
+    return {
+        "id": node_id,
+        "capability": SCIENCE_GROWTH_CAPABILITY,
+        "parameters": parameters,
+        "priority": SCIENCE_GROWTH_PRIORITY,
+        "depends_on": [],
+        "reason": f"science growth to {target}: {row.get('reason', '')}"[:300],
+    }
 
 
 def defense_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:

@@ -318,7 +318,13 @@ def execute(argv=None, services=None):
 
             try:
                 jobs_list = list(Ledger(root).data["jobs"].values())
-                obs["research_capacity"] = research_capacity_receipt(services.catalog(root, game), jobs_list, obs)
+                from .pack_growth import receipt_inputs
+
+                # The real growth unit of each built pack block and the district's unclaimed plates.
+                units, spare = receipt_inputs(root, services.catalog(root, game), obs)
+                obs["research_capacity"] = research_capacity_receipt(
+                    services.catalog(root, game), jobs_list, obs, units=units, plate_spare=spare
+                )
             except Exception as exc:  # a sizing estimate must never break observe
                 obs["research_capacity_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .science_growth import growth_receipt
@@ -330,6 +336,15 @@ def execute(argv=None, services=None):
                     obs["science_growth"] = growth
             except Exception as exc:  # a growth estimate must never break observe
                 obs["science_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .pack_growth import growth_receipt as pack_growth_receipt
+
+            try:  # every other pack block (green split row): science_growth {pack, machines}
+                jobs_list = list(Ledger(root).data["jobs"].values())
+                packs = pack_growth_receipt(root, services.catalog(root, game), jobs_list, obs)
+                if packs is not None:
+                    obs["pack_growth"] = packs
+            except Exception as exc:  # a growth estimate must never break observe
+                obs["pack_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .throughput_growth import growth_receipt as throughput_growth_receipt
 
             try:

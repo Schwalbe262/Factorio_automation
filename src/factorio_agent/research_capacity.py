@@ -558,7 +558,12 @@ def _machine_demand(catalog, item, rate, speed, depth, out) -> None:
                 _machine_demand(catalog, ingredient["name"], crafts * amount, speed, depth + 1, out)
 
 
-def expansion_costs(catalog, pack, *, current_assemblers=1, machine=DEFAULT_MACHINE) -> dict:
+def unit_machines(bill: Mapping[str, float]) -> int:
+    """Crafting machines placed by one production unit ``bill`` (entity name -> count)."""
+    return int(sum(n for name, n in bill.items() if str(name).startswith("assembling-machine")))
+
+
+def expansion_costs(catalog, pack, *, current_assemblers=1, machine=DEFAULT_MACHINE, unit_bill=None) -> dict:
     """Raw cost of one more lab and of one more science production unit for ``pack``.
 
     Ratio rule for upstream machines: ``n`` consumers making ``r`` packs/min
@@ -569,11 +574,28 @@ def expansion_costs(catalog, pack, *, current_assemblers=1, machine=DEFAULT_MACH
     ``f(n) = n / 10``: one gear assembler feeds ten science assemblers, so
     the second and third science assemblers need no new gear assembler.
     Every machine of the unit also gets ``INSERTERS_PER_ASSEMBLER`` inserters.
+
+    The ratio rule assumes upstream machines are shared (a belt between them). A block
+    whose intermediates are direct-inserted (a green cluster) or whose next unit is a
+    reserved slot (a split row's pack slot) passes the real unit instead: ``unit_bill``
+    (entity name -> count of what one more pack machine's unit places, from the block's
+    geometry: ``pack_growth.unit_bill``); its raw cost and machine count replace the rule.
     """
     speed = finite_number(catalog.entities[machine].get("crafting_speed"))
     if not speed or speed <= 0:
         raise ValueError(machine + " crafting speed unknown")
     rate = pack_rate_per_assembler(catalog, pack, machine)
+    if unit_bill:
+        bill = {str(name): float(n) for name, n in unit_bill.items() if finite_number(n) and n > 0}
+        return {
+            "assembler": {name: round(amount, 3) for name, amount in raw_cost(catalog, bill).items()},
+            "lab": {name: round(amount, 3) for name, amount in raw_cost(catalog, {"lab": 1}).items()},
+            "pack": {name: round(amount, 3) for name, amount in raw_cost(catalog, {pack: 1}).items()},
+            "machines_per_assembler": max(1, unit_machines(bill)),
+            "extra_upstream_machines": {},
+            "pack_rate_per_assembler": rate,
+            "unit_bill": {name: int(n) for name, n in sorted(bill.items())},
+        }
     pack_recipe = catalog.recipe_for_product(pack)["name"]
 
     def upstream(count):
@@ -794,15 +816,37 @@ def split_producible(targets, produced: Iterable[str], pack_stock: Mapping[str, 
     return ok, blocked
 
 
-def research_capacity_receipt(catalog, jobs, observation: Mapping, *, horizon=4) -> dict:
+def with_spare(evidence: Mapping, spare: Mapping | None) -> dict:
+    """``evidence`` with each plate's ``net_per_minute`` raised to its unclaimed district capacity ``spare``.
+
+    While a district furnace holds full output, measured net = produced - consumed is capped by
+    consumption and says nothing about headroom (``science_growth.district_spare``); the materials
+    cap then reads the spare instead.
+    """
+    out = dict(evidence or {})
+    for item, rate in (spare or {}).items():
+        row = out.get(item)
+        value = finite_number(rate)
+        if isinstance(row, Mapping) and value and value > (finite_number(row.get("net_per_minute")) or 0.0):
+            out[item] = dict(row, net_per_minute=value, net_from="district_spare")
+    return out
+
+
+def research_capacity_receipt(
+    catalog, jobs, observation: Mapping, *, horizon=4, units: Mapping | None = None, plate_spare=None
+) -> dict:
     """The planner's decision for the running (or next) research queue, for the observe receipt.
 
     Sized on the technologies whose packs have a producer (``split_producible``); the
-    others are listed in ``blocked_by_missing_pack``.
+    others are listed in ``blocked_by_missing_pack``. ``units`` (pack -> unit bill, from the
+    built pack blocks: ``pack_growth.unit_bills``) prices one more production unit of that
+    pack as the block really grows (a reserved slot, or a whole second cluster) instead of the
+    shared-upstream ratio rule; ``plate_spare`` lifts the plate evidence (``with_spare``).
     """
     researched = _researched(observation)
     targets = queue_targets(catalog, jobs, observation, horizon=horizon)
-    evidence = _evidence_from_supply(observation)
+    evidence = with_spare(_evidence_from_supply(observation), plate_spare)
+    units = units or {}
     receipt: dict[str, Any] = {}
     if targets:
         packs = sorted({pack for target in targets for pack in target.packs_per_unit})
@@ -816,7 +860,12 @@ def research_capacity_receipt(catalog, jobs, observation: Mapping, *, horizon=4)
     if targets:
         packs = sorted({pack for target in targets for pack in target.packs_per_unit})
         hardware = hardware_from_observation(catalog, observation, packs)
-        costs = {pack: expansion_costs(catalog, pack, current_assemblers=hardware.assemblers[pack]) for pack in packs}
+        costs = {
+            pack: expansion_costs(
+                catalog, pack, current_assemblers=hardware.assemblers[pack], unit_bill=units.get(pack)
+            )
+            for pack in packs
+        }
         materials = ResearchMaterials(
             evidence=evidence,
             assembler_cost={pack: row["assembler"] for pack, row in costs.items()},
@@ -825,6 +874,14 @@ def research_capacity_receipt(catalog, jobs, observation: Mapping, *, horizon=4)
             machines_per_assembler={pack: row["machines_per_assembler"] for pack, row in costs.items()},
         )
         receipt["decision"] = plan_research_capacity(targets, hardware, materials).as_dict()
+        receipt["units"] = {
+            pack: {
+                "bill": row.get("unit_bill") or "ratio rule (shared upstream)",
+                "machines": row["machines_per_assembler"],
+                "raw_cost": row["assembler"],
+            }
+            for pack, row in costs.items()
+        }
     wanted = [name for name in roadmap_wanted_technologies(list(jobs or ()), researched, horizon=12)]
     recommended = {}
     for pack in RECOMMENDED_PACKS:

@@ -47,6 +47,8 @@ jobs.run_jobs: per pass one observe and at most one drill-cell survey (bootstrap
 | Plan | `capacity_planning.py` | `plan_capacity`: starter cells, wait vs expand by time |
 | Plan | `research_capacity.py` | labs + science assemblers sized together; `research_capacity_receipt`, `recommended_science_rate` |
 | Plan | `science_growth.py` | staged red science block: start size, reserved slots, evidence growth rule (`science_growth` capability) |
+| Plan | `pack_growth.py` | every other pack block (green split row): same chain, real growth unit, declared plate draw, next unit when no slot (`science_growth {pack, machines}`) |
+| Plan | `lab_feed.py` | lab feed audit: every built lab gets every pack, one pack per lane (`belt_flow`; bandwidth block type `lab_feed`) |
 | Plan | `research_policy.py` | `choose_research` from catalog data (idle research lane) |
 | Plan | `incidents.py` | incident kinds, remedy menus, incident documents, `check_decision` |
 | Plan | `plan_needs.py`, `remedy.py` | failure contract `needs` of planners; remedy ladder rungs, options, resolver, read-only `what_if` |
@@ -170,7 +172,8 @@ rules (`_auto_retry`, `_replan_retry`).
 On the ladder today (pure `prepare` + declared rungs): `mining_outpost` (shrink
 drills), `dedicated_materials` (trunk-tap failure named in `change`),
 `smelting_district`, `planned_main_bus`, `produce` (next row layout, routes),
-`logistic_science` (other green form, routes), `supply_cell`, `steam_expansion`,
+`logistic_science` (other green form, routes), `science_growth` (pack slots: dry run, replan only),
+`supply_cell`, `steam_expansion`,
 `brick_production` / `steel_production` / `steel_supply` (planned furnace block),
 `trunk_return_feed` (`site:past_first_tap`), `steam_expansion` (`site:wider_steam_search`),
 `engine_production` / `ammo_production` (produce rows on a planned world, `produce` rungs),

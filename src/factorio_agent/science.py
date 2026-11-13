@@ -717,8 +717,19 @@ class AutomaticScience:
 
 
 def validate_growth(parameters):
+    """``{labs, machines}`` (the red block and its labs) or ``{pack, machines}`` (another pack block's
+    reserved slots, ``pack_growth.PACK_STATES``)."""
+    from .pack_growth import PACK_STATES
+
+    if isinstance(parameters, dict) and set(parameters) == {"pack", "machines"}:
+        if parameters["pack"] not in PACK_STATES:
+            raise ValueError("science_growth pack must have a growing block: " + ", ".join(sorted(PACK_STATES)))
+        value = parameters["machines"]
+        if type(value) is not int or not 1 <= value <= 12:
+            raise ValueError("science_growth machines must be an integer in [1,12]")
+        return
     if not isinstance(parameters, dict) or set(parameters) != {"labs", "machines"}:
-        raise ValueError("science_growth requires labs and machines")
+        raise ValueError("science_growth requires labs and machines, or pack and machines")
     for key in ("labs", "machines"):
         value = parameters[key]
         if type(value) is not int or not 1 <= value <= 8:

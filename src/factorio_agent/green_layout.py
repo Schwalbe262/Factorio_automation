@@ -16,8 +16,8 @@ from the recipe tree (``blocks.cluster``), never copied:
   belt, one pack machine built first and ``FRAME`` slots reserved, packs on a pack
   belt to the output port at the far end. Growth = extending the row in place up
   to the frame (the sub-clusters already carry it), limited by the sub-clusters'
-  one output arm each (``inserter_rate``); building the reserved slots needs a
-  green growth capability (not implemented: the slots are reservations today).
+  one output arm each (``inserter_rate``); the reserved slots are built by
+  ``science_growth {pack, machines}`` (``pack_growth.py``).
 
 Plate ports of both face the bus edge (west in the canonical frame); the cluster's
 pack port is on a free side of its pack machine (the placement picks it), the
@@ -148,8 +148,15 @@ def split_block(catalog: Any, frame: int = FRAME, origin: tuple[int, int] = (0, 
     ports_out = port(PACK, end, y - 6, 4, "output")
     row = [e for group in slots[:built] for e in group] + middle + pack_belt
     growth = [group for group in slots[built:]]
-    inputs = [p for p in ins["ports"] if p["direction"] == "input"] + [
-        p for p in belts["ports"] if p["direction"] == "input"
+    # Each plate input's own draw per pack (its sub-cluster's subtree), so a tap declares what that
+    # port takes and not the pack's whole draw of the item (two iron inputs).
+    inputs = [
+        dict(p, per_pack=_per_pack(catalog, "inserter", p["item"])) for p in ins["ports"] if p["direction"] == "input"
+    ]
+    inputs += [
+        dict(p, per_pack=_per_pack(catalog, "transport-belt", p["item"]))
+        for p in belts["ports"]
+        if p["direction"] == "input"
     ]
     entities = list(ins["entities"]) + list(belts["entities"]) + row
     tiles = set()
@@ -179,6 +186,16 @@ def split_block(catalog: Any, frame: int = FRAME, origin: tuple[int, int] = (0, 
         sub_clusters={"inserter": _summary(ins), "transport-belt": _summary(belts)},
     )
     return _shift(plan, origin[0] - x0, origin[1] - y0)
+
+
+def _per_pack(catalog: Any, sub: str, item: str) -> float:
+    """Raw ``item`` per green pack through the ``sub`` intermediate (pack recipe amount x the sub's raw draw)."""
+    from .manufacturing import raw_demand
+
+    recipe = catalog.recipes[PACK]
+    made = sum(p["amount"] for p in recipe["products"] if p["name"] == PACK) or 1
+    amount = sum(i["amount"] for i in recipe["ingredients"] if i["name"] == sub) / made
+    return round(amount * raw_demand(catalog, sub, 1.0)["raw_items_per_minute"].get(item, 0.0), 6)
 
 
 def _summary(plan: dict) -> dict:
@@ -278,7 +295,8 @@ def describe(catalog: Any, genome: GreenGenome, plan: dict, rate: float) -> dict
             "max_rate_in_place": round(top, 3),
             "limit": "sub_cluster_output_arm" if top < plan["frame"] * each else "frame_slots",
             "beyond": "second_split_row",
-            "capability": "not_implemented",
+            # The reserved pack slots are built by science_growth {pack, machines} (pack_growth.py).
+            "capability": "science_growth",
         }
         sides = ["W"]
         relation = "opposite"
