@@ -12,7 +12,10 @@ def electric_coal_step(ex, obs, parameters):
         return early
     # During cutover the old source may be absent for one observed
     # action. Do not run ensure_power here and rebuild that old drill.
-    return ex.electric_coal.step(obs)
+    result = ex.electric_coal.step(obs)
+    from ..power_coal_feed import publish_planned_feed  # drops the feed's upgrade site once the drill is electric
+
+    return publish_planned_feed(ex, obs) or result
 
 
 def electric_coal_proof(ex, obs, result, parameters):

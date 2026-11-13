@@ -48,6 +48,41 @@ def fringe_coal_cells(make_cell, sites):
     return cells
 
 
+FEED_BLOCK = "power_coal_feed"  # power_coal_feed.BLOCK: the feed's own reservation
+
+
+def feed_keepouts(builder, obs) -> set:
+    """Tile centres the coal feed must not use: ``board.starter_keepouts`` without the feed's own block.
+
+    Empty when the builder has no runtime folder (unit-test builders).
+    """
+    from .board import keepout_tiles, starter_keepouts
+
+    path = getattr(builder, "path", None)
+    if path is None:
+        return set()
+    return keepout_tiles(starter_keepouts(Path(path).parent, obs, exclude=(FEED_BLOCK,)))
+
+
+def keepout_entities(tiles) -> list:
+    """One-tile placeholder rows for ``tiles`` so a route search treats them as occupied.
+
+    Routers mark every non-belt ``reserved`` row's footprint as hard; a
+    placeholder never reaches a plan or the game.
+    """
+    return [{"name": "wooden-chest", "position": {"x": x, "y": y}, "direction": 0} for x, y in sorted(tiles)]
+
+
+ROUTE_KEEPOUT_MARGIN = 24  # a belt route search box spans its two ends plus 16 tiles (transport.plan_connection)
+
+
+def near(tiles, ends, margin=ROUTE_KEEPOUT_MARGIN):
+    """The ``tiles`` inside the box around ``ends`` grown by ``margin``."""
+    xs, ys = [p[0] for p in ends], [p[1] for p in ends]
+    x0, x1, y0, y1 = min(xs) - margin, max(xs) + margin, min(ys) - margin, max(ys) + margin
+    return {(x, y) for x, y in tiles if x0 <= x <= x1 and y0 <= y <= y1}
+
+
 def identity(entity):
     return (entity["name"], entity["position"]["x"], entity["position"]["y"], entity.get("direction", 0))
 
@@ -186,7 +221,16 @@ class V2FactoryBuilder(FactoryBuilder):
             return failure("starter_coal_planning_budget_exhausted")
         power_entities, pins = _power_preflight_projection(power, obs)
         power_guard = _power_pipe_guard(pins)
-        cells = fringe_coal_cells(self._coal_plan, self.coal_sites_richest_first())[:STARTER_COAL_CANDIDATES]
+        # What other planners reserved (board blocks, their unbuilt hardware,
+        # pending starter cells) is not free land for the feed (seeds
+        # 2212603376, 1590659659: the feed drill was planned on a starter cell
+        # whose drill was built later). Its own block is the old reservation.
+        keep = feed_keepouts(self, obs)
+        cells = [
+            cell
+            for cell in fringe_coal_cells(self._coal_plan, self.coal_sites_richest_first())
+            if not self._occupied_by_plan(cell["entities"]) & keep
+        ][:STARTER_COAL_CANDIDATES]
         if expired():
             return failure("starter_coal_planning_budget_exhausted")
         if not cells:
@@ -245,6 +289,8 @@ return {ok=true,legal=legal}
                 continue
             try:
                 reserved = merge_entities(power_entities, cell["entities"])
+                ends = {xy(cell["ports"][0]), xy(destinations[0])}
+                reserved = reserved + keepout_entities(near(keep - ends, ends))
                 if expired():
                     return failure("starter_coal_planning_budget_exhausted")
                 attempts += 1
@@ -253,6 +299,9 @@ return {ok=true,legal=legal}
                     failures.append({"candidate": index, "stage": "route", "reason": route.get("reason")})
                     continue
                 entities = merge_entities(cell["entities"], route["entities"])
+                if self._occupied_by_plan(route["entities"]) & keep:
+                    failures.append({"candidate": index, "stage": "keepout", "reason": "route_meets_reserved_land"})
+                    continue
                 whole = preflight(planning_game, self, obs, merge_entities(power_entities, entities))
             except ValueError as exc:
                 failures.append({"candidate": index, "stage": "geometry", "reason": str(exc)})

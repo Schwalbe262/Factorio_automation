@@ -42,6 +42,18 @@ def power_flow_ready(evidence: dict[str, Any]) -> bool:
 HAND_FED = "hand_fed"
 BELT_FED = "belt_fed"
 COAL_FEED_REPLANS = 2  # new routes ensure_coal_feed may choose when the reserved one got built over
+# ensure_plan reasons meaning another owner's entity stands on an unbuilt feed's tile.
+COAL_FEED_TAKEN_REASONS = (
+    "reserved block placement is obstructed",
+    "existing entity direction differs from reserved plan",
+    "existing underground endpoint differs from reserved plan",
+)
+# planning.preflight reasons meaning the same (resource-policy reasons are not a taken tile).
+COAL_FEED_PREFLIGHT_TAKEN = (
+    "block_protected_entity_obstruction",
+    "block_terrain_or_immovable_obstruction",
+    "owned_block_entity_configuration_changed",
+)
 
 
 def coal_feed_mode(state: dict[str, Any]) -> str:
@@ -152,6 +164,15 @@ def _direction_matches(name: str, actual: int, planned: int) -> bool:
     if name in {"steam-engine", "steam-turbine"}:
         return actual % 8 == planned % 8
     return actual == planned
+
+
+def _built_as_planned(observation: dict, entity: dict) -> bool:
+    """An observed entity of the plan row's name, position and direction (another owner's drill
+    on the same tile facing elsewhere is not the planned one)."""
+    actual = _find(observation, entity)
+    return actual is not None and _direction_matches(
+        entity["name"], actual.get("direction", 0), entity.get("direction", 0)
+    )
 
 
 def plan_observed(observation: dict, plan: dict) -> bool:
@@ -1257,16 +1278,27 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
         if not self.state.get("coal_feed_started"):
             self.state["coal_feed_started"] = True  # the feed is now part of the construction bill
             self._save()
-        result = self._ensure_belt_fed_power(observation, power, "coal_feed_sample_tick")
-        if (
-            result.get("reason") == "reserved block placement is obstructed"
-            and coal_feed_mode(self.state) == HAND_FED
+        replannable = (
+            coal_feed_mode(self.state) == HAND_FED
             and self.state.get("coal_feed_replans", 0) < COAL_FEED_REPLANS
-            and not any(_find(observation, e) for e in self.state["coal_plan"]["entities"])
-        ):
+            and not any(_built_as_planned(observation, e) for e in self.state["coal_plan"]["entities"])
+        )
+        # The whole unbuilt feed is checked before its first entity is built:
+        # ensure_plan stops at the first taken tile, and by then the drill and
+        # half the belt stood (seed 2005199778: a lab on the route near the
+        # boiler), so the route could no longer be re-planned.
+        taken = self._coal_feed_taken(observation) if replannable else None
+        result = (
+            _report("blocked", "reserved block placement is obstructed", **taken)
+            if taken
+            else self._ensure_belt_fed_power(observation, power, "coal_feed_sample_tick")
+        )
+        if replannable and result.get("reason") in COAL_FEED_TAKEN_REASONS:
             # Something was built on the reserved route while the boiler was
-            # hand-fed (e.g. a starter cell). Nothing of the feed stands yet,
-            # so choose a new route instead of blocking.
+            # hand-fed (a starter cell, a lab; or a pending starter cell's
+            # drill stands on the feed drill's tile, "direction differs").
+            # Nothing of the feed stands yet, so choose a new route instead of
+            # blocking.
             self.state.pop("coal_plan")
             self.state["coal_feed_replans"] = self.state.get("coal_feed_replans", 0) + 1
             self._save()
@@ -1285,6 +1317,24 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
             "steam power has a dedicated self-fueled coal feed; boiler hand-fuelling stopped",
             **result["evidence"],
         )
+
+    def _coal_feed_taken(self, observation: dict) -> dict | None:
+        """Evidence of the first saved-feed entity another entity now blocks, or None.
+
+        Native ``planning.preflight`` over the whole saved ``coal_plan`` (trees
+        and rocks are clearable, not taken). Only used while nothing of the
+        feed stands, so every observed collider belongs to another owner.
+        """
+        from factorio_agent.planning import preflight
+
+        try:
+            check = preflight(self.game, self, observation, self.state["coal_plan"]["entities"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if check.get("ok") or check.get("reason") not in COAL_FEED_PREFLIGHT_TAKEN:
+            return None
+        taken = {k: check[k] for k in ("entity", "position") if k in check}
+        return dict(taken, preflight_reason=str(check.get("reason", "coal_feed_preflight_failed")))
 
     def _ensure_belt_fed_power(self, observation: dict, power: dict, sample_key: str) -> dict:
         """Build/repair the dedicated coal feed and verify belt-fed flow (``power_flow_ready``)."""

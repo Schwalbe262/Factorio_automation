@@ -24,8 +24,9 @@ Rules (docs/v2/PLANNERS.md "Starter power in two phases"):
 4. ``FactoryBuilder.ensure_coal_feed`` builds and proves the feed; success sets
    ``power_mode: belt_fed`` and hand-fuelling stops (rule 2 no longer applies).
 5. ``publish_planned_feed`` keeps the unbuilt feed on the board as block
-   ``power_coal_feed`` so no other block is placed on its route; the block is
-   removed once the feed is belt-fed (its hardware then stands on the map).
+   ``power_coal_feed`` so no other block is placed on its route or on the
+   electric drill site that replaces its burner drill; the block is removed
+   once the feed is belt-fed and the drill is electric.
 6. ``hand_fed_coal_per_minute`` is the boiler's coal burn for the capacity
    planner's coal rule while the boiler is hand-fed.
 """
@@ -288,7 +289,10 @@ def feed_in_bill(state: Mapping) -> bool:
 
 
 def publish_planned_feed(ex, obs) -> dict | None:
-    """Keep the reserved, unbuilt feed on the board while the boiler is hand-fed; drop it once belt-fed.
+    """Keep the reserved feed on the board while the boiler is hand-fed or the drill is still a burner.
+
+    Dropped once the feed is belt-fed and ``electric_coal`` replaced the drill
+    (called from the ``power``, ``power_coal_feed`` and ``electric_coal`` steps).
 
     The block has no ports (its coal goes only to the boiler) and no reserved
     area, so ``board.planned_unbuilt_hardware``, ``foreign_belts`` and
@@ -317,7 +321,17 @@ def publish_planned_feed(ex, obs) -> dict | None:
     ):
         return {"status": "blocked", "reason": "power_coal_feed_board_identity_changed"}
     blocks = board.state.setdefault("blocks", {})
-    wanted = feed_block(plan) if hand_fed and plan else None
+    # A belt-fed feed keeps a block it already has (the upgrade site); an old
+    # map that never had one does not get one now.
+    keep = hand_fed or (upgrade_pending(plan) and BLOCK in blocks)
+    wanted = feed_block(plan) if plan and keep else None
+    if wanted is not None:
+        from .planning import overlap
+
+        others = [b.get("reserved_area") for k, b in blocks.items() if k != BLOCK and isinstance(b, dict)]
+        if any(isinstance(a, list) and len(a) == 2 and overlap(wanted["reserved_area"], a) for a in others):
+            # Planned before the upgrade site was reserved: keep the drill footprint only.
+            wanted = feed_block(plan, upgrade_site=False)
     if blocks.get(BLOCK) == wanted:
         return None
     if wanted is None:
@@ -328,25 +342,40 @@ def publish_planned_feed(ex, obs) -> dict | None:
     return None
 
 
-def feed_block(plan: Mapping) -> dict:
+def upgrade_pending(plan: Mapping) -> bool:
+    """Whether the feed's burner drill still waits for its electric replacement (``electric_coal``)."""
+    return ((plan or {}).get("drill") or {}).get("name") == "burner-mining-drill"
+
+
+def feed_block(plan: Mapping, *, upgrade_site: bool = True) -> dict:
     """Board block of the reserved feed: its entities, no ports, owner ``power``.
 
     Many controllers read every block's ``reserved_area``, so the block has
-    one: only the 2x2 drill footprint. The fuel arm and the routed belt lie
-    outside it, so they count as the block's external hardware (marked by
+    one: the burner drill's 2x2 footprint joined with the 3x3 footprint of
+    its electric replacement (``electric_mining.replacement_for``: centred
+    half a tile up-left), the site ``electric_coal`` later needs. With only
+    the 2x2 footprint reserved, starter cells took the replacement's extra
+    row and column (seeds 3794581402, 1634401926:
+    ``electric_upgrade_footprint_obstructed``). The block stays on the board
+    after the feed is belt-fed until the drill is electric
+    (:func:`upgrade_pending`). The fuel arm and the routed belt lie outside
+    the area, so they count as the block's external hardware (marked by
     ``SiteService.mark_board_hardware``) instead of reserving the route's
     whole bounding box.
     """
     drill = plan.get("drill") or {}
     p = drill.get("position") or {}
     x, y = p.get("x", 0), p.get("y", 0)
+    area = [[x - 1, y - 1], [x + 1, y + 1]]
+    if upgrade_site and upgrade_pending(plan):
+        area = [[x - 2, y - 2], [x + 1, y + 1]]
     return {
         "ok": True,
         "reason": "",
         "entities": deepcopy(list(plan.get("entities") or [])),
         "ports": [],
         "required_items": deepcopy(dict(plan.get("required_items") or {})),
-        "reserved_area": [[x - 1, y - 1], [x + 1, y + 1]],
+        "reserved_area": area,
         "template": "power_coal_feed",
         "owner": "power",
     }

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from factorio_agent import power_coal_feed as pcf
 from factorio_agent import progression as pg
@@ -73,6 +73,7 @@ def builder(directory, **state):
     b.state.update(state)
     b.ensure_plan = Mock(return_value={"status": "succeeded"})
     b._choose_coal_plan = Mock(return_value=COAL_PLAN)
+    b._coal_feed_taken = Mock(return_value=None)  # whole-feed native preflight: nothing taken
     return b
 
 
@@ -179,6 +180,52 @@ class HandFedPowerTests(unittest.TestCase):
             self.assertEqual(result["status"], "waiting")
             self.assertNotIn("coal_plan", b.state)
             self.assertEqual(b.state["coal_feed_replans"], 1)
+
+    def test_feed_is_replanned_before_its_first_entity_when_a_later_tile_is_taken(self):
+        # Seed 2005199778: the starter lab stood on a route tile near the
+        # boiler; the drill end was built first, then the feed blocked for good.
+        with tempfile.TemporaryDirectory() as d:
+            b = builder(d, coal_plan=COAL_PLAN, power_mode=HAND_FED)
+            lab = {"preflight_reason": "block_protected_entity_obstruction", "entity": "lab"}
+            b._coal_feed_taken = Mock(return_value=lab)
+            b.ensure_plan = Mock(return_value={"status": "succeeded"})
+            result = b.ensure_coal_feed(obs())
+            self.assertEqual(result["status"], "waiting")
+            self.assertEqual(result["evidence"]["obstruction"]["entity"], "lab")
+            self.assertNotIn("coal_plan", b.state)
+            b.ensure_plan.assert_called_once_with(obs(), POWER)  # nothing of the feed was built
+
+    def test_another_owners_drill_on_the_feed_drill_tile_replans_instead_of_blocking(self):
+        # Seeds 2212603376, 1590659659: a pending starter cell's drill (direction 0)
+        # was built on the reserved feed drill tile (direction 4).
+        with tempfile.TemporaryDirectory() as d:
+            b = builder(d, coal_plan=COAL_PLAN, power_mode=HAND_FED)
+            other = dict(DRILL, direction=0, unit_number=40)
+            b.ensure_plan = Mock(
+                side_effect=[
+                    {"status": "succeeded"},
+                    {"status": "blocked", "reason": "existing entity direction differs from reserved plan"},
+                ]
+            )
+            result = b.ensure_coal_feed(obs(extra=[other]))
+            self.assertEqual(result["status"], "waiting", result)
+            self.assertNotIn("coal_plan", b.state)
+            self.assertEqual(b.state["coal_feed_replans"], 1)
+
+    def test_whole_feed_check_reports_only_taken_tiles(self):
+        with tempfile.TemporaryDirectory() as d:
+            b = builder(d, coal_plan=COAL_PLAN, power_mode=HAND_FED)
+            del b._coal_feed_taken
+            with patch(
+                "factorio_agent.planning.preflight",
+                return_value={"ok": False, "reason": "block_protected_entity_obstruction", "entity": "lab"},
+            ):
+                taken = b._coal_feed_taken(obs())
+            self.assertEqual(taken["entity"], "lab")
+            with patch("factorio_agent.planning.preflight", return_value={"ok": False, "reason": "resource_rule"}):
+                self.assertIsNone(b._coal_feed_taken(obs()))
+            with patch("factorio_agent.planning.preflight", return_value={"ok": True, "clear_obstacles": []}):
+                self.assertIsNone(b._coal_feed_taken(obs()))
 
 
 class BoilerUpkeepTests(unittest.TestCase):
@@ -306,7 +353,7 @@ class CoalAccountingTests(unittest.TestCase):
 
 
 class BoardTests(unittest.TestCase):
-    def test_planned_feed_is_published_while_hand_fed_and_dropped_once_belt_fed(self):
+    def test_planned_feed_is_published_while_hand_fed_and_dropped_once_the_drill_is_electric(self):
         from factorio_agent.board import foreign_belts, planned_unbuilt_hardware
 
         with tempfile.TemporaryDirectory() as d:
@@ -316,15 +363,40 @@ class BoardTests(unittest.TestCase):
             board = json.loads((Path(d) / "pcb-board.json").read_text(encoding="utf-8"))
             block = board["blocks"]["power_coal_feed"]
             self.assertEqual(block["ports"], [])
-            self.assertEqual(block["reserved_area"], [[9.0, -1.0], [11.0, 1.0]])
+            # The burner drill (9..11, -1..1) and its electric replacement (8..11, -2..1).
+            self.assertEqual(block["reserved_area"], [[8.0, -2.0], [11.0, 1.0]])
             planned = planned_unbuilt_hardware(b, obs(), board["blocks"])
             self.assertEqual(planned[(12.5, -0.5)]["block"], "power_coal_feed")  # a planned belt tile is taken
             belts = foreign_belts(obs(), board["blocks"])
             self.assertEqual(len([e for e in belts if e["name"] == "transport-belt"]), 2)
+            # Belt-fed with the burner drill: the upgrade site stays reserved.
             b.state["power_mode"] = BELT_FED
             pcf.publish_planned_feed(ex, obs())
             board = json.loads((Path(d) / "pcb-board.json").read_text(encoding="utf-8"))
+            self.assertEqual(board["blocks"]["power_coal_feed"]["reserved_area"], [[8.0, -2.0], [11.0, 1.0]])
+            # electric_coal replaced the drill: the block is dropped.
+            electric = {"name": "electric-mining-drill", "position": {"x": 9.5, "y": -0.5}, "direction": 4}
+            b.state["coal_plan"] = dict(COAL_PLAN, drill=electric)
+            pcf.publish_planned_feed(ex, obs())
+            board = json.loads((Path(d) / "pcb-board.json").read_text(encoding="utf-8"))
             self.assertNotIn("power_coal_feed", board["blocks"])
+
+    def test_belt_fed_old_map_gets_no_block_and_a_crowded_site_keeps_the_drill_footprint(self):
+        with tempfile.TemporaryDirectory() as d:
+            b = builder(d, coal_plan=COAL_PLAN)  # old map: belt-fed, never had the block
+            ex = SimpleNamespace(builder=b, game=b.game, catalog=CATALOG)
+            board = {"schema_version": 1, "world_id": "w", "catalog_fingerprint": "c", "blocks": {}}
+            (Path(d) / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+            pcf.publish_planned_feed(ex, obs())
+            board = json.loads((Path(d) / "pcb-board.json").read_text(encoding="utf-8"))
+            self.assertNotIn("power_coal_feed", board["blocks"])
+            # Hand-fed, but a bank planned earlier holds the replacement's extra row.
+            board["blocks"]["coal_mining"] = {"entities": [], "reserved_area": [[0.0, -6.0], [12.0, -1.5]]}
+            (Path(d) / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+            b.state["power_mode"] = HAND_FED
+            pcf.publish_planned_feed(ex, obs())
+            board = json.loads((Path(d) / "pcb-board.json").read_text(encoding="utf-8"))
+            self.assertEqual(board["blocks"]["power_coal_feed"]["reserved_area"], [[9.0, -1.0], [11.0, 1.0]])
 
 
 if __name__ == "__main__":
