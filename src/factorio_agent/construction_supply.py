@@ -139,11 +139,47 @@ FUEL_BATCH = 8  # coal pieces worth one fetch-and-fuel trip
 # Coal put into one burner per visit and fetched per trip. With 8 per visit,
 # 16 burner cells turned 43% of all actions into small coal and plate moves
 # (seed 2099054105: 119 coal inserts, 110 plate takes of 10 in 28 min).
-FUEL_FILL = 20
-FUEL_FETCH = 48
+FUEL_FILL = 20  # cap; the amount follows coal production (haul_batch)
+FUEL_FETCH = 48  # cap for one coal fetch
 COLLECT_BATCH = 10  # construction items worth one collection trip
-PLATE_BATCH = 30  # plates worth one collection trip (they trickle out of many furnaces)
+# Hauling adapts to production: one trip carries about HAUL_MINUTES of the
+# item's measured output, between a floor and a cap. Early (15 plates/min) a
+# trip is small; with more cells it grows instead of multiplying trips.
+HAUL_MINUTES = 0.5
+PLATE_BATCH = 50  # cap for one plate trip (MAX_ITEMS)
 PLATES = frozenset({"iron-plate", "copper-plate"})
+RATE_WINDOW_TICKS = 3600  # production rate is measured over the last game minute or more
+
+
+def production_rate(samples: dict, observation, item: str) -> float | None:
+    """Items/minute of ``item`` from the observation's cumulative ``production`` counter.
+
+    ``samples`` (owned by the caller) keeps one older reading per item; the
+    rate is the growth since that reading once it is RATE_WINDOW_TICKS old,
+    else the lifetime average. None without a counter or a tick.
+    """
+    row = (observation.get("production") or {}).get(item)
+    tick = observation.get("tick")
+    if not isinstance(row, dict) or not isinstance(tick, (int, float)) or tick <= 0:
+        return None
+    produced = row.get("produced", 0)
+    old = samples.get(item)
+    if old is None or tick < old[0]:
+        samples[item] = old = (tick, produced, None)
+    if tick - old[0] >= RATE_WINDOW_TICKS:
+        rate = (produced - old[1]) * 3600.0 / (tick - old[0])
+        samples[item] = (tick, produced, rate)
+        return rate
+    return old[2] if old[2] is not None else produced * 3600.0 / tick
+
+
+def haul_batch(rate: float | None, floor: int, cap: int) -> int:
+    """Items worth one trip: HAUL_MINUTES of production, clamped to ``floor``..``cap``."""
+    if rate is None:
+        return floor
+    return max(floor, min(cap, int(rate * HAUL_MINUTES)))
+
+
 FUEL_SKIP_STOCK = 50  # finished items in a cell that make more fuel pointless
 # Hand-craft cap: when more than this many finished items of one kind are
 # missing and a verified, producing ``produce`` row makes that item
@@ -237,6 +273,11 @@ class V2Bootstrap(DeterministicBootstrap):
 
         return dict(observation, entities=[e for e in observation.get("entities", []) if available(e)])
 
+    def production_rate(self, observation, item):
+        """Recent items/minute of ``item`` (see :func:`production_rate`)."""
+        samples = self.__dict__.setdefault("_rate_samples", {})
+        return production_rate(samples, observation, item)
+
     def maintain_fuel(self, observation):
         """Hand-fuel burners only where it pays, and only in batches.
 
@@ -294,14 +335,16 @@ class V2Bootstrap(DeterministicBootstrap):
             # pieces alone. Spending them one at a time is the loop to avoid.
             if _produced_coal(observation, coal_cells) < FUEL_BATCH:
                 return None
-            return self.ensure_item(observation, "coal", carried + FUEL_FETCH)
+            rate = self.production_rate(observation, "coal")
+            return self.ensure_item(observation, "coal", carried + haul_batch(rate, 3 * FUEL_BATCH, FUEL_FETCH))
         # Keep a real coal producer running before spending the last carried
         # fuel on its consumers. The base routine retains ordinary partial
         # transfers and its existing bounded emergency mining behavior.
         ordered = sorted(entities, key=lambda e: _entity_key(e) not in producers)
         action = super().maintain_fuel(dict(observation, entities=ordered))
         if isinstance(action, dict) and action.get("type") == "insert" and action.get("item") == "coal":
-            action["count"] = max(action["count"], min(FUEL_FILL, carried))
+            rate = self.production_rate(observation, "coal")
+            action["count"] = max(action["count"], min(haul_batch(rate, FUEL_BATCH, FUEL_FILL), carried))
         return action
 
     def _well_stocked_burners(self, observation):
@@ -488,7 +531,9 @@ class V2Bootstrap(DeterministicBootstrap):
         # plate. Let a batch pile up unless less than a batch is needed or a
         # registered buffer chest (whose snapshot may be stale) is involved.
         on_hand = sum(-row[1] for row in candidates)
-        batch = PLATE_BATCH if item in PLATES else COLLECT_BATCH
+        batch = COLLECT_BATCH
+        if item in PLATES:
+            batch = haul_batch(self.production_rate(observation, item), COLLECT_BATCH, PLATE_BATCH)
         if on_hand < min(count, batch) and all(row[0] for row in candidates):
             return None
         return {
