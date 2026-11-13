@@ -85,18 +85,24 @@ def upcoming_builds(catalog, jobs, observation, *, horizon, root=None):
     """``{item: {"count": n, "current": n of steps in flight, "measured": bool}}`` for the next steps."""
     from .progression import _names, _Progress, _upcoming
 
+    from .early_start import is_early, succeeded_capabilities
+    from .jobs import CAPABILITIES
+
     jobs = tuple(jobs)
     progress = _Progress(jobs, frozenset(_names((observation or {}).get("technologies"))))
+    succeeded = succeeded_capabilities(jobs)
     rows = {}
     for step in _upcoming(jobs, progress.researched, horizon):
         measured = measured_remainder(root, step.capability, observation) if progress.in_flight(step) else None
         bill = measured if measured is not None else (step.builds or {})
+        # An early-start job (early_start.py) is not current: contested plates never feed its demand.
+        current = progress.in_flight(step) and not is_early(CAPABILITIES, step.capability, succeeded)
         for item, count in bill.items():
             if item in _raw_items() or not _number(count) or count <= 0 or not catalog.recipe_for_product(item):
                 continue
             row = rows.setdefault(item, {"count": 0.0, "current": 0.0, "measured": False})
             row["count"] += float(count)
-            row["current"] += float(count) if progress.in_flight(step) else 0.0
+            row["current"] += float(count) if current else 0.0
             row["measured"] = row["measured"] or measured is not None
     return rows
 

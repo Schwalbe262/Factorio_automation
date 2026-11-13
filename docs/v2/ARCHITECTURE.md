@@ -40,6 +40,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Jobs | `executors.py` | `StarterExecutors`: controller construction, lazy factories, upkeep helpers, `step`/`proof`/`record_action` dispatch, `idle_action` |
 | Jobs | `capability_registry.py`, `handlers/` | one `Handler` (step, proof, validate, record_action) per capability, grouped by domain; `handlers/upkeep.py` shared upkeep |
 | Plan | `progression.py` | `ROADMAP` (Step list), `autopilot_nodes`, `capacity_nodes`, `produce_nodes`, `lookahead_demand`, `bulk_item_demand` |
+| Plan | `early_start.py` | early start ("pre-build"): `CAPABILITIES[c]["early_start"]`, inputs checks (receipt `early_start_inputs`), `early_ready`, admission requires, `Deferral` for `ensure_plan(defer=)`, early clock |
 | Plan | `capacity_planning.py` | `plan_capacity`: starter cells, wait vs expand by time |
 | Plan | `research_capacity.py` | labs + science assemblers sized together; `research_capacity_receipt`, `recommended_science_rate` |
 | Plan | `science_growth.py` | staged red science block: start size, reserved slots, evidence growth rule (`science_growth` capability) |
@@ -100,7 +101,7 @@ All other top-level modules are capability controllers constructed in
 
 | Layer | Code | May | May not |
 |---|---|---|---|
-| Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps, priority `-100 - index` | propose a step whose job is blocked/failed; touch the world |
+| Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps, priority `-100 - index`; a step with `early_start` once its inputs are planned (`early_start.early_ready`, PLANNERS.md "Early start") | propose a step whose job is blocked/failed; touch the world |
 | Capacity planner | `progression.capacity_nodes` -> `capacity_planning.plan_capacity` | add `starter_capacity` nodes at priority -50 | expand without measured production and known cell cost; before `starter` succeeded; after that resource's `mining_outpost` succeeded |
 | Produce planner | `progression.produce_nodes` | add `produce` nodes at priority -51 | propose without positive measured plate net rate |
 | Supply cell planner | `supply_cell.supply_cell_nodes` (from `autopilot_nodes`) | add one `supply_cell` build node (-52) and later one retire node (-1000) | propose twice per map; retire while demand remains and no `produce` row took over |
@@ -145,7 +146,9 @@ action in a job's events may belong to upkeep, not to the capability.
    (`jobs.py:428`); `idle_action` yields to any active job taking a `technology`.
 7. Admission limits (`jobs.py:416-486`, `710-761`): at most `MAX_ACTIVE_JOBS = 4`
    active, one per capability; request observation at most 3600 ticks old;
-   `requires` capabilities succeeded; job deadline 108000 ticks or 3600 s;
+   `requires` capabilities succeeded (`early_start.requires` for an early-start
+   capability, which then never takes the last free slot); job deadline 108000
+   ticks or 3600 s, not counting early time (`early_ticks`/`early_seconds`);
    blocked after 18000 ticks without a `progress_key` change or 3 identical
    failures; slices at most 50 s.
 8. Batching (`construction_supply.py:136-148`): fuel in batches of `FUEL_BATCH = 8`

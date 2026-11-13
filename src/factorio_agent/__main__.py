@@ -261,6 +261,10 @@ def execute(argv=None, services=None):
                     obs["science_growth"] = growth
             except Exception as exc:  # a growth estimate must never break observe
                 obs["science_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        from .early_start import inputs_receipt
+
+        # Early start: which blocks have their inputs planned (progression.autopilot_nodes).
+        obs["early_start_inputs"] = inputs_receipt(root, obs, CAPABILITIES)
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)

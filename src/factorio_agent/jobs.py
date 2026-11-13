@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
+from factorio_agent.early_start import EARLY_FREE_SLOTS, admission_requires, is_early, track_early_time
 
 
 TERMINAL = {"succeeded", "blocked", "failed"}
@@ -84,6 +85,9 @@ CAPABILITIES = {
         "parameters": {},
         "requires": ["power", "bootstrap_logistics", "mining_outpost"],
         "native_recipes": ["underground-belt", "splitter"],
+        # Early start (early_start.py): planned and partly built once every
+        # source bank has a saved, published port; splitters/undergrounds wait for logistics.
+        "early_start": {"requires": ["power"], "inputs": "mining_bank_ports", "locked_until": ["logistics"]},
         "effect": "reserve a PCB district, connect iron60/copper30 nominal banks and separate coal source with actual splitter/underground crossing, normally belt-feed furnaces",
     },
     "smelting_capacity": {
@@ -189,6 +193,14 @@ CAPABILITIES = {
     "planned_main_bus": {
         "parameters": {},
         "requires": ["smelting_district"],
+        # Early start: trunks and feed routes while the district builds; the
+        # splice into the district waits for its success (planned_bus.step).
+        "early_start": {
+            "requires": ["power"],
+            "running": ["smelting_district"],
+            "inputs": "district_feed_anchors",
+            "locked_until": ["logistics"],
+        },
         "effect": "normally build the site plan's iron/copper bus trunks fed by a splitter branch beside each district plate port; prove plates on every built lane tail; other lanes stay reserved",
     },
     "dedicated_materials": {
@@ -441,6 +453,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "research_capacity_error": obs.get("research_capacity_error"),
         "science_growth": obs.get("science_growth"),
         "science_growth_error": obs.get("science_growth_error"),
+        "early_start_inputs": obs.get("early_start_inputs"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {k: v for k, v in job.items() if k in {"key", "capability", "status", "reason", "actions", "last_tick"}}
@@ -489,6 +502,11 @@ def _admission_error(
         return "another job that owns research is already active"
     if len(active) >= MAX_ACTIVE_JOBS:
         return f"another job must finish or pause first: at most {MAX_ACTIVE_JOBS} jobs may be active"
+    # Early start: the job runs ahead of unfinished prerequisites and never takes the last free slot.
+    succeeded = {job["capability"] for job in jobs.values() if job["status"] == "succeeded"}
+    if is_early(CAPABILITIES, capability, succeeded) and len(active) >= MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS:
+        limit = MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS
+        return f"an early start keeps a job slot free: at most {limit} jobs may be active"
     return None
 
 
@@ -515,7 +533,7 @@ def submit(root: Path, game, request: Request, *, priority: int = 0) -> dict:
         if "rollback_tick" in ledger.data:
             raise ValueError("world rollback requires explicit reconciliation")
         completed = {j["capability"] for j in ledger.data["jobs"].values() if j["status"] == "succeeded"}
-        if not set(CAPABILITIES[request.capability]["requires"]).issubset(completed):
+        if not set(admission_requires(CAPABILITIES, request.capability)).issubset(completed):
             raise ValueError("capability prerequisites have not been verified")
         job = {
             **request.identity(),
@@ -773,9 +791,11 @@ def _advance_job(root: Path, game, executors, ledger: Ledger, key: str, obs: dic
         job.update(status="blocked", reason="action_outcome_unknown_reconcile_required")
         ledger.save()
         return "terminal", {}
+    succeeded = {j["capability"] for j in ledger.data["jobs"].values() if j["status"] == "succeeded"}
+    track_early_time(job, obs["tick"], time.time(), is_early(CAPABILITIES, job["capability"], succeeded))
     if (
-        obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) > 108000
-        or time.time() - job["created_at"] - job.get("paused_seconds", 0) > 3600
+        obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) - job.get("early_ticks", 0) > 108000
+        or time.time() - job["created_at"] - job.get("paused_seconds", 0) - job.get("early_seconds", 0) > 3600
     ):
         job.update(status="blocked", reason="job_deadline_exceeded")
         ledger.save()

@@ -488,12 +488,25 @@ class PlannedBus:
         if blocked:
             return blocked
         if self.state["phase"] == "build":
-            result = self.builder.ensure_plan(obs, self.state["staged_plan"])
+            from .early_start import deferral
+
+            # Early start: trunks and feed routes are built while the district is
+            # still building; entities waiting for coming research or contested plates wait.
+            defer = deferral(self.root, obs, self.catalog, "planned_main_bus")
+            result = self.builder.ensure_plan(obs, self.state["staged_plan"], **({"defer": defer} if defer else {}))
             if result.get("status") != "succeeded":
                 return result
             self.state["phase"] = "splice"
             self._save()
         if self.state["phase"] == "splice":
+            from .early_start import capability_pending
+
+            if capability_pending(self.root, obs["world_id"], "smelting_district"):
+                # The splice rewrites the district plan and mines one of its belts: never during its build.
+                return {
+                    "status": "waiting",
+                    "reason": "waiting for smelting_district to succeed before the bus feed splice",
+                }
             for action in (self._splice_district(obs), self._cut_over(obs)):
                 if action is not None:
                     return action

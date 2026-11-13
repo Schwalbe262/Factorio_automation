@@ -573,6 +573,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed: list[dict] = capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit)]
     proposed += produce_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     proposed += smelting_capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .early_start import early_ready
     from .supply_cell import supply_cell_nodes  # temporary hand-fed cell: build once, retire once
 
     proposed += supply_cell_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
@@ -586,15 +587,22 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
             continue
         if progress.in_flight(step) or progress.stalled(step):
             continue
-        if not set(capabilities[step.capability].get("requires", [])) <= succeeded:
-            continue
-        if not all(progress.satisfied(steps[name]) for name in step.after):
-            continue
-        if not _recipes_ready(step, capabilities, observation) or not _research_ready(step, observation):
+        early = ""
+        if (
+            not set(capabilities[step.capability].get("requires", [])) <= succeeded
+            or not all(progress.satisfied(steps[name]) for name in step.after)
+            or not _recipes_ready(step, capabilities, observation)
+        ):
+            # Early start (early_start.py): inputs planned, prerequisites in flight.
+            early = early_ready(step, progress, steps, capabilities, observation, jobs)
+            if early is None:
+                continue
+        if not _research_ready(step, observation):
             continue
         if _natively_queued(step, observation) or not gate_ready(step, jobs, observation):
             continue
         parameters, note = _sized_parameters(step, observation)
+        note += early
         proposed.append(
             {
                 "id": node_id,
@@ -602,7 +610,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
                 "parameters": parameters,
                 "priority": step.priority if step.priority is not None else TOP_PRIORITY - index,
                 "depends_on": [],
-                "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}{note}",
+                "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}{note}"[:300],
             }
         )
     proposed += science_growth_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]

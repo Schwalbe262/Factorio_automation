@@ -259,10 +259,12 @@ class FactoryBuilder:
             for e in self.state.get("power_plan", {}).get("entities", [])
         )
 
-    def ensure_plan(self, observation: dict, plan: dict) -> dict:
+    def ensure_plan(self, observation: dict, plan: dict, *, defer: Any = None) -> dict:
         """Return one material/move/build/recipe action, or a construction status.
         A succeeded result means the listed entities and recipes are observed; ports
         must still be connected and operating flow verified by the caller.
+        ``defer`` (``early_start.Deferral``, early start) leaves entities for
+        later instead of returning their wait; then the result is ``waiting``.
         """
         self._sync(observation)
         if not plan.get("ok") or not plan.get("entities"):
@@ -280,6 +282,7 @@ class FactoryBuilder:
             else plan["entities"]
         )
         find = _plan_lookup(observation)
+        deferred: dict[str, str] = {}  # early start: item -> why its entities wait (see _deferred)
         for index, entity in enumerate(entities):
             existing = find(entity)
             if existing is not None:
@@ -306,6 +309,8 @@ class FactoryBuilder:
                     return _report("blocked", "existing entity direction differs from reserved plan", entity=entity)
                 continue
             item = entity.get("item") or self._placement_item(entity["name"])
+            if defer is not None and self._deferred(observation, entity, item, defer, deferred):
+                continue
             if int(observation.get("inventory", {}).get(item, 0)) < 1:
                 entity_type = self.catalog.entities.get(entity["name"], {}).get("type", entity["name"])
                 infrastructure = {
@@ -336,6 +341,9 @@ class FactoryBuilder:
                 result = self.bootstrap.ensure_item(observation, item, min(cap, len(missing)))
                 if self.construction_materials is not None:
                     result = self.construction_materials.ensure(observation, result)
+                if defer is not None and (why := defer.after(item, result)):
+                    deferred[item] = why
+                    continue
                 if isinstance(result, dict) and not result.get("type") and result.get("status") == "waiting":
                     # Waiting for this item must not hold back entities whose
                     # items are already carried: place one of those instead.
@@ -387,7 +395,7 @@ return {ok=true,only_actor=own_actor and not other and terrain}
             # New character builds use the navigator's live build reach. A
             # fixed approach radius can send an actor back into the footprint
             # after belts carry it away from the chosen standing position.
-            if self.game.backend == "assisted" and entity["name"] in BUILD_BATCH_NAMES:
+            if self.game.backend == "assisted" and entity["name"] in BUILD_BATCH_NAMES and not deferred:
                 batch = self._affordable_builds(observation, entities[index:])
                 if len(batch) > 1:
                     return {"type": "build_many", "actions": batch}
@@ -399,6 +407,11 @@ return {ok=true,only_actor=own_actor and not other and terrain}
                 "direction": entity.get("direction", 0),
                 **underground_fields(entity),
             }
+        if deferred:
+            reasons = "; ".join(f"{item}: {why}" for item, why in sorted(deferred.items()))
+            return _report(
+                "waiting", ("waiting for deferred plan entities: " + reasons)[:300], deferred=sorted(deferred)
+            )
         return _report(
             "succeeded",
             "block entities and recipes observed",
@@ -406,6 +419,27 @@ return {ok=true,only_actor=own_actor and not other and terrain}
             ports=plan.get("ports", []),
             flow_verified=False,
         )
+
+    def _deferred(self, observation: dict, entity: dict, item: str, defer: Any, deferred: dict) -> bool:
+        """True when ``entity`` is left for later (early start, ``early_start.Deferral``).
+
+        Its item already waits, its recipe waits for coming research
+        (``defer.before``), or it is a mining drill or inserter behind a
+        deferred entity (they keep plan order, as in build ahead).
+        """
+        if item in deferred:
+            return True
+        entity_type = self.catalog.entities.get(entity["name"], {}).get("type", entity["name"])
+        if deferred and entity_type in BUILD_AHEAD_KEEP_ORDER:
+            deferred[item] = "keeps plan order behind deferred entities"
+            return True
+        if int(observation.get("inventory", {}).get(item, 0)) >= 1:
+            return False
+        why = defer.before(item)
+        if why:
+            deferred[item] = why
+            return True
+        return False
 
     def _recover_resource_cell_obstruction(self, observation: dict, plan: dict, entity: dict) -> dict | None:
         """Recover a partial cell through ordinary mining and conserved pickup."""

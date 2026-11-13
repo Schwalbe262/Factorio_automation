@@ -22,6 +22,7 @@ from factorio_agent.core.deterministic_character import _identity
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from factorio_agent.errors import CLIError
 from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane
+from factorio_agent.early_start import admission_requires
 from factorio_agent import incidents as incident_rules
 
 
@@ -471,7 +472,8 @@ class WorkQueue:
                 q.update(status="blocked", last_reason="capability_no_longer_available")
                 continue
             missing = [d for d in q["depends_on"] if nodes[d]["status"] != "completed"]
-            prerequisites = [p for p in capabilities[q["capability"]].get("requires", []) if p not in completed]
+            # early_start.admission_requires: an early-start capability is admitted on its early requires.
+            prerequisites = [p for p in admission_requires(capabilities, q["capability"]) if p not in completed]
             q["missing_dependencies"] = missing
             q["missing_prerequisites"] = prerequisites
             q["status"] = "ready" if not missing and not prerequisites and not q.get("paused") else "pending"
