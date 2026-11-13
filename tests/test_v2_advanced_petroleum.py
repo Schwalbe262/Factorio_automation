@@ -225,7 +225,7 @@ class AdvancedControllerTests(unittest.TestCase):
         self.assertEqual(self.controller._sources(self.obs)["reason"], "advanced_input_already_claimed")
         self.game.query.assert_not_called()
 
-    def test_whole_prepare_uses_real_isolation_pair_contract_and_keeps_both_paid_source_gaps(self):
+    def _whole_prepare(self):
         c = self.controller
         self.write(
             "pcb-board.json",
@@ -287,6 +287,10 @@ class AdvancedControllerTests(unittest.TestCase):
             patch("factorio_agent.advanced_petroleum.preflight", return_value={"ok": True, "clear_obstacles": []}),
         ):
             prepared = c.prepare(self.obs)
+        return c, src, prepared
+
+    def test_whole_prepare_uses_real_isolation_pair_contract_and_keeps_both_paid_source_gaps(self):
+        c, src, prepared = self._whole_prepare()
         self.assertTrue(prepared["ok"], prepared)
         full = {_key(e) for e in prepared["plan"]["entities"]}
         cold = {_key(e) for e in prepared["cold_plan"]["entities"]}
@@ -335,6 +339,37 @@ class AdvancedControllerTests(unittest.TestCase):
         )
         self.controller._save()
         return state
+
+    def test_a_site_service_supplies_the_refinery_anchor(self):
+        from types import SimpleNamespace
+
+        from factorio_agent import block_sites
+        from factorio_agent.advanced_petroleum import advanced_refinery_core
+        from factorio_agent.site.geometry import Rect
+
+        width, height, dx, dy = block_sites.footprint(lambda x, y: advanced_refinery_core(self.catalog, x, y))
+        calls = []
+
+        class Site:
+            def allocate_candidates(self, kind, w, h, *, name, count, returns_to_bus, world_id):
+                calls.append((kind, w, h, name))
+                return [SimpleNamespace(name=name + "#0", rect=Rect(80, -40, 80 + w, -40 + h))]
+
+        self.controller.site = Site()
+        c, src, prepared = self._whole_prepare()
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertEqual(calls, [("production", width, height, "advanced-petroleum")])
+        self.assertEqual(prepared["core"]["anchor"], {"x": 80 + dx, "y": -40 + dy})
+        self.assertEqual(prepared["site_allocation"], "advanced-petroleum#0")
+        area = prepared["core"]["reserved_area"]
+        self.assertEqual((area[0][0], area[0][1]), (80, -40))
+
+        class Empty(Site):
+            def allocate_candidates(self, *a, **k):
+                return []
+
+        self.controller.site = Empty()
+        self.assertEqual(self.controller.prepare(self.obs)["reason"], "advanced_no_site_allocation")
 
     def test_proof_requires_every_old_and_new_machine_to_have_actual_counter_delta(self):
         state = self.install()

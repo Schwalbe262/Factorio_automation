@@ -263,6 +263,7 @@ def fluid_product_core(catalog, product, x, y):
         required_boxes=required,
         rated=rated,
         reserved_area=[[x - 6.5, y - 7.5], [x + 16.5, y + 4.5]],
+        anchor={"x": x, "y": y},
         expansion_keepouts=future,
         expansion_slots=[dict(position=future[0]["position"], built=False)],
         material_flow="fluid inputs EAST; iron EAST; sulfur direct WEST into acid; fluid output EAST",
@@ -295,9 +296,20 @@ def fluid_product_edges(catalog, core, fluid, nodes, pairs):
 
 class FluidProducts:
     def __init__(
-        self, game, builder, catalog, perimeter, *, bus_factory=None, science=None, green=None, fluid_source_keys=None
+        self,
+        game,
+        builder,
+        catalog,
+        perimeter,
+        *,
+        bus_factory=None,
+        science=None,
+        green=None,
+        fluid_source_keys=None,
+        site=None,
     ):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
+        self.site = site  # planned world: cell anchors from the master plan (block_sites)
         self.path = Path(game.cfg.runtime_dir) / "fluid-products.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         self.source_keys = deepcopy(SOURCE_KEYS)
@@ -507,6 +519,17 @@ class FluidProducts:
                 (base_x + sign * dx, base_y + dy)
                 for dx, dy in ((0, 0), (24, 0), (0, 18), (24, 18), (0, -18), (24, -18), (0, -36), (24, -36))
             ]
+            from . import block_sites
+
+            owner = "fluid_product_" + product
+            sited = block_sites.anchors(
+                self.site, obs, owner, lambda ax, ay: fluid_product_core(self.catalog, product, ax, ay)
+            )
+            self._allocations = {anchor: name for anchor, name in sited or ()}
+            if sited is not None:
+                anchors = list(self._allocations)
+                if not anchors:
+                    return dict(ok=False, reason="fluid_product_no_site_allocation", candidate_failures=[])
             budget = PlanningBudget(self.game)
             failures = []
             for x, y in anchors:
@@ -636,6 +659,7 @@ class FluidProducts:
                     defense_scope_id=scope,
                     defense_preview=defense,
                     rated=core["rated"],
+                    site_allocation=getattr(self, "_allocations", {}).get((x, y)),
                 )
             return dict(
                 ok=False, reason="no_complete_resource_clear_fluid_product_site", candidate_failures=failures[-6:]
@@ -702,6 +726,9 @@ class FluidProducts:
                 self.state = dict(world_id=obs["world_id"], catalog_fingerprint=self.catalog.fingerprint, products={})
             self.state["products"][product] = entry = ready
             self._save()
+            from . import block_sites
+
+            block_sites.keep(self.site, obs, "fluid_product_" + product, ready.get("site_allocation"))
         sources = self._sources(obs, product)
         if not sources.get("ok"):
             return dict(status="blocked", reason="fluid_product_source_unavailable", evidence=sources)
