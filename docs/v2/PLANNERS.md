@@ -327,7 +327,11 @@ expand when T(0,0) >= min_remaining_seconds, saving >= min_saving_seconds, T(a,l
 `labs = ceil(rate * sum(units*unit_seconds) / (60 * lab_speed * sum(units*packs)))`.
 Used by the observe receipt (`research_capacity_receipt`) and by
 `industry.py` (`_capacity_decision`, `_decided_labs` with
-`labs_without_assemblers`) for the startup science cell. Pinned by
+`labs_without_assemblers`) for the startup science cell. Its queue is the batch's
+technology plus the upcoming technologies of the roadmap's bootstrap steps
+(`industry.bootstrap_technologies`: what the temporary cell researches back to back),
+never red-only research the permanent science serves; it is decided at the prebuild,
+so the decided machines and labs stand before the first batch binds. Pinned by
 `tests/test_v2_research_capacity.py`, `tests/test_v2_science_cell_extension.py`.
 
 ## Staged red science (`science_growth.py`, capability `science_growth`)
@@ -473,7 +477,35 @@ Who writes it:
 Bootstrap phase: no queue. Finite hand-funded batches (`industry.BootstrapLogistics`,
 `StarterResearch`) pay for exactly one technology's `unit_count`; a queued successor
 would consume leftover packs and the batch accounting, so they keep the one-at-a-time
-`research` action until machine science proves an automatic supply.
+`research` action until machine science proves an automatic supply. The labs still
+roll straight on: the next batch is funded and produced while the current one is
+researched (next section).
+
+## Back-to-back bootstrap batches (`science_pipeline.py`, `BootstrapLogistics.funding_complete` / `prewarm`)
+
+One research-owning job at a time stays the rule; the next batch is funded by the
+current owner job (its waits) as a *prewarm*, which cannot start research.
+
+```
+owner O ready   = O.funding_complete: bound, no pending transfer, allocated == required (repairs too),
+                  machines + labs powered, research == O, O consumed > its baseline        (packs may still be in production)
+successor S     = approved work-queue node, pending/ready, deps done or O, highest priority:
+                  bootstrap_logistics {} or bootstrap_research{technology} with a finite red-only technology
+S baselines     = O's batch end: products_finished = O.baseline + ceil(O.packs / yield), consumed = O.baseline + O.packs
+                  (rollback floors = counters observed at reservation: prewarm.observed_*)
+S budget        = held + public furnace output - units other active critical jobs claim (claim without units: all)
+                  (no lookahead construction bill: S is the next critical research step)
+S funding       = balanced packets of PREWARM_PACKET = 5 packs (or the remainder), copper first; else wait
+S active        = research S first, then the rest of its funding (a missing remainder is a plate wait)
+next pair       = S becomes owner; the consumed reservation (target == owner or researched) is replaced
+guard           = while S's prewarm is unresearched only O (same guard hash) and S use the cell (any target file)
+```
+
+Where the minutes go (`tools/critical_path.py`, three saved maps): logistics started
+0.03-0.4 min after the drill research but its batch was funded only after every drill
+pack was in the labs, in 1-2 plate packets on seed 2644599892 (23.6-24.35); now it is
+funded from about the drill research's first consumption. Pinned by
+`tests/test_v2_science_pipeline.py`.
 
 Research capacity (`research_capacity.queue_targets`, used by the receipt and
 `science_growth`): current research, then the native queue, then roadmap technologies.
@@ -571,6 +603,25 @@ outposts: one lane per resource (PER_RESOURCE_CAPABILITIES); while electric-mini
 Chain from power on: outposts (3 lanes, park on the drills) -> district (inputs = the banks'
 published ports; parks on splitters/undergrounds) -> bus (inputs = district anchor belts built,
 which the early district lays; its splice still waits for `smelting_district` to succeed).
+Science cell prebuild (`BootstrapLogistics.prebuild`, called from `starter_research`
+while it only waits): the research slot is held by `starter_research`, so the cell is
+not a separate early job; the automation job builds it with the same `Deferral`.
+
+```
+when   starter_research(automation) waits, research == automation, not researched; next target =
+       first unresearched finite bootstrap step (industry.bootstrap_technologies), no batch state, cell not retired
+size   _capacity_decision now (machines + labs for the bootstrap queue), reserve the cell with that size
+build  cell entities with assemblers last + decided slot labs; Deferral(coming={automation}) leaves the
+       assemblers (recipe unlocked by automation) for later; blocked -> prebuild_blocked recorded once
+after  automation researched: the batch crafts only the assemblers, binds, funds incrementally, researches
+```
+
+Measured (4176033748): drill batch submitted 14.86, first action 16.51, cell built
+16.51-17.63, funded 17.65; automation ran 12.95-14.84 with the actor free. The
+prebuild moves the chests, inserters, poles and slot labs (about 1 min) into the
+automation research. Not before power: the cell site is surveyed from energized
+poles and power is the critical consumer of iron then. Pinned by
+`tests/test_v2_science_cell_prebuild.py`.
 
 Without early inputs in the receipt the roadmap behaves as before. Other
 candidates for the same declaration: `automation_science` (needs the bus's

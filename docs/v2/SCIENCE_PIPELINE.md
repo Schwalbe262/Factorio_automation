@@ -1,5 +1,12 @@
 # 초기 과학 한 배치 미리 생산
 
+> Current rule (English, supersedes the v1 limits below): the trigger is the owner's
+> `funding_complete` (fully funded, research consuming; packs may still be produced),
+> any finite red-only bootstrap successor is supported, the successor's baselines are
+> the owner's computed batch end, its budget is held + public plates minus other
+> critical jobs' claims (no construction lookahead, no kept batch), and packets are
+> whole 5-pack packets. See PLANNERS.md "Back-to-back bootstrap batches".
+
 현재 연구의 기계 생산·출력 회수·실험실 공급이 모두 끝나고 연구만 진행 중이면, 같은 셀에서 승인된 다음 연구 팩을 미리 생산할 수 있습니다. v1은 `electric-mining-drill → bootstrap_logistics` 한 경로를 구현합니다. 다른 연구 순서를 추정하거나 새 작업을 승인하지 않습니다.
 
 `SciencePipeline(game, bootstrap, builder, catalog)`의 공개 호출은 다음과 같습니다.

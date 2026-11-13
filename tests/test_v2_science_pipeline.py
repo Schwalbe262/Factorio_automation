@@ -101,30 +101,118 @@ class SciencePipelineTests(unittest.TestCase):
         if action["type"] == "insert":
             self.obs["inventory"][action["item"]] -= moved
 
-    def test_owner_must_have_produced_collected_and_supplied_every_pack(self):
-        for key in ("collected_packs", "supplied_packs"):
-            self.owner.state[key] = 24
-            self.assertIsNone(self.next())
-            self.assertFalse(self.pipeline.path.exists())
-            self.owner.state[key] = 25
-        self.f.red()["products_finished"] -= 1
+    def test_owner_must_be_fully_funded_and_its_research_consuming(self):
+        allocated = self.owner.state["allocated_inputs"]
+        allocated["iron-plate"] -= 1
         self.assertIsNone(self.next())
-        self.f.red()["products_finished"] += 1
+        self.assertFalse(self.pipeline.path.exists())
+        allocated["iron-plate"] += 1
         self.obs["production"]["automation-science-pack"]["consumed"] = self.owner.state["baseline_consumed"]
         self.assertIsNone(self.next())
         self.assertFalse((self.f.root / "bootstrap-logistics.json").exists())
+        self.obs["production"]["automation-science-pack"]["consumed"] += 1
+        self.obs["research"] = None
+        self.assertIsNone(self.next())
+        self.assertFalse((self.f.root / "bootstrap-logistics.json").exists())
 
-    def test_known_construction_bill_is_reserved_before_default_lookahead_spend(self):
-        self.obs["inventory"]["iron-plate"] = 50
-        self.obs["inventory"]["copper-plate"] = 25
-        self.obs["known_project_construction_budget"] = {
-            "base_material_upper_bound": {"iron-plate": 50, "copper-plate": 25},
-            "unresolved_materials": [],
-        }
+    def test_back_to_back_funding_starts_while_the_owner_still_produces(self):
+        # Funded and researching; no pack collected yet, the machine counter at the owner's baseline.
+        self.owner.state.update(collected_packs=0, supplied_packs=0)
+        self.owner._save()
+        owner_bytes = self.owner.path.read_bytes()
+        self.f.red()["products_finished"] -= 25
+        self.obs["production"]["automation-science-pack"]["consumed"] -= 9
+        action = self.next()
+        self.assertEqual((action["type"], action["item"], action["count"]), ("insert", "copper-plate", 5))
+        target = self.f.make("logistics")
+        # Baselines are the owner's batch end; the observed counters are the rollback floors.
+        self.assertEqual(target.state["baseline_products_finished"], 125)
+        self.assertEqual(target.state["baseline_consumed"], self.owner.state["baseline_consumed"] + 25)
+        self.assertEqual(target.state["prewarm"]["observed_products_finished"], 100)
+        self.ack(action)
+        plan = target._startup_plan(self.obs)
+        self.assertIsNone(target._binding_error(self.obs, plan))
+        self.f.red()["products_finished"] -= 1
+        self.assertEqual(target._binding_error(self.obs, plan), "bootstrap_research_machine_counter_rollback")
+        self.f.red()["products_finished"] += 1
+        self.assertEqual(self.owner.path.read_bytes(), owner_bytes)
+
+    def test_successor_rolls_on_and_reserves_the_next_batch_in_turn(self):
+        for _ in range(8):
+            self.ack(self.next())
+        self.obs["technologies"]["electric-mining-drill"] = True
+        self.obs["research"] = None
+        target = self.f.make("logistics")
+        self.assertEqual(target.step(self.obs)["technology"], "logistics")
+        # Logistics is the owner now; its prewarmed batch was fully funded.
+        self.obs["research"] = "logistics"
+        self.obs["production"]["automation-science-pack"]["consumed"] += 26
+        self.ledger["jobs"]["owner"]["status"] = "succeeded"
+        self.ledger["jobs"]["next"] = dict(
+            key="next", world_id="w", capability="bootstrap_logistics", parameters={}, status="running"
+        )
+        self.queue["nodes"][1]["status"] = "completed"
+        self.queue["nodes"][2]["status"] = "running"
+        self.queue["nodes"].append(
+            dict(
+                id="wall",
+                job_key="wall",
+                capability="bootstrap_research",
+                parameters={"technology": "stone-wall"},
+                status="pending",
+                priority=60,
+                depends_on=["logistics"],
+                paused=False,
+                created_at=3,
+            )
+        )
+        self.flush()
+        self.obs["inventory"] = {"iron-plate": 100, "copper-plate": 100}
+        pipeline = self.make()
+        action = pipeline.next_action(self.obs, target)
+        self.assertEqual((action["item"], action["count"]), ("copper-plate", 5))
+        self.assertEqual(pipeline.state["target"]["id"], "wall")
+        wall = self.f.make("stone-wall")
+        self.assertEqual(wall.state["prewarm"]["owner_technology"], "logistics")
+        self.assertEqual(wall.state["baseline_products_finished"], target.state["baseline_products_finished"] + 20)
+
+    def test_other_critical_claims_are_kept_but_the_construction_lookahead_is_not(self):
+        self.obs["inventory"] = {"iron-plate": 50, "copper-plate": 25}
         for e in self.obs["entities"]:
             e["output_inventory"] = {}
+        self.obs["known_project_construction_budget"] = {
+            "base_material_upper_bound": {"iron-plate": 500, "copper-plate": 250},
+            "unresolved_materials": [],
+        }
+        jobs = self.ledger["jobs"]
+        for key in ("starter", "power"):
+            jobs[key] = dict(key=key, world_id="w", capability=key, parameters={}, status="succeeded")
+        outpost = dict(
+            key="iron",
+            world_id="w",
+            capability="mining_outpost",
+            parameters={"resource": "iron-ore", "rate_per_minute": 60},
+            status="waiting",
+            reason="waiting for plates",
+            evidence={"needs": {"iron-plate": 45}},
+        )
+        jobs["iron"] = outpost
+        self.flush()
+        logistics = self.f.make("logistics")
+        self.assertEqual(
+            self.pipeline._surplus(self.obs, logistics, jobs, exclude=("owner", "next")),
+            {"iron-plate": 5, "copper-plate": 25},
+        )
         self.assertIsNone(self.next())
-        self.assertFalse(self.f.make("logistics").state.get("allocated_inputs"))
+        outpost.update(evidence={}, reason="waiting for iron-plate")
+        self.assertEqual(self.pipeline._surplus(self.obs, logistics, jobs, exclude=("owner",))["iron-plate"], 0)
+        # A slack job's wait reserves nothing.
+        outpost.update(capability="starter_capacity", parameters={"resource": "iron-ore"})
+        self.assertEqual(self.pipeline._surplus(self.obs, logistics, jobs, exclude=("owner",))["iron-plate"], 50)
+        del jobs["iron"]
+        self.flush()
+        action = self.next()
+        self.assertEqual((action["type"], action["item"]), ("insert", "copper-plate"))
 
     def test_executor_fans_out_actual_receipt_and_reloads_future_owner_in_same_slice(self):
         from factorio_agent.jobs import StarterExecutors
@@ -150,6 +238,21 @@ class SciencePipelineTests(unittest.TestCase):
         self.assertEqual(ex.industry.state["allocated_inputs"], {"copper-plate": 5})
         self.assertNotIn("pending_transfer", ex.industry.state)
         self.assertEqual(self.owner.path.read_bytes(), self.old_owner)
+
+    def test_executor_funds_the_next_batch_from_any_wait_of_a_funded_researching_owner(self):
+        from factorio_agent.jobs import StarterExecutors
+
+        ex = StarterExecutors.__new__(StarterExecutors)
+        ex.game, ex.bootstrap, ex.builder, ex.catalog = self.f.game, self.f.bootstrap, self.f.builder, self.f.catalog
+        ex.industry = self.f.make("logistics")
+        self.owner.state.update(collected_packs=10, supplied_packs=10)
+        waiting = {"status": "waiting", "reason": "waiting_for_finite_machine_science_and_native_research"}
+        action = ex._science_wait_action(self.obs, self.owner, waiting)
+        self.assertEqual((action["type"], action["item"]), ("insert", "copper-plate"))
+        self.assertIs(ex.industry, ex.science_pipeline.target_controller)
+        # Not researching the owner's technology: the wait stays a wait.
+        self.obs["research"] = None
+        self.assertIs(ex._science_wait_action(self.obs, self.owner, waiting), waiting)
 
     def test_balanced_prefill_reserves_new_baseline_before_copper_and_iron(self):
         action = self.next()
@@ -243,24 +346,27 @@ class SciencePipelineTests(unittest.TestCase):
         self.assertIsNone(self.next())
         self.assertEqual(self.pipeline.state["target"]["id"], "logistics")
 
-    def test_higher_priority_unsupported_science_is_not_silently_skipped(self):
-        self.queue["nodes"].append(
-            dict(
-                id="wall",
-                job_key="wall",
-                capability="bootstrap_research",
-                parameters={"technology": "stone-wall"},
-                status="ready",
-                priority=100,
-                depends_on=["power"],
-                paused=False,
-                created_at=3,
+    def test_highest_priority_red_only_successor_is_reserved_and_others_skipped(self):
+        for node_id, technology, priority in (("wall", "stone-wall", 100), ("space", "space-science-pack", 200)):
+            self.queue["nodes"].append(
+                dict(
+                    id=node_id,
+                    job_key=node_id,
+                    capability="bootstrap_research",
+                    parameters={"technology": technology},
+                    status="ready",
+                    priority=priority,
+                    depends_on=["power"],
+                    paused=False,
+                    created_at=3,
+                )
             )
-        )
         self.flush()
-        self.assertIsNone(self.next())
-        self.assertFalse(self.pipeline.path.exists())
-        self.assertEqual(self.pipeline.last_diagnostic["reason"], "science_pipeline_v1_next_edge_not_supported")
+        action = self.next()
+        self.assertEqual(action["reason"], "fund balanced prewarmed machine science for stone-wall")
+        self.assertEqual(self.pipeline.state["target"]["id"], "wall")
+        self.ack(action)
+        self.assertEqual(self.f.make("stone-wall").state["allocated_inputs"], {"copper-plate": 5})
 
     def test_shared_cell_cannot_redirect_a_reserved_packet_to_another_research(self):
         action = self.next()
@@ -303,11 +409,13 @@ class SciencePipelineTests(unittest.TestCase):
         self.assertEqual((action["type"], action["item"], action["count"]), ("take", "copper-plate", 5))
         self.f.bootstrap.ensure_item.assert_not_called()
         self.assertEqual(
-            self.pipeline._surplus(self.obs, self.f.make("logistics")), {"iron-plate": 10, "copper-plate": 5}
+            self.pipeline._surplus(self.obs, self.f.make("logistics")), {"iron-plate": 50, "copper-plate": 25}
         )
 
-    def test_no_balanced_surplus_means_no_input_transfer(self):
-        self.obs["inventory"] = {"iron-plate": 40, "copper-plate": 20}
+    def test_no_whole_packet_means_no_input_transfer(self):
+        self.obs["inventory"] = {"iron-plate": 9, "copper-plate": 20}
+        for e in self.obs["entities"]:
+            e["output_inventory"] = {}
         self.assertIsNone(self.next())
         self.f.bootstrap._take_output.assert_not_called()
         target = self.f.make("logistics")

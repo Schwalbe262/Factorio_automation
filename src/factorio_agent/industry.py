@@ -35,6 +35,12 @@ SCIENCE_COURIER_BATCH = 5
 # remainder): the machines start on the first plates instead of waiting for
 # the full batch, without one-plate insert loops.
 FUND_CHUNK = 10
+# A prewarmed next batch is funded in packets of this many packs (or its whole
+# remainder): never the one-pack packets of 1 copper + 2 iron seen live.
+PREWARM_PACKET = 5
+# The technology whose research unlocks the cell's machines; the cell is
+# prebuilt while it runs (``BootstrapLogistics.prebuild``).
+CELL_UNLOCK_TECHNOLOGY = "automation"
 # One sizing decision per finite target batch, kept outside the bound state.
 CAPACITY_FILE = "startup-science-capacity.json"
 # Further red-only roadmap technologies that justify one expansion.
@@ -53,6 +59,20 @@ def _red_only_fixed(catalog, name):
         and type(tech.get("unit_count")) is int
         and 1 <= tech["unit_count"] <= BOOTSTRAP_RESEARCH_MAX_UNITS
     )
+
+
+def bootstrap_technologies(roadmap=None) -> list[str]:
+    """Technologies of the roadmap's finite bootstrap steps, in roadmap order (what the temporary cell researches)."""
+    from .progression import ROADMAP, STEP_TECHNOLOGY
+
+    names = []
+    for step in ROADMAP if roadmap is None else roadmap:
+        if step.capability not in ("bootstrap_research", "bootstrap_logistics"):
+            continue
+        technology = step.parameters.get("technology") or STEP_TECHNOLOGY.get(step.capability)
+        if isinstance(technology, str) and technology not in names:
+            names.append(technology)
+    return names
 
 
 def _sampled_rates(root, world_id):
@@ -1178,11 +1198,20 @@ class BootstrapLogistics:
                 return "bootstrap_research_bound_entity_changed"
             if pin.get("recipe") and actual.get("recipe") != pin["recipe"]:
                 return "bootstrap_research_machine_recipe_changed"
+        # A batch prewarmed back to back has baselines at its owner's batch end,
+        # which the counters reach only later: a rollback is a counter below
+        # what was observed when the batch was reserved.
+        warm = state.get("prewarm") or {}
+        finished_floor = min(
+            state["baseline_products_finished"],
+            warm.get("observed_products_finished", state["baseline_products_finished"]),
+        )
+        consumed_floor = min(state["baseline_consumed"], warm.get("observed_consumed", state["baseline_consumed"]))
         finished = self._finished(obs)
-        if finished is None or finished < state["baseline_products_finished"]:
+        if finished is None or finished < finished_floor:
             return "bootstrap_research_machine_counter_rollback"
         consumed = obs.get("production", {}).get("automation-science-pack", {}).get("consumed")
-        if type(consumed) not in (int, float) or not math.isfinite(consumed) or consumed < state["baseline_consumed"]:
+        if type(consumed) not in (int, float) or not math.isfinite(consumed) or consumed < consumed_floor:
             return "bootstrap_research_science_counter_rollback"
         return self._recovery_error()
 
@@ -1277,10 +1306,19 @@ class BootstrapLogistics:
             data = json.loads(ledger.read_text(encoding="utf-8"))
             if data.get("world_id") == obs["world_id"]:
                 jobs = list(data.get("jobs", {}).values())
+        # The queue is what this temporary cell will research: the upcoming
+        # bootstrap steps (back-to-back batches), not red-only research the
+        # permanent science serves later.
+        served = bootstrap_technologies()
         for wanted in roadmap_wanted_technologies(jobs, researched):
             if len(names) > CAPACITY_QUEUE_HORIZON:
                 break
-            if wanted not in names and wanted not in researched and _red_only_fixed(self.catalog, wanted):
+            if (
+                wanted not in names
+                and wanted not in researched
+                and wanted in served
+                and _red_only_fixed(self.catalog, wanted)
+            ):
                 names.append(wanted)
         targets = research_targets(self.catalog, names)
         if not targets or targets[0].technology != self.technology:
@@ -1452,6 +1490,67 @@ class BootstrapLogistics:
         extra = [e for position in slot_positions for e in labs if e["position"] == position and e is not primary]
         return [primary] + extra[: MAX_STARTUP_LABS - 1]
 
+    def prebuild(self, obs):
+        """Early start of the science cell while its unlock research runs (PLANNERS.md "Early start").
+
+        Rules:
+        - only for a batch without state (never bound, funded or legacy),
+          while ``CELL_UNLOCK_TECHNOLOGY`` is the running research and not yet
+          researched, and never for a retired cell;
+        - the cell is reserved and sized exactly as the batch would size it
+          (``_capacity_decision``: science machines and labs for the upcoming
+          bootstrap queue), decided now, up front, instead of after the unlock;
+        - every cell entity and the decided slot labs are crafted and placed
+          except those whose recipe the running research unlocks (the
+          assemblers; ``early_start.Deferral``), which go last in the build
+          order so inserters, chests and poles do not wait behind them;
+        - a blocked or failed placement is recorded once (``prebuild_blocked``)
+          and the batch builds the rest itself after the unlock.
+
+        Returns a builder action, or None. Binding, funding and research
+        happen only in ``step`` once the unlock is researched.
+        """
+        from .early_start import Deferral
+        from .science_retirement import dismantled
+
+        unlock = CELL_UNLOCK_TECHNOLOGY
+        technologies = obs.get("technologies", {})
+        if (
+            self.state
+            or self._is_legacy()
+            or obs.get("research") != unlock
+            or technologies.get(unlock)
+            or technologies.get(self.technology)
+            or not obs.get("world_id")
+            or dismantled(self.path.parent, obs["world_id"])
+        ):
+            return None
+        plan = self._startup_plan(obs)
+        if plan is None:
+            decision = self._capacity_decision(obs, None)
+            machines = min(MAX_STARTUP_SCIENCE_MACHINES, (decision or {}).get("target_assemblers", 1))
+            if machines > 1:
+                plan = self.board.reserve_startup_science(obs, science_machines=machines)
+            else:
+                plan = self.board.reserve_startup_science(obs)
+            if not plan.get("ok"):
+                return None
+        decision = self._capacity_decision(obs, plan)
+        if decision and decision.get("prebuild_blocked"):
+            return None
+        want = min(MAX_STARTUP_LABS, self._decided_labs(decision, plan)) - 1 if decision else 0
+        entities = sorted(plan["entities"], key=lambda e: e["name"] == "assembling-machine-1")
+        slots = lab_slot_entities(plan)[: max(0, want)]
+        if slots:
+            entities += list(slots[0]["poles"]) + [slot["lab"] for slot in slots]
+        build = _builder_plan(entities, [], template="startup_science_prebuild", layout_policy="pcb-block-v1")
+        result = self.builder.ensure_plan(obs, build, defer=Deferral(self.catalog, obs, coming={unlock}))
+        if result.get("type"):
+            return result
+        if result.get("status") in ("blocked", "failed") and decision:
+            self._record_capacity_flag(obs, decision, "prebuild_blocked", result.get("reason", "blocked"))
+        return None
+
     def _research_step(self, obs):
         name = self.technology
         researched = obs.get("technologies", {}).get(name)
@@ -1612,9 +1711,16 @@ class BootstrapLogistics:
             }
         funding_wait = None
         if self.state.get("prewarm"):
+            # A prewarmed batch starts its research on the packs it already
+            # paid for; a missing remainder is a plate wait, not a reason to
+            # leave the labs idle (back-to-back batches).
             balanced = self._balanced_funding(obs, acquire=True)
-            if balanced:
+            if balanced and balanced.get("type"):
                 return balanced
+            if balanced:
+                allocated = self.state["allocated_inputs"]
+                needs = {k: n - allocated.get(k, 0) for k, n in inputs.items() if n > allocated.get(k, 0)}
+                funding_wait = dict(balanced, evidence={**balanced.get("evidence", {}), "needs": needs})
         else:
             funding = self._incremental_funding(obs, plan, inputs, name)
             if funding is not None and funding.get("type"):
@@ -1888,33 +1994,84 @@ class BootstrapLogistics:
             supplied_packs=count,
         )
 
+    def funding_complete(self, obs):
+        """Ownership boundary for funding the next batch while this one still runs (back-to-back batches).
+
+        This batch is bound to the current cell, has no unresolved transfer,
+        holds its whole finite allowance (and every audited repair) and its
+        machines and labs are powered. Its packs may still be in production:
+        the next batch's counter baselines are this batch's end, computed
+        (``products_finished`` = baseline + the cycles this batch paid for,
+        ``consumed`` = baseline + its packs), never the counters observed
+        while this batch still runs. Legacy states keep ``production_complete``.
+        """
+        if self._is_legacy():
+            return self.production_complete(obs)
+        if not self.state or not obs.get("ok", True) or not obs.get("world_id"):
+            return None
+        plan = self._startup_plan(obs)
+        if (
+            plan is None
+            or self._binding_error(obs, plan)
+            or "pending_transfer" in self.state
+            or self.state.get("transfer_error")
+            or self.state["allocated_inputs"] != self.state["required_inputs"]
+            or any(
+                e["allocated_inputs"] != e["authorization"]["replacement_inputs"]
+                for e in self.state.get("diversion_recoveries", [])
+            )
+            or any(not _powered(self.find(obs, p)) for p in self.state["machines"] + self._lab_pins())
+        ):
+            return None
+        recipe = self.catalog.recipe_for_product("automation-science-pack")
+        amount = sum(p["amount"] for p in recipe["products"] if p["name"] == "automation-science-pack")
+        count = self.state["required_packs"]
+        red = self.find(obs, self.state["red_machine"])
+        return dict(
+            technology=self.technology,
+            world_id=obs["world_id"],
+            catalog_fingerprint=self.catalog.fingerprint,
+            owner_guard=_hash(self._recovery_frame()),
+            red_unit=red["unit_number"],
+            products_finished=self.state["baseline_products_finished"] + math.ceil(count / amount),
+            consumed=self.state["baseline_consumed"] + count,
+        )
+
     def _prewarmed_cell_guard(self, obs):
-        if self.technology == "logistics":
-            return None
-        path = self.path.parent / "bootstrap-logistics.json"
-        if not path.exists():
-            return None
-        try:
-            target = json.loads(path.read_text(encoding="utf-8"))
-            warm = target.get("prewarm")
-            if not warm:
-                return None
-            if (
-                target.get("world_id") != obs["world_id"]
-                or target.get("catalog_fingerprint") != self.catalog.fingerprint
-            ):
+        """Refuse this batch while another target holds an unfinished prewarm of the shared cell.
+
+        Any bootstrap target may be prewarmed (back-to-back batches); only
+        its exact owner batch, or the prewarmed target itself, may use the
+        cell until that target is natively researched.
+        """
+        root = self.path.parent
+        paths = sorted(root.glob("bootstrap-research-*.json")) + [root / "bootstrap-logistics.json"]
+        for path in paths:
+            if path == self.path or not path.exists():
+                continue
+            try:
+                target = json.loads(path.read_text(encoding="utf-8"))
+                warm = target.get("prewarm")
+                if not warm:
+                    continue
+                if (
+                    target.get("world_id") != obs["world_id"]
+                    or target.get("catalog_fingerprint") != self.catalog.fingerprint
+                ):
+                    return dict(status="blocked", reason="science_prewarm_reserved_cell_identity_changed")
+                technology = target.get("technology", "logistics")
+                if obs.get("technologies", {}).get(technology):
+                    continue
+                if (
+                    self.technology == warm["owner_technology"]
+                    and self.state
+                    and _hash(self._recovery_frame()) == warm["owner_guard"]
+                ):
+                    continue
+                return dict(status="blocked", reason="science_cell_reserved_for_approved_prewarmed_" + technology)
+            except (OSError, KeyError, TypeError, ValueError):
                 return dict(status="blocked", reason="science_prewarm_reserved_cell_identity_changed")
-            if obs.get("technologies", {}).get("logistics"):
-                return None
-            if (
-                self.technology == warm["owner_technology"]
-                and self.state
-                and _hash(self._recovery_frame()) == warm["owner_guard"]
-            ):
-                return None
-            return dict(status="blocked", reason="science_cell_reserved_for_approved_prewarmed_logistics")
-        except (OSError, KeyError, TypeError, ValueError):
-            return dict(status="blocked", reason="science_prewarm_reserved_cell_identity_changed")
+        return None
 
     def _autonomous_wait_flags(self, obs):
         baseline = (
@@ -1952,8 +2109,10 @@ class BootstrapLogistics:
         need = lambda item, n: max(0, math.ceil(required[item] * n / count) - allocated.get(item, 0))
         if not level or all(need(k, level) == 0 for k in required):
             completed = min(allocated.get(k, 0) * count // n for k, n in required.items())
-            levels = range(min(count, completed + 5), completed, -1)
-            level = next((n for n in levels if all(need(k, n) <= budget.get(k, 0) for k in required)), None)
+            # Whole packets only (PREWARM_PACKET packs, or the remainder).
+            level = min(count, completed + PREWARM_PACKET)
+            if not all(need(k, level) <= budget.get(k, 0) for k in required):
+                level = None
             if level is None:
                 return dict(status="waiting", reason="science_prewarm_balanced_surplus_not_available")
             warm["packet_level"] = level
@@ -1995,7 +2154,7 @@ class BootstrapLogistics:
             or any(type(n) is not int or not 0 <= n <= 1000000 for n in surplus_budget.values())
         ):
             raise ValueError("prewarm requires bounded nonnegative raw-plate surplus")
-        completed = owner.production_complete(obs)
+        completed = owner.funding_complete(obs)
         if (
             not completed
             or owner.technology == self.technology
@@ -2037,17 +2196,12 @@ class BootstrapLogistics:
             if plan is None or _hash(plan) != owner.state["plan_hash"]:
                 return dict(status="blocked", reason="science_prewarm_shared_cell_changed")
             if not self.state:
-                # Existing raw/gear residues could create products before a new
-                # baseline is reserved. Decline until the old packet is empty.
-                cell = [self.find(obs, p) for p in owner.state["machines"] + owner.state["ports"]]
-                if any(
-                    e.get("inventory", {}).get(item, 0)
-                    for e in cell
-                    for item in ("iron-plate", "copper-plate", "iron-gear-wheel", "automation-science-pack")
-                ):
-                    return dict(status="waiting", reason="science_prewarm_old_cell_buffer_not_empty")
+                # The baselines are the owner's batch end (``funding_complete``),
+                # so the owner's plates still in the cell never count for this
+                # batch and it may be reserved while the owner still produces.
                 if not any(surplus_budget.get(k, 0) > 0 for k in inputs):
                     return dict(status="waiting", reason="science_prewarm_surplus_not_available")
+                finished = owner._finished(obs) if not owner._is_legacy() else completed["products_finished"]
                 self.state = dict(
                     schema_version=1,
                     world_id=obs["world_id"],
@@ -2061,8 +2215,8 @@ class BootstrapLogistics:
                     machines=deepcopy(owner.state["machines"]),
                     ports=deepcopy(owner.state["ports"]),
                     lab=deepcopy(owner.state["lab"]),
-                    baseline_products_finished=completed["products_finished"],
-                    baseline_consumed=consumed,
+                    baseline_products_finished=max(completed["products_finished"], finished),
+                    baseline_consumed=max(completed.get("consumed", consumed), consumed),
                     collected_packs=0,
                     supplied_packs=0,
                     transfer_sequence=0,
@@ -2072,6 +2226,8 @@ class BootstrapLogistics:
                         red_unit=completed["red_unit"],
                         packet_level=0,
                         reserved_tick=obs["tick"],
+                        observed_products_finished=finished,
+                        observed_consumed=consumed,
                     ),
                 )
                 # The prewarmed batch shares the owner's exact bindings.

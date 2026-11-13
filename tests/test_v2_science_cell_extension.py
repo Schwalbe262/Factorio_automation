@@ -422,6 +422,12 @@ class ExtensionBatchTests(unittest.TestCase):
         self.assertIsNone(controller._extension_refusal(self.obs))
         (self.root / "bootstrap-research-stone-wall.json").write_text("{", encoding="utf-8")
         self.assertEqual(controller._extension_refusal(self.obs), "science_cell_extension_batch_state_unreadable")
+        # An unreadable batch state also fails the prewarm guard closed (any target may be prewarmed).
+        self.assertEqual(controller.step(self.obs)["reason"], "science_prewarm_reserved_cell_identity_changed")
+        (self.root / "bootstrap-research-stone-wall.json").unlink()
+        self.write_state(
+            "bootstrap-research-gun-turret.json", technology="gun-turret", pending_transfer={"kind": "lab"}
+        )
         # A refused growth leaves the cell alone and the batch binds the old cell.
         action = controller.step(self.obs)
         self.assertEqual((action["type"], action["item"]), ("insert", "iron-plate"))
