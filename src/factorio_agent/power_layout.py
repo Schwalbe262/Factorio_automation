@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import math
 from pathlib import Path
 import time
 
@@ -19,6 +20,32 @@ from .routing import route_trunks
 
 STARTER_MAX_ROUTE_ATTEMPTS = 10
 STARTER_PLANNING_SECONDS = 20.0
+# Coal cells sent to the boundary survey (one query): the first this many fringe cells.
+STARTER_COAL_CANDIDATES = 256
+
+
+def fringe_coal_cells(make_cell, sites):
+    """Coal feed cells, in ``sites`` order, whose fuel arm and outlet do not stand on a known coal site.
+
+    ``sites`` (``coal_sites_richest_first``) are drill positions, one per coal
+    tile ``t`` at ``(floor(t.x + 0.5), floor(t.y + 0.5))``. An entity at
+    ``(px, py)`` stands on coal when that key of its tile is a site. The
+    boundary survey checks the arm and outlet against the live ore; this
+    filter only drops cells that cannot pass it, before the candidate cap.
+    Why: the richest-first order puts the thin fringe last, and the old cap
+    of the first 256 sites kept 2 fringe cells of 50 on seed 2644599892, both
+    already taken by starter cells, so the feed was never planned.
+    """
+    keys = {(site["x"], site["y"]) for site in sites}
+    cells = []
+    for site in sites:
+        cell = make_cell(site)
+        outlet = cell["ports"][0]["position"]
+        arms = [e["position"] for e in cell["entities"] if e["name"] == "burner-inserter"]
+        if any((math.floor(p["x"] + 0.5), math.floor(p["y"] + 0.5)) in keys for p in arms + [outlet]):
+            continue
+        cells.append(cell)
+    return cells
 
 
 def identity(entity):
@@ -159,7 +186,7 @@ class V2FactoryBuilder(FactoryBuilder):
             return failure("starter_coal_planning_budget_exhausted")
         power_entities, pins = _power_preflight_projection(power, obs)
         power_guard = _power_pipe_guard(pins)
-        cells = [self._coal_plan(position) for position in self.coal_sites_richest_first()[:256]]
+        cells = fringe_coal_cells(self._coal_plan, self.coal_sites_richest_first())[:STARTER_COAL_CANDIDATES]
         if expired():
             return failure("starter_coal_planning_budget_exhausted")
         if not cells:

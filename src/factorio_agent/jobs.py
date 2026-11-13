@@ -13,7 +13,14 @@ import time
 from typing import Any
 
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
-from factorio_agent.early_start import EARLY_FREE_SLOTS, admission_requires, is_early, track_early_time
+from factorio_agent.early_start import (
+    EARLY_FREE_SLOTS,
+    admission_requires,
+    is_early,
+    parked,
+    runs_early,
+    track_early_time,
+)
 
 
 TERMINAL = {"succeeded", "blocked", "failed"}
@@ -79,6 +86,9 @@ CAPABILITIES = {
         },
         "native_recipes": ["electric-mining-drill"],
         "requires": ["power"],
+        # Early start (early_start.py): planned from the site plan's mining zone once
+        # power stands; collector belts, poles and the exit route are built, drills wait.
+        "early_start": {"requires": ["power"], "inputs": "mining_zones", "locked_until": ["electric-mining-drill"]},
         "effect": "add aligned powered electric drills/collector banks with fixed output ports; never replace operating banks to expand",
     },
     "smelting_district": {
@@ -459,6 +469,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "science_growth": obs.get("science_growth"),
         "science_growth_error": obs.get("science_growth_error"),
         "early_start_inputs": obs.get("early_start_inputs"),
+        "coal_feed_belts": obs.get("coal_feed_belts"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {k: v for k, v in job.items() if k in {"key", "capability", "status", "reason", "actions", "last_tick"}}
@@ -485,7 +496,16 @@ RESEARCH_CAPABILITIES = frozenset({"starter_research", "bootstrap_research", "bo
 
 # Capabilities whose jobs for different resources work on different ore patches
 # and may run side by side (copper capacity no longer queues behind iron).
-PER_RESOURCE_CAPABILITIES = frozenset({"starter_capacity"})
+# mining_outpost: the three banks share mining-outposts.json, but one
+# MiningOutposts instance holds it in memory, jobs step one at a time under
+# the writer lock, a step touches only its own resource's banks, and a new
+# bank is planned against every saved bank's reserved area.
+PER_RESOURCE_CAPABILITIES = frozenset({"starter_capacity", "mining_outpost"})
+
+
+def holds_slot(job: dict) -> bool:
+    """An active job counts toward MAX_ACTIVE_JOBS unless it is parked for research (early_start.parked)."""
+    return is_active(job) and not parked(job)
 
 
 def admission_lane(capability: str, parameters) -> str:
@@ -505,11 +525,13 @@ def _admission_error(
         return f"another job with capability {capability} is already active"
     if capability in RESEARCH_CAPABILITIES and any(job["capability"] in RESEARCH_CAPABILITIES for job in active):
         return "another job that owns research is already active"
-    if len(active) >= MAX_ACTIVE_JOBS:
+    # A job parked for research (early start) keeps its lane but holds no slot.
+    slots = sum(1 for job in active if not parked(job))
+    if slots >= MAX_ACTIVE_JOBS:
         return f"another job must finish or pause first: at most {MAX_ACTIVE_JOBS} jobs may be active"
     # Early start: the job runs ahead of unfinished prerequisites and never takes the last free slot.
     succeeded = {job["capability"] for job in jobs.values() if job["status"] == "succeeded"}
-    if is_early(CAPABILITIES, capability, succeeded) and len(active) >= MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS:
+    if is_early(CAPABILITIES, capability, succeeded) and slots >= MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS:
         limit = MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS
         return f"an early start keeps a job slot free: at most {limit} jobs may be active"
     return None
@@ -797,7 +819,8 @@ def _advance_job(root: Path, game, executors, ledger: Ledger, key: str, obs: dic
         ledger.save()
         return "terminal", {}
     succeeded = {j["capability"] for j in ledger.data["jobs"].values() if j["status"] == "succeeded"}
-    track_early_time(job, obs["tick"], time.time(), is_early(CAPABILITIES, job["capability"], succeeded))
+    early = runs_early(CAPABILITIES, job["capability"], succeeded, obs.get("technologies"))
+    track_early_time(job, obs["tick"], time.time(), early)
     if (
         obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) - job.get("early_ticks", 0) > 108000
         or time.time() - job["created_at"] - job.get("paused_seconds", 0) - job.get("early_seconds", 0) > 3600

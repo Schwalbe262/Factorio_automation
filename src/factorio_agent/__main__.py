@@ -265,6 +265,14 @@ def execute(argv=None, services=None):
 
         # Early start: which blocks have their inputs planned (progression.autopilot_nodes).
         obs["early_start_inputs"] = inputs_receipt(root, obs, CAPABILITIES)
+        from .power_coal_feed import BELT_RECEIPT, feed_belt_receipt
+
+        try:  # stocked machine-made belts for the coal feed gate (power_coal_feed.feed_step_ready)
+            belts = feed_belt_receipt(root, obs)
+            if belts is not None:
+                obs[BELT_RECEIPT] = belts
+        except Exception as exc:  # an estimate must never break observe
+            obs[BELT_RECEIPT + "_error"] = f"{type(exc).__name__}: {exc}"[:200]
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)

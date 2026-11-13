@@ -36,7 +36,9 @@ upkeep           while power_mode is hand_fed (StarterExecutors.starter_upkeep a
                  fill   = min(coal stack * 1 fuel slot, ceil(burn * 2 min)) - slot coal   (base: to 50)
                  insert when carried >= min(fill, 8) or the boiler is out; else ensure_item(coal) from the coal chests
 feed step        roadmap power_coal_feed (after power, before electric_coal), gate machine_made_belts, priority -500:
-                 a succeeded supply_cell with transport-belt or a succeeded produce row for it,
+                 receipt coal_feed_belts (power_coal_feed.feed_belt_receipt): belts carried + in the supply cell's
+                 belt chest >= the saved coal_plan's belts (100 without a plan), the cell's job need not have succeeded,
+                 or a succeeded supply_cell with transport-belt or a succeeded produce row for it,
                  or FEED_FALLBACK_TICKS (54000) after power, or an old map's power job (feed evidence, not hand_fed)
                  -> ensure_coal_feed builds coal_plan, proves power_flow_ready for 1800 ticks -> power_mode: belt_fed
 after            hand fuelling stops; electric_coal (requires power_coal_feed) replaces the burner drill
@@ -47,7 +49,9 @@ after            hand fuelling stops; electric_coal (requires power_coal_feed) r
 | saved state without `power_mode`: `coal_plan` present = belt-fed (old maps keep the old full path), absent = hand-fed | `deterministic_builder.coal_feed_mode` |
 | the reserved feed is board block `power_coal_feed` (entities, no ports, reserved area = drill footprint) while hand-fed, removed once belt-fed | `power_coal_feed.publish_planned_feed` |
 | the reserved feed is not in `known_project_construction_budget` until the feed step started (`coal_feed_started`) | `power_coal_feed.feed_in_bill`, `diagnostics.construction_budget` |
-| a route built over before the feed started is re-planned (at most `COAL_FEED_REPLANS` 2) | `FactoryBuilder.ensure_coal_feed` |
+| a route built over before the feed started is re-planned (at most `COAL_FEED_REPLANS` 2); the re-plan surveys every fringe cell again, so a taken cell fails its preflight and the next one is tried | `FactoryBuilder.ensure_coal_feed` |
+| candidate cells: cells whose fuel arm or outlet stands on a known coal site are dropped before the cap of `STARTER_COAL_CANDIDATES` (256); before, the richest-first cap kept 2 of 50 fringe cells on seed 2644599892, both under starter cells, and the feed was never planned (`no_boundary_coal_cell_with_complete_resource_avoiding_boiler_route`) | `power_layout.fringe_coal_cells` |
+| new starter cells (`discover_cell`, `StarterCapacity.choose_site`) avoid every board block's reserved area and every planned-but-unbuilt entity tile, so the reserved feed and other planned blocks stay free | `board.starter_keepouts`, `KEEPOUT_LUA` |
 | `POWER_BUILDS` holds the plant and the first fill (50 coal); `POWER_COAL_FEED_BUILDS` the drill, arm and about 100 belts | `progression.py` |
 
 Pinned by `tests/test_v2_power_coal_feed.py`.
@@ -385,6 +389,7 @@ new research. Declared per capability in `jobs.CAPABILITIES[c]["early_start"]`:
 
 | Capability | `requires` (admission) | `running` | `inputs` | `locked_until` |
 |---|---|---|---|---|
+| `mining_outpost` | power | - | `mining_zones`: the site plan has a `mining:<resource>` zone with an output side for iron, copper and coal | electric-mining-drill |
 | `smelting_district` | power | - | `mining_bank_ports`: per source (iron 60, copper 30, coal 30) a saved bank, built or not, whose port is on the board | logistics |
 | `planned_main_bus` | power | smelting_district | `district_feed_anchors`: district plan registered, the belt under each bus feed splitter built | logistics |
 
@@ -410,14 +415,32 @@ demand: an early job's saved plan counts in supply-cell demand but not as curren
 inputs final: a bank port is final once the bank is saved (exit side chosen before saving; bridge re-plans keep
   ports); the district records source_ports and, when one is no longer a saved bank port, re-plans if nothing of it
   is built (board block dropped) or blocks with smelting_inputs_changed_after_partial_build
+coming (technologies_coming): research, native queue, technology of an active job, and the technology of a roadmap
+  research step proposed next (not satisfied/stalled, every after satisfied or in flight, admission requires
+  succeeded): right after power automation is in flight, so electric-mining-drill and logistics count as coming
+runs early (runs_early): a strict requires missing OR a locked_until technology unresearched (the outposts' only
+  "early" is their drill research): no deadline, contested plates held, and a hand craft of an item a supply cell
+  makes or is about to make (machine_made_items) waits for its machine-made stock
+parked (early_start.parked): ensure_plan's deferred wait whose reasons are all research (or plan order behind it)
+  reports evidence.research_only; such a waiting job keeps its lane but holds no job slot
+  (jobs._admission_error, supervisor._dispatch); it is still stepped every pass
+outposts: one lane per resource (PER_RESOURCE_CAPABILITIES); while electric-mining-drill is coming the bank is
+  prepared, saved and published (port final), collector belts, poles, bridge and exit route are built, drills
+  (sorted last in resource cells) wait; blocked electric_mining_research_required only when it is not coming;
+  proof unchanged (ready only after drill output); an early outpost is not an "existing capacity task" for
+  supply_planning, so starter capacity for its resource still grows
 ```
+
+Chain from power on: outposts (3 lanes, park on the drills) -> district (inputs = the banks'
+published ports; parks on splitters/undergrounds) -> bus (inputs = district anchor belts built,
+which the early district lays; its splice still waits for `smelting_district` to succeed).
 
 Without early inputs in the receipt the roadmap behaves as before. Other
 candidates for the same declaration: `automation_science` (needs the bus's
 published taps; its tap cutover splices the bus, so it would need a splice
 hold like the bus), `logistic_science` (after its research), `steel_production`
 (after steel processing), `dedicated_materials_*`. Pinned by
-`tests/test_v2_early_start.py`.
+`tests/test_v2_early_start.py`, `tests/test_v2_early_outposts.py`.
 
 ## Supervisor and incidents (`supervisor.py`, `incidents.py`, `IncidentConfig`)
 

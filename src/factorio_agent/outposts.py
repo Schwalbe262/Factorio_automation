@@ -571,7 +571,7 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             "expansion_policy": "preserve existing drills, collector and output port; grow upstream",
         }
 
-    def _recover_obstructed_bridge(self, obs, bank, result):
+    def _recover_obstructed_bridge(self, obs, bank, result, defer=None):
         """Re-plan a pending bank's unbuilt power bridge around a new obstruction; None keeps ``result``.
 
         Jobs run concurrently: after a bank was planned another job may build
@@ -632,7 +632,7 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
         reservation = self.publish_reservations(obs)
         if reservation:
             return reservation
-        return self.builder.ensure_plan(obs, bank["plan"])
+        return self.builder.ensure_plan(obs, bank["plan"], **({"defer": defer} if defer else {}))
 
     def _replan_bridge(self, obs, bank, bridge, blocked, obstruction):
         """Replace ``bank["plan"]``'s unbuilt bridge in memory; a failure reason, or None on success."""
@@ -704,8 +704,16 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
 
     def step(self, obs, parameters):
         validate_parameters(parameters)
+        from .early_start import deferral, ledger_jobs, technologies_coming
+
+        # Early start: while the drill research is coming, the bank is planned
+        # and published and everything but its drills is built (Deferral).
+        defer = None
         if not obs.get("technologies", {}).get("electric-mining-drill"):
-            return {"status": "blocked", "reason": "electric_mining_research_required"}
+            coming = technologies_coming(obs, ledger_jobs(self.path.parent, obs.get("world_id")))
+            if "electric-mining-drill" not in coming:
+                return {"status": "blocked", "reason": "electric_mining_research_required"}
+            defer = deferral(self.path.parent, obs, self.builder.catalog, "mining_outpost")
         if not self.state:
             self.state = {"world_id": obs["world_id"], "banks": []}
         if self.state["world_id"] != obs["world_id"]:
@@ -799,8 +807,8 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
         coverage = self._construction_coverage(obs, pending)
         if coverage is not None:
             return coverage
-        result = self.builder.ensure_plan(obs, pending["plan"])
-        recovered = self._recover_obstructed_bridge(obs, pending, result)
+        result = self.builder.ensure_plan(obs, pending["plan"], **({"defer": defer} if defer else {}))
+        recovered = self._recover_obstructed_bridge(obs, pending, result, defer)
         if recovered is not None:
             result = recovered
         if result.get("status") != "succeeded":

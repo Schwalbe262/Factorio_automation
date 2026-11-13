@@ -30,7 +30,17 @@ def _read(root, name):
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
-def _pending(root, world):
+def _drills_researched(obs):
+    technologies = obs.get("technologies")
+    if isinstance(technologies, dict):
+        return bool(technologies.get("electric-mining-drill"))
+    return "electric-mining-drill" in (technologies or ())
+
+
+def _pending(root, world, *, drills_researched=True):
+    """Resources with an open capacity job or node. An early ``mining_outpost``
+    (drill research not done: it only plans and lays belts) adds no capacity yet,
+    so it never holds back starter capacity for its resource."""
     jobs = _read(root, "jobs.json")
     queue = _read(root, "work_queue.json")
     if jobs and jobs.get("world_id") != world or queue and queue.get("world_id") != world:
@@ -45,6 +55,8 @@ def _pending(root, world):
             unknown = True
         status = row.get("status")
         if status in ("completed", "succeeded", "cancelled", "failed"):
+            continue
+        if row.get("capability") == "mining_outpost" and not drills_researched:
             continue
         if row.get("capability") in ("starter_capacity", "mining_outpost", "paired_mining"):
             resource = row.get("parameters", {}).get("resource")
@@ -123,7 +135,7 @@ def supply_options(root, game, obs, catalog, budget, rates):
     if not obs.get("ok", True) or not obs.get("world_id") or getattr(game, "expected_world", None) != obs["world_id"]:
         return {item: {"action": "wait", "reason": "supply_observation_world_unbound"} for item in RESOURCES}
     bootstrap = V2Bootstrap(game, catalog)
-    pending, unknown = _pending(root, obs["world_id"])
+    pending, unknown = _pending(root, obs["world_id"], drills_researched=_drills_researched(obs))
     measured = (
         isinstance(rates, dict)
         and rates.get("status") == "measured"

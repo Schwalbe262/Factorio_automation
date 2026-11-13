@@ -604,8 +604,19 @@ return {ok=true,cells=cells}
         return result
 
     def discover_cell(
-        self, resource: str, receiver_name: str, *, preferred_receiver: dict[str, Any] | None = None
+        self,
+        resource: str,
+        receiver_name: str,
+        *,
+        preferred_receiver: dict[str, Any] | None = None,
+        observation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """A complete existing cell, an existing drill's missing receiver, or a new site.
+
+        With ``observation`` a new site avoids every board block and
+        planned-but-unbuilt entity (``board.starter_keepouts``), e.g. the
+        reserved coal feed.
+        """
         existing = self._existing_cells(resource)
         if not existing.get("ok"):
             return existing
@@ -636,12 +647,24 @@ return {ok=true,cells=cells}
                     "drill": cell["drill"],
                     "receiver": {"name": receiver_name, "position": receiver},
                 }
+        keepouts = {"areas": [], "tiles": []}
+        root = getattr(getattr(self.game, "cfg", None), "runtime_dir", None)
+        if observation is not None and root is not None:
+            from factorio_agent.board import starter_keepouts
+
+            keepouts = starter_keepouts(root, observation)
+        from factorio_agent.board import KEEPOUT_LUA
+
         return self.game.query(
             """
 local resource="""
             + json.dumps(resource)
             + """;local receiver_name="""
             + json.dumps(receiver_name)
+            + """;local keepouts=helpers.json_to_table("""
+            + json.dumps(json.dumps(keepouts, separators=(",", ":")))
+            + ")"
+            + KEEPOUT_LUA
             + """
 local strict="""
             + ("true" if getattr(self.game, "backend", None) == "character" else "false")
@@ -669,7 +692,10 @@ for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resou
   local p={x=x,y=y};local receiver={x=x,y=y-2}
   if receiver_name=="wooden-chest" then receiver={x=x-0.5,y=y-1.5} end
   local old_receiver=target(receiver,receiver_name)
-  if can_plan("burner-mining-drill",p)
+  local half=receiver_name=="wooden-chest" and .5 or 1
+  local kept_out=keepout_hit(x-1,y-1,x+1,y+1) or (not old_receiver
+   and keepout_hit(receiver.x-half,receiver.y-half,receiver.x+half,receiver.y+half))
+  if not kept_out and can_plan("burner-mining-drill",p)
    and (old_receiver or can_plan(receiver_name,receiver)) then
    local richness=0;local tiles=0;local mixed=false
    for _,r in pairs(s.find_entities_filtered{area={{x-1,y-1},{x+1,y+1}},type="resource"}) do
@@ -688,7 +714,7 @@ return best or {ok=false,reason="no_clear_direct_mining_cell_site"}
         )
 
     def _ensure_cell(self, observation: dict[str, Any], resource: str, receiver_name: str) -> dict[str, Any] | None:
-        cell = self.discover_cell(resource, receiver_name)
+        cell = self.discover_cell(resource, receiver_name, observation=observation)
         if not cell.get("ok"):
             return _report("blocked", cell.get("reason", "cell_site_query_failed"), resource=resource)
         if cell.get("complete"):
