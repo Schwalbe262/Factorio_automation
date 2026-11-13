@@ -280,6 +280,10 @@ def aggregate(runs):
         lab_idle_seconds=stats(r.get("lab_idle_seconds") for r in runs),
         actor_critical_seconds=stats(r.get("actor_critical_seconds") for r in runs),
         actor_slack_seconds=stats(r.get("actor_slack_seconds") for r in runs),
+        query_load={
+            key: stats((r.get("query_load") or {}).get(key) for r in runs)
+            for key in ("queries_per_minute", "share_percent", "per_slice", "ms_per_action")
+        },
         blocked_reasons=order(blocked),
         controller_errors=order(errors),
     )
@@ -345,6 +349,13 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
         lines.append(key.ljust(20) + _cell(gmin, 5) + "".join(_cell(c, 6) for c in cells) + _cell(lab, 10))
     reached = [(agg["columns"][h] or {}).get("n", 0) for h in heads]
     lines.append("reached".ljust(25) + "".join(_cell(n, 6) for n in reached))
+    load = agg.get("query_load") or {}
+    if any(load.values()):
+        median = {key: (row or {}).get("median") for key, row in load.items()}
+        lines.append(
+            "rcon query median: {queries_per_minute}/min, {share_percent}% of command time,"
+            " {per_slice}/slice, {ms_per_action} ms/action".format(**median)
+        )
     lines.append(f"blocked/failed jobs now (reason -> count -> example seed), top {top}:")
     rows = list(agg["blocked_reasons"].items())[:top]
     lines += [f"  {v['count']:3d}  {reason}  [{v['capability']}] e.g. {v['seeds'][0]}" for reason, v in rows] or [
@@ -836,6 +847,7 @@ class Fleet:
             controller_errors=summary.get("controller_errors") or {},
             wall_minutes=summary.get("wall_minutes"),
             actions=summary.get("actions"),
+            query_load=summary.get("query_load"),
         )
         top = min(hi, row["game_minutes"] or hi)
         if top > lo:

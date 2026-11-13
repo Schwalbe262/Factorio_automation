@@ -30,6 +30,58 @@ def _at(entity: dict[str, Any], name: str, position: dict[str, float]) -> bool:
 # Final items the character may have in the native crafting queue at once.
 CRAFT_QUEUE_ITEMS = 3
 
+# Freshness of a reused drill-cell survey, per caller (``_existing_cells``):
+# game ticks the pass observation may be newer than the pass that took it,
+# always only while no action ran (``act_epoch``) and the world is the same.
+# Fuel, output and wait decisions read fuel/burning/operating: that pass only.
+SURVEY_SAME_PASS = 0
+# Site choice, cell discovery, retirement and supply planning read structure
+# (drill, receiver, belt, remaining ore), which only an action changes.
+SURVEY_LAYOUT_TICKS = 600
+
+# Every drill that mines exactly one resource, grouped by that resource.
+EXISTING_CELLS_LUA = """
+local by={}
+for _,e in pairs(s.find_entities_filtered{force=f,type="mining-drill"}) do
+ local target_name=nil
+ local good,t=pcall(function() return e.mining_target end)
+ if good and t and t.valid then target_name=t.name end
+ local counts={};local best=0;local kinds=0
+ local radius=e.prototype.mining_drill_radius
+ for _,ore in pairs(s.find_entities_filtered{area={{e.position.x-radius,e.position.y-radius},
+      {e.position.x+radius,e.position.y+radius}},type="resource"}) do
+  if math.abs(ore.position.x-e.position.x)<=radius and math.abs(ore.position.y-e.position.y)<=radius and ore.amount>0 then
+   if not counts[ore.name] then kinds=kinds+1 end
+   counts[ore.name]=(counts[ore.name] or 0)+ore.amount
+   if counts[ore.name]>best then best=counts[ore.name];if not good or not t or not t.valid then target_name=ore.name end end
+  end
+ end
+ if target_name and kinds==1 then
+  local resource=target_name
+  local receiver=nil;local direct_belt=false
+  for _,candidate in pairs(s.find_entities_filtered{position=e.drop_position,radius=1.5,force=f}) do
+   if candidate.type=="furnace" or candidate.type=="container" then
+    local box=candidate.bounding_box;local p=e.drop_position
+    if math.abs(p.x-candidate.position.x)<=candidate.prototype.tile_width/2
+     and math.abs(p.y-candidate.position.y)<=candidate.prototype.tile_height/2 then receiver=candidate;break end
+   elseif candidate.type=="transport-belt" or candidate.type=="underground-belt" then
+    local b=candidate.bounding_box;local p=e.drop_position
+    if p.x>=b.left_top.x and p.x<b.right_bottom.x and p.y>=b.left_top.y and p.y<b.right_bottom.y then direct_belt=true end
+   end
+  end
+  local burner=e.burner
+  local cells=by[resource] or {};by[resource]=cells
+  cells[#cells+1]={drill={name=e.name,position=pos(e.position),direction=e.direction},drop_position=pos(e.drop_position),
+   receiver=receiver and {name=receiver.name,position=pos(receiver.position)} or nil,direct_belt=direct_belt,
+   fuel=e.get_fuel_inventory() and e.get_fuel_inventory().get_item_count("coal") or 0,
+   burning=burner and burner.remaining_burning_fuel>0 or false,electric=burner==nil,
+   operating=burner==nil and e.energy>0 and e.is_connected_to_electric_network() or false,
+   remaining=counts[resource] or 0}
+ end
+end
+return {ok=true,cells_by_resource=by}
+"""
+
 
 class DeterministicBootstrap:
     def __init__(self, game: Any, catalog: Any = None):
@@ -38,21 +90,31 @@ class DeterministicBootstrap:
         self._recipes: dict[str, dict[str, Any]] = {}
         self._world_id: str | None = None
         self.construction_buffers: dict[str, dict[str, Any]] = {}
-        self._cell_surveys: dict[str, dict[str, Any]] | None = None
+        self._cell_surveys: dict[str, Any] | None = None  # survey_slice
+        self._survey_pass: tuple[str, int] | None = None  # begin_survey_pass
 
     @contextmanager
-    def cell_survey_scope(self):
-        """Reuse successful surveys only until this planning invocation exits."""
-        previous = self._cell_surveys
+    def survey_slice(self):
+        """Let ``_existing_cells`` reuse one survey inside this block (``jobs.run_jobs``, one slice).
+
+        The cache starts empty and is dropped on exit, so nothing outlives the
+        slice. Reuse also needs a pass (``begin_survey_pass``) and a game that
+        counts its actions (``act_epoch``); otherwise every call queries.
+        """
         self._cell_surveys = {}
+        self._survey_pass = None
         try:
             yield
         finally:
-            self._cell_surveys = previous
-            if previous is not None:
-                # A nested invocation may use a new observation. Resume the
-                # outer scope with fresh surveys, never its earlier snapshot.
-                previous.clear()
+            self._cell_surveys = None
+            self._survey_pass = None
+
+    def begin_survey_pass(self, observation: dict[str, Any]) -> None:
+        """The observation a ``run_jobs`` pass plans against: its world and tick bound reuse."""
+        if getattr(self, "_cell_surveys", None) is None:
+            return
+        tick, world = observation.get("tick"), observation.get("world_id")
+        self._survey_pass = (world, tick) if type(tick) is int and isinstance(world, str) else None
 
     def next_action(self, observation: dict[str, Any]) -> dict[str, Any]:
         if not observation.get("ok", True):
@@ -590,57 +652,47 @@ return best and {ok=true,name=best.name,position=pos(best.position)} or {ok=fals
             "reason": f"bootstrap {item} until drill supply is operating",
         }
 
-    def _existing_cells(self, resource: str) -> dict[str, Any]:
-        cache = self._cell_surveys
-        if cache is not None and resource in cache:
-            return deepcopy(cache[resource])
-        result = self.game.query(
-            """
-local resource="""
-            + json.dumps(resource)
-            + """
-local cells={}
-for _,e in pairs(s.find_entities_filtered{force=f,type="mining-drill"}) do
- local target_name=nil
- local good,t=pcall(function() return e.mining_target end)
- if good and t and t.valid then target_name=t.name end
- local counts={};local best=0;local kinds=0
- local radius=e.prototype.mining_drill_radius
- for _,ore in pairs(s.find_entities_filtered{area={{e.position.x-radius,e.position.y-radius},
-      {e.position.x+radius,e.position.y+radius}},type="resource"}) do
-  if math.abs(ore.position.x-e.position.x)<=radius and math.abs(ore.position.y-e.position.y)<=radius and ore.amount>0 then
-   if not counts[ore.name] then kinds=kinds+1 end
-   counts[ore.name]=(counts[ore.name] or 0)+ore.amount
-   if counts[ore.name]>best then best=counts[ore.name];if not good or not t or not t.valid then target_name=ore.name end end
-  end
- end
- if target_name==resource and kinds==1 then
-  local receiver=nil;local direct_belt=false
-  for _,candidate in pairs(s.find_entities_filtered{position=e.drop_position,radius=1.5,force=f}) do
-   if candidate.type=="furnace" or candidate.type=="container" then
-    local box=candidate.bounding_box;local p=e.drop_position
-    if math.abs(p.x-candidate.position.x)<=candidate.prototype.tile_width/2
-     and math.abs(p.y-candidate.position.y)<=candidate.prototype.tile_height/2 then receiver=candidate;break end
-   elseif candidate.type=="transport-belt" or candidate.type=="underground-belt" then
-    local b=candidate.bounding_box;local p=e.drop_position
-    if p.x>=b.left_top.x and p.x<b.right_bottom.x and p.y>=b.left_top.y and p.y<b.right_bottom.y then direct_belt=true end
-   end
-  end
-  local burner=e.burner
-  cells[#cells+1]={drill={name=e.name,position=pos(e.position),direction=e.direction},drop_position=pos(e.drop_position),
-   receiver=receiver and {name=receiver.name,position=pos(receiver.position)} or nil,direct_belt=direct_belt,
-   fuel=e.get_fuel_inventory() and e.get_fuel_inventory().get_item_count("coal") or 0,
-   burning=burner and burner.remaining_burning_fuel>0 or false,electric=burner==nil,
-   operating=burner==nil and e.energy>0 and e.is_connected_to_electric_network() or false,
-   remaining=counts[resource] or 0}
- end
-end
-return {ok=true,cells=cells}
-"""
-        )
-        if cache is not None and result.get("ok") is True:
-            cache[resource] = deepcopy(result)
-        return result
+    def _existing_cells(self, resource: str, *, max_age_ticks: int = SURVEY_SAME_PASS) -> dict[str, Any]:
+        """Drill -> receiver cells of ``resource`` that mine only that resource.
+
+        One query surveys every resource at once (the drill scan is the same
+        for each). Inside ``survey_slice`` the survey is reused while the
+        world is the same, no ``act`` ran since it was taken, and the pass
+        observation is at most ``max_age_ticks`` newer than the pass that took
+        it (``SURVEY_SAME_PASS``: that pass only; never across a rollback).
+        """
+        entry = self._fresh_survey(max_age_ticks)
+        if entry is None:
+            epoch = getattr(self.game, "act_epoch", None)
+            result = self.game.query(EXISTING_CELLS_LUA)
+            if result.get("ok") is not True:
+                return result
+            by_resource = result.get("cells_by_resource")
+            by_resource = by_resource if isinstance(by_resource, dict) else {}
+            entry = {"by_resource": by_resource}
+            current = getattr(self, "_survey_pass", None)
+            if getattr(self, "_cell_surveys", None) is not None and current is not None and type(epoch) is int:
+                entry.update(world=current[0], tick=current[1], epoch=epoch)
+                self._cell_surveys["entry"] = entry
+        cells = entry["by_resource"].get(resource) or []
+        return {"ok": True, "cells": deepcopy(list(cells) if isinstance(cells, (list, tuple)) else [])}
+
+    def _fresh_survey(self, max_age_ticks: int) -> dict[str, Any] | None:
+        cache = getattr(self, "_cell_surveys", None)
+        current = getattr(self, "_survey_pass", None)
+        if not cache or current is None:
+            return None
+        entry = cache.get("entry")
+        epoch = getattr(self.game, "act_epoch", None)
+        if (
+            entry is None
+            or type(epoch) is not int
+            or entry["epoch"] != epoch
+            or entry["world"] != current[0]
+            or not 0 <= current[1] - entry["tick"] <= max_age_ticks
+        ):
+            return None
+        return entry
 
     def discover_cell(
         self,
@@ -656,7 +708,7 @@ return {ok=true,cells=cells}
         planned-but-unbuilt entity (``board.starter_keepouts``), e.g. the
         reserved coal feed.
         """
-        existing = self._existing_cells(resource)
+        existing = self._existing_cells(resource, max_age_ticks=SURVEY_LAYOUT_TICKS)
         if not existing.get("ok"):
             return existing
         cells = existing.get("cells", [])

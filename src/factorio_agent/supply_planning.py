@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 
+from factorio_agent.core.deterministic_bootstrap import SURVEY_LAYOUT_TICKS
 from .construction_supply import V2Bootstrap
 from .resource_policy import resource_decision
 
@@ -155,7 +156,7 @@ def supply_options(root, game, obs, catalog, budget, rates):
     cells = {}
     surveys_ok = {}
     for item, resource in RESOURCES.items():
-        report = bootstrap._existing_cells(resource)
+        report = bootstrap._existing_cells(resource, max_age_ticks=SURVEY_LAYOUT_TICKS)
         surveys_ok[item] = report.get("ok") is True
         cells[item] = (
             [

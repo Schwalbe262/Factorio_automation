@@ -33,6 +33,7 @@ import json
 from pathlib import Path
 
 from . import obsolete
+from factorio_agent.core.deterministic_bootstrap import SURVEY_LAYOUT_TICKS
 from .core.deterministic_state import _atomic_json
 
 CAPABILITY = "starter_retirement"
@@ -240,7 +241,7 @@ class StarterRetirement:
     # ----- cells --------------------------------------------------------------
     def _survey(self, obs, resource):
         """Unregistered burner drill -> starter receiver cells of ``resource`` (None when the survey failed)."""
-        report = self.bootstrap._existing_cells(resource)
+        report = self.bootstrap._existing_cells(resource, max_age_ticks=SURVEY_LAYOUT_TICKS)
         if not isinstance(report, dict) or not report.get("ok"):
             return None
         _, board = self._inputs(obs)

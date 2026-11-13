@@ -8,6 +8,7 @@ queue perform production; research and launch counters are observation-only.
 from __future__ import annotations
 
 from dataclasses import replace
+import functools
 import json
 import math
 from pathlib import Path
@@ -43,6 +44,26 @@ BUILD_BATCH_LIMIT = 32
 BUILD_BATCH_NAMES = frozenset(
     {"transport-belt", "small-electric-pole", "pipe", "inserter", "long-handed-inserter", "fast-inserter"}
 )
+
+
+def counts_effect(method):
+    """Bump ``game.act_epoch`` before and after every ``act``, also one that raises.
+
+    Readers that reuse a world survey (``DeterministicBootstrap._existing_cells``)
+    accept it only while the epoch is unchanged, so any action the actor issued
+    (a nested one too) invalidates it. The bump after the call also discards a
+    survey taken while the action ran.
+    """
+
+    @functools.wraps(method)
+    def act(self, action):
+        self.act_epoch = getattr(self, "act_epoch", 0) + 1
+        try:
+            return method(self, action)
+        finally:
+            self.act_epoch = getattr(self, "act_epoch", 0) + 1
+
+    return act
 
 
 RECOVER_EQUIPPED_AMMO_LUA = r"""
@@ -319,6 +340,7 @@ class DeterministicGame:
         self.backend = backend
         self._confirmed = False
         self.observation_metrics: dict[str, dict[str, float]] = {}
+        self.act_epoch = 0  # counts_effect
 
     def _measure_observation(self, kind, started, value, queries=1):
         metric = self.observation_metrics.setdefault(kind, {"observations": 0, "queries": 0, "seconds": 0, "bytes": 0})
@@ -534,6 +556,7 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         self._measure_observation("full", started, observation, queries=2 if observation.get("ok") else 1)
         return observation
 
+    @counts_effect
     def act(self, action: dict[str, Any]) -> dict[str, Any]:
         validate_belt_switch_backend(action, self.backend)
         validate_belt_route_replacement(action)

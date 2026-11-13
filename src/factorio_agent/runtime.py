@@ -13,7 +13,7 @@ import subprocess
 import time
 
 from factorio_agent.core.config import load_config
-from factorio_agent.core.deterministic_game import DeterministicGame
+from factorio_agent.core.deterministic_game import DeterministicGame, counts_effect
 from factorio_agent.core.process_launch import spawn_console_independent
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from factorio_agent.core.factorio import (
@@ -50,6 +50,7 @@ class WorldBoundGame(DeterministicGame):
             )
         return super().query(body)
 
+    @counts_effect
     def act(self, action: dict) -> dict:
         if action.get("type") in (
             "detach_actor",

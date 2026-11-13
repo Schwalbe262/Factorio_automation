@@ -181,7 +181,7 @@ class RetirementJobTests(unittest.TestCase):
         ]
         self.cells = {"iron-ore": cells}
         self.bootstrap = SimpleNamespace(
-            _existing_cells=Mock(side_effect=lambda r: {"ok": True, "cells": self.cells.get(r, [])})
+            _existing_cells=Mock(side_effect=lambda r, **_: {"ok": True, "cells": self.cells.get(r, [])})
         )
         self.game = SimpleNamespace(
             cfg=SimpleNamespace(runtime_dir=self.root), query=Mock(return_value={"ok": True, "linked": {}})

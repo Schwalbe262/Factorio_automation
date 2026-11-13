@@ -7,6 +7,7 @@ registered for the capability (``capability_registry``, ``handlers/``).
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -849,6 +850,18 @@ class StarterExecutors:
             return {"status": "blocked", "reason": "industrial_natural_unlocks_missing"}
         upkeep = self.bootstrap.maintain_fuel(filtered)
         return upkeep or {"status": "succeeded", "reason": "industrial supplies retain ordinary starter fuel upkeep"}
+
+    def survey_slice(self):
+        """``bootstrap.survey_slice``: drill-cell surveys may be reused inside one ``run_jobs`` slice."""
+        bootstrap = getattr(self, "bootstrap", None)
+        scope = getattr(bootstrap, "survey_slice", None)
+        return scope() if callable(scope) else contextlib.nullcontext()
+
+    def begin_survey_pass(self, obs: dict) -> None:
+        """``bootstrap.begin_survey_pass``: the pass observation that bounds survey reuse."""
+        begin = getattr(getattr(self, "bootstrap", None), "begin_survey_pass", None)
+        if callable(begin):
+            begin(obs)
 
     def step(self, capability: str, obs: dict, parameters: dict | None = None) -> dict:
         """The prelude every capability shares, then its registered handler's step."""

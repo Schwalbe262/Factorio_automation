@@ -71,7 +71,7 @@ class SupplyPlanningTests(unittest.TestCase):
         self.calls = []
 
     def run_options(self, budget=None):
-        def survey(obj, ore):
+        def survey(obj, ore, **_):
             self.calls.append(ore)
             return deepcopy(self.surveys[ore])
 
