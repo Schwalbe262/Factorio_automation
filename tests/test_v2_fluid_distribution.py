@@ -1,6 +1,7 @@
-from copy import deepcopy
 import json
+import re
 import unittest
+from copy import deepcopy
 from unittest.mock import patch
 
 from factorio_agent.board import entity
@@ -236,11 +237,25 @@ class IndependentIntakeTests(unittest.TestCase):
         lua.execute("""s={};s.find_entities_filtered=function(_)return{
  {amount=100,position={x=10.5,y=-20.5}},{amount=200,position={x=30.5,y=-20.5}}}end
 s.count_entities_filtered=function(q)return q.position.x==10.5 and 1 or 0 end
-pos=function(p)return{x=p.x,y=p.y}end""")
+pos=function(p)return{x=p.x,y=p.y}end
+s.is_chunk_generated=function(_)return true end""")
 
         def query(body):
             if "local wells={}" not in body:
                 return {"ok": True}
+            # The survey reads its arguments through the game's helpers.json_to_table: decode them here.
+            literal = re.search(r'helpers\.json_to_table\(("(?:[^"\\]|\\.)*")\)', body)
+            if literal:
+                args = json.loads(json.loads(literal.group(1)))
+
+                def table(value):
+                    if isinstance(value, dict):
+                        return lua.table_from({k: table(v) for k, v in value.items()})
+                    if isinstance(value, list):
+                        return lua.table_from([table(v) for v in value])
+                    return value
+
+                lua.globals().helpers = lua.table_from({"json_to_table": lambda _text: table(args)})
             out = lua.execute(body)
             return {
                 "ok": out["ok"],

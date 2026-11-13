@@ -252271,3 +252271,8 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - metrics: lab feed audit on the live state: green source_short 5 vs 16/min, red ok; live-shape decision: 1 -> 6 machines (headroom), 1 -> 5 (spare 120 iron), or hold + declare 110 iron / 30 copper (short).
 - result: offline only (tests/test_v2_pack_growth.py); no fleet.
 - next: restart the GUI supervisor, read pack_growth and belt_bandwidth lab_feed; fleet to confirm green growth timing; second lab entry for a second green unit.
+## 2026-11-14 part 54 rocket tail from the catalog
+- goal: roadmap ends at chemical_science, no step can reach a launch; derive the tail from data.
+- actions: rocket_plan.rocket_bill (rocket-silo closure 1000x3 packs; SA silo 50 parts of PU+LDS+RF; payload starter pack; flow to ores/crude/water, coproduct rule), tools/rocket_plan.py, tail rows -> observe receipt rocket_plan -> progression.roadmap_for; produce rows match by item, satisfied at >= rate.
+- result: 25-step tail on the real 2.1.20 catalog; 13 research, 4 produce rows (EC, pipe, foundation), inert rows for missing capabilities. Gate passed (worktree, lupa skipped).
+- next: fluid_assembly (PU, RF, concrete, EEU), chemical_product (solid fuel), produce_merged (LDS), wire advanced_petroleum/fluid_products, rocket_silo/parts/launch; verify on a long fleet.
