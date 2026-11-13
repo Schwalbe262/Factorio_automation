@@ -334,6 +334,7 @@ CAPABILITIES = {
         "parameters": {
             "products": "1..6 distinct items with assembler recipe trees from hand-fed plates (build)",
             "retire": "true instead of products: drain, demolish and release the cell",
+            "retire_product": "one cell product with a producing produce row: stop it, mine what serves only it",
         },
         "requires": ["power"],
         "native_recipes": ["assembling-machine-1"],

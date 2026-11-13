@@ -698,6 +698,151 @@ class MultiProductRetireTests(UseFixture):
         self.assertEqual([(n["id"], n["parameters"]) for n in nodes], [(sc.RETIRE_NODE_ID, {"retire": True})])
 
 
+class PerProductRetireTests(UseFixture):
+    """The belt factory on the bus took over: the cell's belt machine goes, the shared gear machine stays."""
+
+    def built(self, products=(GEAR, BELT, INS)):
+        return super().built(products)
+
+    def receipt(self, demand):
+        return {"enabled_recipes": ENABLED, "supply_cell_candidates": {"products": [], "demand": demand, "rows": {}}}
+
+    def producing(self, *items):
+        self.cell.rows_stock = lambda obs, item: {"status": "producing"} if item in items else None
+
+    def jobs(self, *rows):
+        (self.root / "jobs.json").write_text(
+            json.dumps(
+                {"world_id": "w", "jobs": {f"j{i}": dict(r, world_id="w", key=f"j{i}") for i, r in enumerate(rows)}}
+            )
+        )
+
+    def belt_entities(self):
+        return {(e["name"], sc._xy(e)) for e in sc.owned_entities(self.state, BELT)}
+
+    def test_belt_entities_come_from_the_node_graph(self):
+        rows = {r["item"]: r for r in self.state["products"]}
+        owned = self.belt_entities()
+        machine = (rows[BELT]["nodes"][0]["machine"]["x"], rows[BELT]["nodes"][0]["machine"]["y"])
+        self.assertEqual(Counter(n for n, _ in owned), Counter({"inserter": 3, "wooden-chest": 2, sc.MACHINE: 1}))
+        self.assertIn((sc.MACHINE, machine), owned)
+        gear_chest = (rows[GEAR]["output"]["x"], rows[GEAR]["output"]["y"])
+        self.assertNotIn(("wooden-chest", gear_chest), owned)  # the shared gear chest belongs to gears
+        gear_machine = {(e["name"], sc._xy(e)) for e in sc.owned_entities(self.state, GEAR)}
+        self.assertFalse(owned & gear_machine)
+        everything = {(e["name"], sc._xy(e)) for e in self.state["plan"]["entities"] if e["name"] != sc.POLE}
+        parts = [{(e["name"], sc._xy(e)) for e in sc.owned_entities(self.state, p)} for p in (GEAR, BELT, INS)]
+        self.assertEqual(set().union(*parts), everything)  # every machine, inserter and chest has one owner
+        self.assertEqual(sum(map(len, parts)), len(everything))
+
+    def test_planner_proposes_the_belt_alone_once(self):
+        built = [
+            {"capability": "power", "status": "succeeded"},
+            {"capability": sc.CAPABILITY, "status": "succeeded", "parameters": {"products": [GEAR, BELT, INS]}},
+        ]
+        demand = {GEAR: 400, BELT: 400, INS: 60}
+        self.assertEqual(sc.supply_cell_nodes(built, [], self.receipt(demand), CAPABILITIES), [])
+        row = built + [{"capability": "produce", "status": "succeeded", "parameters": {"item": BELT}}]
+        nodes = sc.supply_cell_nodes(row, [], self.receipt(demand), CAPABILITIES)
+        self.assertEqual(
+            [(n["id"], n["parameters"]) for n in nodes], [(f"{sc.RETIRE_NODE_ID}_{BELT}", {"retire_product": BELT})]
+        )
+        self.assertEqual(nodes[0]["priority"], sc.RETIRE_PRIORITY)
+        sc.validate_parameters(nodes[0]["parameters"])
+        self.assertEqual(sc.supply_cell_nodes(row, nodes, self.receipt(demand), CAPABILITIES), [])  # queued: once
+        done = row + [dict(nodes[0], status="succeeded")]
+        self.assertEqual(sc.supply_cell_nodes(done, [], self.receipt(demand), CAPABILITIES), [])
+        waits = {"capability": "smelting_district", "status": "waiting", "reason": f"waiting for machine-made {BELT}"}
+        self.assertEqual(sc.supply_cell_nodes(row + [waits], [], self.receipt(demand), CAPABILITIES), [])
+        on_row = dict(waits, evidence={"machine": {"status": "producing", "chest": {}}})  # waits on the bus row
+        self.assertEqual(len(sc.supply_cell_nodes(row + [on_row], [], self.receipt(demand), CAPABILITIES)), 1)
+        # every product covered: the whole cell retires (one node, not one per product)
+        everything = done + [
+            {"capability": "produce", "status": "succeeded", "parameters": {"item": p}} for p in (GEAR, INS)
+        ]
+        whole = sc.supply_cell_nodes(everything, [], self.receipt(demand), CAPABILITIES)
+        self.assertEqual([(n["id"], n["parameters"]) for n in whole], [(sc.RETIRE_NODE_ID, {"retire": True})])
+
+    def test_belt_retired_alone_gear_machine_survives(self):
+        live = self.live(self.state, stocks={BELT: 37, GEAR: 20, INS: 5}, inside={"iron-plate": 30})
+        task = {"retire_product": BELT}
+        self.producing()
+        self.assertEqual(self.cell.step(self.obs(live), task)["reason"], "supply_cell_product_has_no_producing_row")
+        self.producing(BELT)
+        self.jobs(
+            {"capability": "smelting_district", "status": "waiting", "reason": f"waiting for machine-made {BELT}"}
+        )
+        self.assertEqual(self.cell.step(self.obs(live), task)["reason"], "supply_cell_retire_waits_for_dependent_jobs")
+        self.jobs()
+        belt = self.belt_entities()
+        mined = []
+        for _ in range(len(belt)):
+            standing = [e for e in live if (e["name"], sc._xy(e)) not in mined]
+            action = self.cell.step(self.obs(standing, inventory={"iron-plate": 500}), task)
+            self.assertEqual(action["type"], "mine", action)
+            self.assertIn("expected_entity_unit", action)
+            mined.append((action["name"], (action["position"]["x"], action["position"]["y"])))
+        self.assertEqual(set(mined), belt)
+        self.assertEqual([n for n, _ in mined][:3], ["inserter"] * 3)  # inserters first
+        state = self.cell.state()
+        self.assertEqual(sc.retired_products(state), {BELT})
+        # no feed and no collection for belts: the stock hook is gone, the gear machine is still fed
+        standing = [e for e in live if (e["name"], sc._xy(e)) not in mined]
+        result = self.cell.step(self.obs(standing), task)
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["evidence"]["dismantled_products"], [BELT])
+        state = self.cell.state()
+        names = {(e["name"], sc._xy(e)) for e in state["plan"]["entities"]}
+        self.assertFalse(names & belt)
+        self.assertEqual(Counter(e["name"] for e in state["plan"]["entities"])[sc.MACHINE], 4)  # gear, inserter + 2
+        board = json.loads((self.root / "pcb-board.json").read_text())
+        self.assertEqual(board["blocks"][sc.BLOCK]["entities"], state["plan"]["entities"])  # freed tiles
+        self.assertNotIn(BELT, {p["item"] for p in state["plan"]["ports"] if p["direction"] == "output"})
+        self.assertIsNotNone(self.cell.retire_product_proof(self.obs(standing), BELT))
+        self.assertIsNone(self.cell.stock(self.obs(standing), BELT))
+        self.assertIsNotNone(self.cell.stock(self.obs(standing), GEAR))
+        with patch.object(sc.SupplyCell, "demand", return_value={GEAR: 400, BELT: 400, INS: 60}):
+            fed = {r["item"] for r in self.cell._active_products(self.obs(standing), state)}
+            self.assertEqual(fed, {GEAR, INS})
+            targets = self.cell.feed_targets(self.obs(standing), state)
+            belt_chests = {xy for n, xy in belt if n == "wooden-chest"}
+            self.assertFalse({(p["x"], p["y"]) for _, _, p in targets} & belt_chests)
+        self.assertIsNotNone(self.cell.proof(self.obs(standing)))  # the rest still proves
+        # the last products go: the whole cell retires and removes the rest
+        result = self.cell.step(self.obs(standing), {"retire": True})
+        self.assertEqual(result["reason"], "supply_cell_retire_drains_input_chests")
+        result = self.cell.step(self.obs(standing, tick=1000 + sc.DRAIN_TICKS), {"retire": True})
+        self.assertEqual(result["type"], "mine")
+        self.assertNotIn((result["name"], (result["position"]["x"], result["position"]["y"])), belt)
+        poles = [e for e in live if e["name"] == sc.POLE]
+        self.assertEqual(self.cell.step(self.obs(poles), {"retire": True})["status"], "succeeded")
+        self.assertNotIn(sc.BLOCK, json.loads((self.root / "pcb-board.json").read_text())["blocks"])
+
+    def test_retired_gear_keeps_its_machine_while_belts_need_it(self):
+        live = self.live(self.state, stocks={BELT: 5, GEAR: 20, INS: 5})
+        self.producing(GEAR)
+        result = self.cell.step(self.obs(live), {"retire_product": GEAR})
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertTrue(result["evidence"]["machines_kept"])
+        state = self.cell.state()
+        self.assertEqual(len(state["plan"]["entities"]), len(self.state["plan"]["entities"]))  # nothing mined
+        self.assertIsNone(self.cell.stock(self.obs(live), GEAR))  # ensure_item uses the permanent row
+        fed = {r["item"] for r in self.cell._active_products(self.obs(live), state)}
+        self.assertIn(GEAR, fed)  # the belt and inserter machines still take its gears
+        # belts go next: only the belt machine is mined, the inserter machine still takes gears
+        self.producing(GEAR, BELT)
+        action = self.cell.step(self.obs(live), {"retire_product": BELT})
+        self.assertEqual(action["type"], "mine")
+        self.assertEqual(sc.dismantled_products(self.cell.state()), {BELT})
+
+    def test_full_inventory_waits_before_mining(self):
+        live = self.live(self.state, stocks={BELT: 37})
+        self.producing(BELT)
+        obs = dict(self.obs(live), inventory_empty_slots=0)
+        result = self.cell.step(obs, {"retire_product": BELT})
+        self.assertEqual(result["reason"], "obsolete_block_needs_inventory_room")
+
+
 class ResearchPlatesTests(unittest.TestCase):
     def test_plates_a_research_job_waits_for_are_off_limits_to_the_cell(self):
         # Seed 2644599892: the science machines stood empty while the cell took every iron plate.
