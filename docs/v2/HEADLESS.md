@@ -49,8 +49,8 @@ zero players); the hidden client is ~690 MB and a GPU context
 `actor-client.json` in the runtime folder: `{"client": "always" | "none" |
 "until_lab_trigger"}`. A missing file is `always` (the interactive map and
 every older runtime: unchanged). `tools/fleet.py start` writes it after
-`runtime.create`, default `--client always` (see "Equivalence" for why `none`
-is opt-in).
+`runtime.create`, default `--client none` since the 35-minute equivalence
+below (`--keep-client` = `always` for proof runs).
 
 ### `none`: client-free TEST runs (owner exception, 2026-11-13)
 
@@ -100,6 +100,47 @@ furnace plates and `oil-processing` is a pumpjack mine.
 
 No item is granted, no other research is touched, lab research stays real.
 
+The written exception has exactly two parts (AGENTS.md): (a) the hand-craft
+trigger credit above; (b) the player-presence emulation below. Nothing else.
+
+#### (b) Player presence: chart and generate around the actor
+
+Measured on `detach-gui-1193005910` / `detach-gui2-1193005910` (`always`)
+against `detach-none-1193005910` (`none`, no emulation), same seed:
+
+| What a connected player causes | `always` | `none` before | emulation |
+|---|---|---|---|
+| freeplay `on_player_created`: `chart_starting_area` (square of `storage.chart_distance` or 200 tiles around the spawn) | 196 chunks charted, exactly chunks -7..6 | 0 charted | once, same area |
+| freeplay: `surface.daytime = 0.7` at the join | daytime offset | not set | once |
+| freeplay: crash site (12 wreck entities holding items), cutscene | present | absent | **not** recreated (it holds items) |
+| chunk generation around the player, progressive | 419 chunks at tick 2.5k, 767 at 18.4k, 1964 (46x46) at 78.7k | 400 (map creation) | `request_to_generate_chunks(actor, min(22, 10 + tick/6900))` |
+| charting around the moving character | not separable: the assisted actor stays at the spawn chunk, inside the start square | - | 3 chunks around the actor's chunk |
+| evolution / pollution / expansion | 0.0074 / 1492 / on | 0.0073 / 1555 / on | surface-wide, unaffected |
+
+`force.chart` is not processed for a force without players (probe on the
+running `detach-none2`: the requested chunk stays `is_chunk_requested_for_charting`
+and never becomes charted). So the emulation records the chunks a player would
+have charted in `d.presence_emulation.charted`, and every reader of "charted"
+uses `actor_client.CHUNK_CHARTED_LUA` (`chunk_charted(cx,cy)`: the engine
+chart, or that record in client-free mode only): `mining_layout_policy`
+patch survey, `defense_policy` survey, `nearby_threats` (threat survey and
+bastion preflight), `nest_assault` candidate survey. Radar visibility
+(`radar_coverage`, `radar_network`) stays the engine's: nothing sees further
+than the start square plus 3 chunks around the actor.
+
+`emulate_player_presence` (`WorldBoundGame.act`, via the supervisor's
+`client-free-presence` command at most every 5 wall seconds) refuses unless the
+runtime mode is `none`, the action carries exactly the fixed radii of
+`actor_client`, the world id matches and the actor is the adopted client-free
+actor. The first call writes `presence_emulation` (radii, start tick) into
+`actor-client.json` and `run.json` next to `test_mode`.
+
+Other player-dependent behaviour checked: alerts and `last_user` (nil for
+player-less builds) are read by no framework code; `auto_pause=false` is set by
+`runtime.start`; respawn does not exist without a player (death rule below);
+freeplay's `created_items` go to the player's own join character, which the
+bind discards, so neither mode gives them to the actor.
+
 ### `until_lab_trigger`
 
 The run starts as `always`. When an observation shows
@@ -146,10 +187,28 @@ count; the rate is then the drills' real rate); circuit rates in
 `supply_options` lose hand-crafted circuits, which they measure as factory
 output anyway; science `products_finished` proofs are machine-side.
 
-### Equivalence (seed 1193005910, 21 game minutes, same worktree code)
+### Equivalence
 
-`fleet.py report --name detach-none` (client-free) / `--name detach-gui`
-(`always`), milestone = game minute the step succeeded:
+**With (a) and (b), seed 1193005910, 35 game minutes** (`fleet.py report
+--name detach-none4` / `--name detach-gui3`, same code; milestone = game
+minute the step succeeded):
+
+| run | power | auto | emd | logi | iron | copr | coal | smelt | blocked now | charted / generated at end | evolution / pollution | RAM / cores |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `none` | 8.2 | 11.8 | 18.8 | 24.0 | 18.4 | 19.4 | 19.9 | 30.7 | 1x `production_row_unsupported` [produce, inserter] at tick 112k | 196 (emulated) / 2629 | 0.0136 / 2731 | 441 MB / 0.30 |
+| `always` | 8.5 | 12.2 | 17.8 | 24.9 | 18.2 | 19.2 | 19.5 | - | none | 196 / 2262 | 0.0125 / 1838 | 1543 MB / 0.78 |
+
+Milestones agree within about one game minute both ways; the client-free run
+went further (smelting district at 30.7, hence more pollution) and then hit
+`production_row_unsupported`, a reason the `always` fleets (`auto-*`) also show
+at that stage. The credit fired once (lab crafted, credit at tick 17301), no
+controller errors in either run. The actor never left the spawn chunk, so the
+emulated chart stayed the 196-chunk start square, the same as the player's.
+Generation overshoots a little (2629 vs 2262: the generator adds a margin
+around a script request). `tools/fleet.py start` now defaults to `--client
+none`.
+
+**Before (b), 21 game minutes** (`detach-none` / `detach-gui`):
 
 | run | power | auto | emd | iron | copr | coal | blocked now | RAM / cores |
 |---|---|---|---|---|---|---|---|---|
@@ -166,11 +225,7 @@ charted chunks (400 generated) against 196 charted (1964 generated) in the
 `always` run. A connected player charts and generates chunks around its
 character; a player-less character does neither. `mining_layout_policy.
 survey_patch` reads only charted chunks, gets an empty tile list and every
-mining outpost blocks. So `none` is not the fleet default. Closing the gap
-would need a second test-mode emulation (chart and generate around the actor
-with a connected player's radius, e.g. `force.chart` /
-`surface.request_to_generate_chunks`), which is outside the single written
-exception and needs the owner's decision.
+mining outpost blocks. That gap is what exception (b) closes.
 
 ## Cheapest honest alternatives
 

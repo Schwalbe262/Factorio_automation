@@ -56,21 +56,22 @@ dashboard can still look at one fleet run with `--runtime runtime/v2/<run> --por
 passes M minutes; `status`/`report` do the same check when the watcher is gone.
 Stopped runs keep their folders; nothing is deleted.
 
-`start --client always|none|until_lab_trigger` (default `always`;
+`start --client none|always|until_lab_trigger` (default `none`;
 `--keep-client` = `always`) picks the actor client mode of every run
 (`actor-client.json`, `factorio_agent.actor_client`, [HEADLESS.md](HEADLESS.md)):
 
-- `none` (TEST runs): only the dedicated server and a `--planner none`
+- `none` (default, TEST runs): only the dedicated server and a `--planner none`
   supervisor. The server-created character has no player; `connect-player`
-  adopts it (`adopt_playerless_actor`). The engine does not credit a
-  player-less hand craft, so after the real lab craft the framework
-  script-credits `automation-science-pack` (`credit_hand_craft_trigger`, the
-  single exception in AGENTS.md). `run.json`, `report_run.py`, `fleet.py
+  adopts it (`adopt_playerless_actor`). The written test-mode exception in
+  AGENTS.md reproduces what a connected player would cause: (a) after the
+  real lab craft, `automation-science-pack` is script-credited
+  (`credit_hand_craft_trigger`); (b) `emulate_player_presence` charts the
+  freeplay start area and the actor's surroundings and generates chunks
+  around it at a player's radius. `run.json`, `report_run.py`, `fleet.py
   status/report` and the dashboard header say `TEST MODE client_free`.
-  Not the default yet: a player-less actor charts no chunks, so the mining
-  outposts' patch survey finds nothing and the run stalls after the
-  electric-mining-drill research (HEADLESS.md "Equivalence").
-- `always` (default, proof runs, and what `lifecycle start --no-gui` runs): the run's
+  Equivalent to `always` within noise through the smelting district on seed
+  1193005910 over 35 game minutes (HEADLESS.md "Equivalence").
+- `always` (proof runs, and what `lifecycle start --no-gui` runs): the run's
   own automation client too (`agent-client/`, window hidden, very-low
   graphics, no audio), bound to the actor
   (`deterministic_character.BIND_CRAFTING_PLAYER_LUA`).

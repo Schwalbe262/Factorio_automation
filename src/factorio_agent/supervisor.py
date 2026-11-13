@@ -568,6 +568,10 @@ class CLIBridge:
             raise ValueError("typed request batch rejected")
 
 
+# Client-free test mode: wall seconds between player-presence emulation updates (actor_client).
+PRESENCE_SECONDS = 5
+
+
 class ActorDeadWithoutPlayer(ValueError):
     """The detached actor died: no player can respawn it (actor_client)."""
 
@@ -913,6 +917,7 @@ class Supervisor:
         observation = self.cli.invoke(["observe"])
         if actor_client.detach_due(self.root, observation):
             self._detach_client()
+        self._client_free_presence()
         status = self.cli.invoke(["status"])
         capabilities = self.cli.invoke(["capabilities"])
         inspected = self.cli.invoke(["actor-status"])
@@ -958,6 +963,23 @@ class Supervisor:
                 closed_client=record.get("closed_client"),
             )
             self._save(last_detach_reason=reason)
+
+    def _client_free_presence(self):
+        """Client-free test mode: chart/generate around the actor as a connected player would (actor_client)."""
+        if actor_client.mode(self.root) != actor_client.NONE:
+            return
+        now = self.clock()
+        if now - getattr(self, "_presence_at", -1e9) < PRESENCE_SECONDS:
+            return
+        self._presence_at = now
+        receipt = self.cli.invoke(["client-free-presence"])
+        if receipt.get("first") or receipt.get("status") != "succeeded":
+            self._event(
+                "client_free_presence",
+                status=receipt.get("status"),
+                reason=receipt.get("reason"),
+                tick=receipt.get("tick"),
+            )
 
     def _actor_dead_without_player(self, inspected):
         """Death after the detach: record the terminal state and stop the run (actor_client)."""

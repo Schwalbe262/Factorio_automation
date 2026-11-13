@@ -8,7 +8,7 @@ import json
 import math
 from pathlib import Path
 
-from .actor_client import DETACHED_ACTOR_LUA
+from .actor_client import CHUNK_CHARTED_LUA, DETACHED_ACTOR_LUA
 
 
 PRODUCTIVE_NAMES = frozenset(
@@ -348,6 +348,7 @@ class NearbyThreats:
 
 NEARBY_THREATS_SURVEY_LUA = (
     DETACHED_ACTOR_LUA
+    + CHUNK_CHARTED_LUA
     + r"""
 local args=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=args.world_id then return {ok=false,reason="nearby_threats_native_world_changed"}end
@@ -407,7 +408,7 @@ local function magazines(inv)
  return {full_normal_magazines=full,normal_rounds=rounds,partial_normal_magazines=partial,by_item=by_item}
 end
 for _,chunk in ipairs(chunk_list)do
- if f.is_chunk_charted(s,chunk)then charted=charted+1
+ if chunk_charted(chunk.x,chunk.y)then charted=charted+1
   local box={{chunk.x*32,chunk.y*32},{(chunk.x+1)*32-.0001,(chunk.y+1)*32-.0001}}
   if hostile then
    local found=s.find_entities_filtered{area=box,force=enemy,type={"unit","unit-spawner","turret"},limit=args.maximum_entities+1}
@@ -478,14 +479,16 @@ return {ok=true,tick=game.tick,world_id=d.world_id,surface_name=s.name,surface_i
 )
 
 
-BASTION_PREFLIGHT_LUA = r"""
+BASTION_PREFLIGHT_LUA = (
+    CHUNK_CHARTED_LUA
+    + r"""
 local x=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=x.world_id or s.name~="nauvis"then return {ok=false,reason="nearby_threats_candidate_world_or_surface_changed"}end
 local function overlaps(a,b)return a[1][1]<b[2][1]and a[2][1]>b[1][1]and a[1][2]<b[2][2]and a[2][2]>b[1][2]end
 local function charted(box)
  for cx=math.floor(box[1][1]/32),math.floor((box[2][1]-.0001)/32)do
   for cy=math.floor(box[1][2]/32),math.floor((box[2][2]-.0001)/32)do
-   if not f.is_chunk_charted(s,{x=cx,y=cy})then return false end
+   if not chunk_charted(cx,cy)then return false end
   end
  end;return true
 end
@@ -546,3 +549,4 @@ return {ok=true,ready_for_attack=false,tick=game.tick,world_id=d.world_id,surfac
  sites=rows,current_support_guns=guns,service=access,gun_range=gun_range,mutual_coverage_radius=coverage,
  scope="nine-site charted native placement/ore/PCB and local current walkability only; future enemy collisions are not buildable yet"}
 """
+)
