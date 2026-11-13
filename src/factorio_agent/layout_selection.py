@@ -313,7 +313,9 @@ def run_layouts(root: Path, milestones: dict | None = None) -> list[dict]:
     """The layout records of one run: ``production-row-*.json``, ``logistic-science.json`` and
     ``automation-science.json`` (a red block planned before the layout family counts as its
     template variant, ``science_layout.legacy_record``). ``milestones`` (step id -> game minute)
-    adds the time from each block's proof to its next milestone (``followup_seconds``)."""
+    adds the time from each block's proof to its next milestone (``followup_seconds``). Mines
+    (``mining-outposts.json`` banks with a ``layout``: ``mining:<resource>``) and smelting district
+    banks (their shape variant: ``smelting:<resource>``) are included."""
     root = Path(root)
     found = []
     paths = sorted(root.glob("production-row-*.json")) + [
@@ -358,7 +360,72 @@ def run_layouts(root: Path, milestones: dict | None = None) -> list[dict]:
                 "pollution_per_min": descriptor.get("pollution_per_min"),
             }
         )
-    return found
+    return found + _mine_layouts(root, milestones) + _smelting_layouts(root, milestones)
+
+
+def _read(path: Path):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _layout_row(block, layout, proof, chosen, verified, milestones) -> dict:
+    seconds = None
+    if isinstance(chosen, int) and isinstance(verified, int) and verified >= chosen:
+        seconds = round((verified - chosen) / TICKS_PER_SECOND)
+    descriptor = layout.get("descriptor") or {}
+    return {
+        "block": block,
+        "variant": layout["variant"],
+        "genome": layout.get("genome"),
+        "explored": bool(layout.get("explored")),
+        "build_seconds": seconds,
+        "proof": proof,
+        "followup_seconds": followup_seconds(block, verified, milestones) if proof else None,
+        "power_kw": descriptor.get("power_kw"),
+        "pollution_per_min": descriptor.get("pollution_per_min"),
+    }
+
+
+def _mine_layouts(root: Path, milestones) -> list[dict]:
+    """``mining-outposts.json`` banks with a ``layout`` record (``mine_layout``): block ``mining:<resource>``.
+
+    Proof: the bank is ``ready``; proved at its ``output_evidence`` tick unless the record has one.
+    """
+    rows = []
+    for bank in (_read(Path(root) / "mining-outposts.json") or {}).get("banks") or []:
+        layout = bank.get("layout") if isinstance(bank, dict) else None
+        if not isinstance(layout, dict) or not layout.get("variant"):
+            continue
+        proof = bool(bank.get("ready"))
+        verified = layout.get("verified_tick")
+        if not isinstance(verified, int) and proof:
+            verified = (bank.get("output_evidence") or {}).get("tick")
+        resource = (bank.get("plan") or {}).get("resource")
+        rows.append(_layout_row(f"mining:{resource}", layout, proof, layout.get("chosen_tick"), verified, milestones))
+    return rows
+
+
+def _smelting_layouts(root: Path, milestones) -> list[dict]:
+    """District banks of ``smelting-district.json`` as their bank-shape variant (``smelting_layout.record_for``).
+
+    Proof: the roadmap's smelting milestone was reached (its game minute is the proof time).
+    """
+    from .smelting_layout import record_for
+
+    state = _read(Path(root) / "smelting-district.json") or {}
+    reached = [m for step, m in (milestones or {}).items() if "smelting" in str(step) and isinstance(m, (int, float))]
+    verified = round(min(reached) * 60 * TICKS_PER_SECOND) if reached else None
+    rows = []
+    for bank in state.get("banks") or []:
+        if not isinstance(bank, dict) or not bank.get("resource"):
+            continue
+        layout = bank.get("layout") if isinstance(bank.get("layout"), dict) else record_for(bank)
+        block = f"smelting:{bank['resource']}"
+        rows.append(_layout_row(block, layout, verified is not None, layout.get("chosen_tick"), verified, milestones))
+    return rows
 
 
 def variant_summary(rows: list[dict]) -> dict:

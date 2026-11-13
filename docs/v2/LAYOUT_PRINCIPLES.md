@@ -218,7 +218,10 @@ stored as entities.
   `top_k` feasible candidates within the margin, so one map always explores the same way;
   produce rows, red science and green science all use it. `fleet.py status` / `report`
   headers say "layout EXPLORATION on". The report's "layout variants used" section lists the
-  variants of each block side by side: runs, proofs, proof rate, median build game-seconds
+  variants of each block side by side (blocks `produce:<item>`, the science blocks,
+  `mining:<resource>` from the banks' `layout` record, proof = bank `ready` at its
+  `output_evidence` tick, and `smelting:<resource>` from each district bank's shape variant,
+  proof = the `smelting_district` milestone): runs, proofs, proof rate, median build game-seconds
   (chosen -> verified), median game-seconds from the block's proof to its next milestone
   (science blocks: the next `research_*` milestone; produce rows: any), explored, kW,
   pollution; with two or more variants of a block, `-> leading:` names the one the data
@@ -234,9 +237,45 @@ stored as entities.
 
 Used by `produce` (and through it the planned `ammo_production` and
 `engine_production` rows), by red science (`science_layout`) and green science
-(`green_layout`), both below. Smelting banks are still a single-variant generator; giving them genomes needs
-the same three things: parameters on the generator (bank length / pairing), a descriptor,
-and their own place loop calling `layout_selection.score`.
+(`green_layout`), both below. Mines (`mine_layout`, "Mine output trunk" below) and smelting bank
+shapes (`smelting_layout`, next) are families too.
+
+### Smelting bank shapes (`smelting_layout.py`)
+
+A wrapper around `smelting.paired_furnace_bank`; the generator, its feed head and its row
+arrangement are not touched (the feed-head work owns them, and a new head lands in every
+candidate). Reference (owner, a saturated early stone furnace setup, principles only): two rows
+facing one shared centre output belt, each row filling its near lane, inputs on the two outer
+belts (ore and coal on their own lanes), units stacked side by side; 24 stone furnaces per row x
+18.75 plates/min = one lane, so 2 x 24 saturate one yellow belt. The district bank is that shape.
+
+* Genome `BankGenome`: `slots` per row (6 / 12 / 24: the reserved row frame), `units` (1 long bank
+  or 2 shorter ones side by side), `input_side` / `output` (`outer` / `shared_centre`, the
+  generator's form; `centre` inputs with outer outputs are enumerated and reported
+  `does_not_generate` until a head exists), `furnace` (stone; steel in the same 2 x 2 slots,
+  needs its research; electric fails the slot audit until a 3 x 3 slot exists).
+* Audit (hard): no shared tiles, every inserter between a belt and a furnace and inside a pole's
+  supply area, each unit's poles one chain. Descriptor: rate now / full (each row capped at its
+  lane, a unit at one belt), counts now / full, raw now / full, coal per minute, kW, pollution,
+  footprint, `saturates_belt`, and the lane flow model's findings at the full frame
+  (`bandwidth_audit.furnace_bank`: the shared head's `side_load_before_splitter` /
+  `single_lane_feed` stay visible).
+* Library `data/layouts/smelting-bank.json` (12 entries), `python -B tools/layouts.py show
+  smelting-bank`. Selection (`rank`): the room per resource (length x depth) and the furnace's
+  research filter the options, `layout_selection.score` ranks them. Real catalog, iron, start 2
+  per row (75/min):
+
+| context | default demand (horizon 150) | horizon 600/min |
+|---|---|---|
+| district: 48 long, 16 deep per resource | `smelt-6x1-stone` 88 | `smelt-12x1-stone` 1313 (today's bank; the 6-slot ceiling 225 costs more) |
+| long zone 96 x 16 | `smelt-6x1-stone` 88 | `smelt-24x1-stone` 164 (the saturated reference) |
+| 48 x 32, steel researched | `smelt-6x1-stone` 88 | `smelt-12x1-steel` 122 |
+
+Runtime: record only. A district bank's `layout` record is derived from its plan
+(`smelting_layout.record_for`: `capacity_slots`, furnace) for the fleet report; the district keeps
+its zone contract (48 x 32, 12 slots) and its generator call. Not yet: the district choosing the
+shape (slots, units) through `rank` in its own place loop, which needs the district geometry to
+take a bank length other than 48 (after the feed-head change lands).
 
 ### Science blocks (`science_layout.py`)
 
@@ -457,17 +496,71 @@ the flow's downstream side, which the site plan chose from where the consumers a
 resource, at least `GRID_MIN_ORE_TILES` tiles; trees are ignored (cleared). The lattice shift
 is searched over one drill pitch (4 x 8 offsets) and scored by ore tiles covered, then fewer
 drills, then less ore unreachable. `prepare_new_bank` grids the patch first, makes the grid's
-lattice the bank's policy grid and plans the bank as the grid row pair whose edge-most columns
-fit (`candidate_sites(grid=)`), reserving that row's growth up to `MAX_PAIRS` columns; the
-bank keeps the record as `patch_grid`. Building is staged: the drills nearest the output edge
+lattice the bank's policy grid and plans the bank as one grid row pair (`candidate_sites(grid=)`):
+per row the walk goes inward from the output edge over the row's full pair columns
+(`pair_anchors`: both drills clean) to the first whose columns pass the drill checks, whose
+collector leaves the ore within `MAX_EXIT_CELLS` through this patch's ore only (the cell ahead of
+the port free of reservations) and that stays inside the plan's mining zone; rows rank by ore of
+the poorer drill row, growth up to `GRID_GROWTH_ENOUGH` pairs, then exit cost. The row's growth is
+reserved up to `MAX_PAIRS` columns or the zone edge; the bank keeps the record as `patch_grid`
+(`row`, `inward_columns`, per row `start` and `full_pairs`). Cause (fleet all-1113-2155): the
+grid's sites started at a row's edge-most column, which on a ragged edge or beside a starter cell
+holds no full pair, so 32 of 36 banks fell back to the lattice. On the recorded patches of that
+round (site-map + end-state board reservations, the bank's own exit side and pair count) a grid
+bank is found for 29 of 36 banks (before 8; the rest have rows with too few full pairs on that
+flow and take the lattice), on seed 2150100594's three patches in all 12
+(patch, flow) cases (before 10). Building is staged: the drills nearest the output edge
 first, then growth along the row (`prepare_extension`, the mine-trunk growth node). A later
 bank on the patch keeps the lattice (`MiningOutposts.prepare` passes the patch bank's
 `grid_origin`), so it is another row pair of the same grid; another patch is gridded afresh.
 Banks of older maps keep their plan (one row pair on the default lattice). When no grid row
-pair fits, the historical lattice is used and the record says `fallback`. Not yet: the grid's
+pair fits (also after the relaxations, which try grid rows first), the historical lattice is used
+and the record says `fallback`. Not yet: the grid's
 footprint is not a board reservation of its own (the ore rule already keeps other blocks off
 it), and the next row pair is placed by `prepare_connected_bank`'s search, not picked from the
 grid record.
+
+Mining patch family (`mine_layout.py`, library `data/layouts/mining-patch.json`,
+`python -B tools/layouts.py show mining-patch`). The whole-patch frame is a genome family like the
+produce rows and science blocks: `MineGenome` = `spacing` (`simple`: the paired bank above, pole in
+each drill gap, one service tile between pairs; `compact`: drills touching, one pole per two
+columns on the collector with an underground pair under it, no service lane; `sparse`: drills
+spaced so mining areas tile without overlap), `edge` (output flow), `merge` (`saturate`: a
+collector joins a trunk belt head-on or side-loads onto its near lane while that lane has room,
+else opens the next belt: 2 belts = the 2-2 splitter, more reserved; `single`: one trunk belt,
+the rest clipped), `start_pairs`, `drill` (electric; the big drill only on request, its raw cost
+is not comparable yet; never the burner drill). `frame` rebuilds the frame on the patch survey
+(lattice shift searched per spacing; a collector tile on water, other ore or a reservation cuts
+off the drills behind it), `audit` is hard (tiles unique, clean drill areas, nothing on forbidden
+/ foreign / reserved tiles, every drop on its collector, every drill powered and each row's poles
+one chain, collectors continuous to the port, trunk lanes within capacity), `describe` gives ore
+covered / unreachable, drills, rate now / full (lane- and trunk-capped), belts / undergrounds /
+poles, raw now / full, kW and pollution now / full, `frame_rects`, off-ore frame tiles (the area
+term: ore is no other block's ground), trunk belts and balancer, growth steps. The plates and
+build terms count the start stage (the frame grows only on demand). A test checks that the
+`simple` frame's drills are exactly `patch_grid`'s.
+
+Only `simple` / `saturate` / electric is `buildable` (what the bank builder lays out); the rest is
+ranked offline. `prepare_new_bank` calls `mine_layout.choose_bank` after the grid: options are the
+buildable genomes on the planned edge with the requested start or one pair more (build-ahead),
+scored by `layout_selection.score` with `demand_for(count x drill rate)`; the start size changes
+only when exploration picked the other option. The bank keeps `layout` (variant, genome,
+descriptor, terms, runner-ups, `built_pairs`, `chosen_tick`, `verified_tick`; the fleet report
+takes the proof from the bank's `ready` / `output_evidence`). Ragged 40 x 24 reference patch, real
+catalog, per start pair 60/min:
+
+| candidate | drills full | rate full /min | trunk | start raw | start entities |
+|---|---|---|---|---|---|
+| `mine-simple-E-sat-s1` | 69 | 2070 | 4 belts (reserved 4-4) | 71 | 14 |
+| `mine-compact-E-sat-s1` | 105 | 3150 | 4 belts | 101.5 | 14 |
+| `mine-sparse-E-sat-s1` | 45 | 1350 | 3 belts | 72.5 | 15 |
+| `mine-simple-E-sin-s1` | 69 | 750 (one belt) | 1 belt | 71 | 14 |
+
+Selection there: consumer E 60/min -> `mine-sparse-E-sat-s1` 74.95 overall, buildable
+`mine-simple-E-sat-s1` 77.45; consumer S, horizon 600/min -> sparse S 70.5, buildable simple S
+85.5; consumer W behind the patch, 120/min -> sparse W s2 88.15, buildable simple W s2 92.55 (two
+pairs now: one pair is short). Sparse leads offline on fewer off-ore frame tiles; building it needs
+the bank builder, contract and extension rule for its pitch (not done).
 
 Patch frame and neighbouring patches (`mining_border.py`). Cause on eval-4177156614: a stone
 patch touches the iron patch's lower-left side. Every mine record was a rectangle: the bank's
@@ -514,13 +607,14 @@ placed; a drill mining two ores puts both on one belt). Rule now:
    has no more room than the lane can still bring plus `SINK_MARGIN_ITEMS`, `retire_border` lists
    the border drills to stop, so the foreign item never backs up into the splitter.
 
-Which patch and which row (`MiningOutposts.prepare`, `mining_layout_policy._relaxed_attempts`): a
+Which patch and which row (`MiningOutposts.prepare`, `mining_layout_policy._attempts`): a
 mine is planned whenever the patch has minable ore reachable off the ore. The patch is the plan's
 (an observed seed outside the plan zone is moved onto it; a plan patch farther than
 `MAX_OTHER_PATCH_DISTANCE` is skipped for the plan's nearer patches, each tried on all four sides
 toward the consumer, `mining_site.patch_exits`). A bank whose port already stands off the ore is
 the best candidate, not a dropped one. When no planned row fits, rows are relaxed in order: no
-reserved growth pair, then a single pair, each first on the patch grid's lattice. A failure carries
+reserved growth pair, then a single pair, each first on the patch grid's rows, then on its lattice
+and the planned one (a site already checked is not checked again). A failure carries
 `attempts` and `needs` (what would have to change).
 
 Not yet: building border lanes (the bank still places only clean cells; mixed drills need the
