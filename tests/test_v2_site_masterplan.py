@@ -315,6 +315,18 @@ class TouchingPatchTests(unittest.TestCase):
         # The cut is made on the axis that keeps more of the patch's own box.
         self.assertEqual(_trim(Rect(-67, 27, -48, 61), stone, copper), Rect(-67, 27, -48, 57))
 
+    def test_a_neighbour_spanning_the_zone_on_one_axis_leaves_only_the_other_cut(self):
+        """Fleet auto-1113-1758 seed 2159617943: the y strip was built inverted and faulted the plan."""
+        from factorio_agent.site.geometry import Rect
+        from factorio_agent.site.siteselect import _trim
+
+        zone = Rect(-14, 20, 21, 32)
+        # Taller than the zone, centre above it, reaching below it; it covers x 15..30.
+        other = Rect(15, 0, 30, 35)
+        self.assertEqual(_trim(zone, other), Rect(-14, 20, 15, 32))
+        # Spanning both axes: nothing is left.
+        self.assertIsNone(_trim(zone, Rect(-20, 0, 30, 35)))
+
 
 if __name__ == "__main__":
     unittest.main()
