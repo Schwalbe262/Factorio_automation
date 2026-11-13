@@ -28,7 +28,9 @@ T(0)     = 60 * required / net                      (inf when net <= 0)
 T(k)     = fund + cross_fund + k * build_seconds + 60 * (required + k * own_cost) / (net + k * gain)
 gain     = cell_rate  (coal: cell_rate - fuel_per_drill_per_minute)
 expand k when T(0) - T(k) >= min_saving_seconds and T(k) <= max_ratio * T(0)
-coal: also +1 cell when produced < fuel_margin * (consumed + new cells' burn)
+coal cells needed = ceil(fuel_margin * (smelting cells * 3.6 + drill-only cells * 2.25) / (cell_rate - 2.25)), at least 1
+coal: never above cells needed; +1 cell when installed < needed (measured coal rates are not used)
+every item: net += max(0, installed cells * cell_rate - produced)   # cells built but not producing yet
 ```
 
 | Field | Default | Meaning |

@@ -124,8 +124,30 @@ class TimeComparisonTests(unittest.TestCase):
         short = iron(shortfall=0, available=30, required=21, net_per_minute=-5, produced_per_minute=15)
         self.assertEqual(len(plan_capacity({"iron-plate": short}, {"iron-plate": 400})), 1)
 
+    def test_cells_installed_but_not_yet_producing_count_at_nominal_rate(self):
+        # Seed 2099054105: coal went 1 -> 3 -> 5 in two minutes because the two
+        # new cells had not produced yet when the planner looked again.
+        smelting = iron(productive_cells=5, installed_live_cells=5, produced_per_minute=75.0, net_per_minute=10.0)
+        coal = dict(
+            shortfall=0,
+            produced_per_minute=17.0,
+            consumed_per_minute=18.7,
+            net_per_minute=-1.7,
+            productive_cells=1,
+            installed_live_cells=3,
+            cell_capacity_per_minute=15.0,
+            raw_cost_per_cell={"wood": 2},
+            available=3,
+        )
+        self.assertEqual(plan_capacity({"iron-plate": smelting, "coal": option(**coal)}, {"coal": 16}), [])
+        short = dict(coal, installed_live_cells=1)
+        decisions = plan_capacity({"iron-plate": smelting, "coal": option(**short)}, {"coal": 16})
+        self.assertEqual([(d.item, d.current_cells) for d in decisions], [("coal", 1)])
+        self.assertLessEqual(decisions[0].target_cells, 2)
+
     def test_max_cells_cap(self):
-        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7)}, {})
+        full = dict(productive_cells=7, produced_per_minute=105.0, net_per_minute=5.0)
+        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7, **full)}, {})
         self.assertEqual(decisions[0].target_cells, 8)
         self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=8)}, {}), [])
         tight = CapacityConfig(max_plate_cells=4)
@@ -155,14 +177,21 @@ class LiveCaseTests(unittest.TestCase):
         self.assertEqual([(d.item, d.target_cells) for d in decisions], [("iron-plate", 3)])
         self.assertTrue(math.isclose(decisions[0].evidence["wait_seconds"], 133 / 0.6 * 60))
 
-    def test_full_furnaces_and_coal_deficit_add_one_coal_cell(self):
+    def test_coal_cells_follow_the_burner_cells_not_the_measured_rate(self):
+        # User rule: one coal cell fuels several drills and furnaces, so coal
+        # never gets more cells than the burners need, whatever the rates say.
         supply = live_supply()
         supply["iron-plate"] = iron(shortfall=0, produced_per_minute=0.0, net_per_minute=0.0, available=300)
         supply["coal"]["evidence"].update(produced_per_minute=14.0, consumed_per_minute=13.0, net_per_minute=1.0)
+        self.assertEqual(plan_capacity(supply, {}), [])
+        busy = dict(productive_cells=6, installed_live_cells=6, produced_per_minute=90.0, net_per_minute=20.0)
+        supply["iron-plate"] = iron(shortfall=0, available=300, **busy)
+        supply["coal"]["evidence"].update(installed_live_cells=1, productive_cells=1, raw_cost_per_cell={"wood": 2})
         decisions = plan_capacity(supply, {})
-        self.assertEqual([(d.item, d.current_cells, d.target_cells) for d in decisions], [("coal", 4, 5)])
+        # 6 smelting cells burn 21.6/min; x1.2 / 12.75 net per coal cell -> 3 coal cells.
+        self.assertEqual([(d.item, d.current_cells, d.target_cells) for d in decisions], [("coal", 1, 2)])
         self.assertTrue(decisions[0].evidence["fuel_deficit"])
-        self.assertIn("fuel deficit", decisions[0].reason)
+        self.assertIn("needed by the burner cells", decisions[0].reason)
 
     def test_coal_surplus_with_no_bill_is_not_expanded(self):
         supply = live_supply()
@@ -187,22 +216,22 @@ class OrderingTests(unittest.TestCase):
         }
         self.assertEqual([d.item for d in plan_capacity(supply, {})], ["iron-plate"])
 
-    def test_new_smelting_cells_add_fuel_demand_to_coal(self):
+    def test_new_smelting_cells_count_toward_the_coal_cells_needed(self):
         supply = live_supply()
-        # Coal alone is fine (30 >= 20 * 1.2), and a coal cell does not cost iron here.
         supply["coal"]["evidence"].update(
-            produced_per_minute=30.0,
-            consumed_per_minute=20.0,
+            produced_per_minute=15.0,
+            consumed_per_minute=5.0,
             net_per_minute=10.0,
+            installed_live_cells=1,
+            productive_cells=1,
             raw_cost_per_cell={"stone": 5},
         )
         decisions = plan_capacity(supply, {})
-        self.assertEqual([(d.item, d.target_cells) for d in decisions], [("iron-plate", 3), ("coal", 5)])
+        # Iron goes 1 -> 3 cells: 3 x 3.6 x 1.2 / 12.75 -> 2 coal cells needed, 1 installed.
+        self.assertEqual([(d.item, d.target_cells) for d in decisions], [("iron-plate", 3), ("coal", 2)])
         coal = decisions[1].evidence
-        # Two new iron cells burn 2 x 3.6 coal/min; (20 + 7.2) * 1.2 > 30.
         self.assertAlmostEqual(coal["extra_fuel_burn_per_minute"], 7.2)
         self.assertTrue(coal["fuel_deficit"])
-        self.assertAlmostEqual(coal["net_per_minute"], 2.8)
 
 
 class CoalCellWoodCostTests(unittest.TestCase):

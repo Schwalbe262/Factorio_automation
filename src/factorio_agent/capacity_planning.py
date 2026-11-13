@@ -248,7 +248,11 @@ def _option_seconds(facts: _Facts, k: int, supply: Mapping, net: float, config: 
 
 
 def _assess(
-    facts: _Facts, supply: Mapping, config: CapacityConfig, extra_fuel_burn: float = 0.0
+    facts: _Facts,
+    supply: Mapping,
+    config: CapacityConfig,
+    extra_fuel_burn: float = 0.0,
+    fuel_cells_needed: int | None = None,
 ) -> CapacityDecision | None:
     """One decision for ``facts.item``, or None when waiting is as good.
 
@@ -257,9 +261,20 @@ def _assess(
     """
     if not facts.cost or facts.produced is None:
         return None
-    net = facts.net - extra_fuel_burn if facts.item == FUEL_ITEM else facts.net
+    # Cells already installed but not yet producing at their rate (just built,
+    # still being fuelled) are counted at nominal output. Without this the
+    # measured rate lags every expansion and the planner stacks a second one
+    # on top (seed 2099054105: coal 1 -> 3 -> 5 within two minutes).
+    pending = max(0.0, facts.current * facts.cell_rate - facts.produced)
+    net = facts.net + pending
+    if facts.item == FUEL_ITEM:
+        net -= extra_fuel_burn
     wait = _seconds(facts.required, net)
     cap = config.max_cells if facts.item == FUEL_ITEM else min(config.max_cells, config.max_plate_cells)
+    if facts.item == FUEL_ITEM and fuel_cells_needed is not None:
+        # Coal never gets more cells than the burners need (one coal cell
+        # fuels about 3.5 smelting cells); measured rates do not raise this.
+        cap = min(cap, fuel_cells_needed)
     room = min(config.max_step, cap - facts.current)
     if room < 1:
         return None
@@ -272,9 +287,8 @@ def _assess(
         if saving >= config.min_saving_seconds and best["seconds"] <= wait * config.max_ratio:
             chosen = best["extra_cells"]
     fuel_deficit = False
-    if facts.item == FUEL_ITEM and facts.produced is not None and facts.consumed is not None:
-        burning = facts.consumed + extra_fuel_burn
-        fuel_deficit = facts.produced < burning * config.fuel_margin
+    if facts.item == FUEL_ITEM and fuel_cells_needed is not None:
+        fuel_deficit = facts.current < fuel_cells_needed
         if fuel_deficit and chosen == 0 and math.isfinite(options[0]["seconds"]):
             chosen = 1
             best = options[0]
@@ -293,6 +307,7 @@ def _assess(
         "produced_per_minute": facts.produced,
         "consumed_per_minute": facts.consumed,
         "net_per_minute": net,
+        "pending_installed_per_minute": pending,
         "extra_fuel_burn_per_minute": extra_fuel_burn,
         "cell_rate_per_minute": facts.cell_rate,
         "wait_seconds": wait,
@@ -311,7 +326,7 @@ def _assess(
         f"new net {picked['new_net_per_minute']:.1f}/min"
     )
     if fuel_deficit:
-        reason += f"; fuel deficit: produced {facts.produced:.1f}/min < {config.fuel_margin} x burned {facts.consumed + extra_fuel_burn:.1f}/min"
+        reason += f"; fuel: {facts.current} coal cells < {fuel_cells_needed} needed by the burner cells"
     return CapacityDecision(
         item=facts.item,
         resource=RESOURCE_FOR_ITEM[facts.item],
@@ -341,6 +356,32 @@ def _fuel_burn(decision: CapacityDecision, config: CapacityConfig) -> float:
     return extra * per_cell
 
 
+def fuel_cells_needed(supply: Mapping, decisions: list[CapacityDecision], config: CapacityConfig) -> int:
+    """Coal cells that fuel every burner cell, counted from the cells themselves.
+
+    burn = smelting cells x fuel_per_cell + drill-only cells x fuel_per_drill,
+    including the cells the kept decisions add; one coal cell nets
+    default_cell_rate - fuel_per_drill. At least one. Measured coal rates are
+    not used: they lag each expansion and once drove coal to 5 cells while
+    iron had 3 (seed 2099054105).
+    """
+    targets = {decision.item: decision.target_cells for decision in decisions}
+    burn = 0.0
+    for item in RESOURCE_FOR_ITEM:
+        if item == FUEL_ITEM:
+            continue
+        evidence = _evidence(supply, item)
+        cells = targets.get(item)
+        if cells is None:
+            if evidence is None:
+                continue
+            cells = _facts(item, evidence, {}, config).current
+        per_cell = config.fuel_per_cell_per_minute if item in SMELTED_ITEMS else config.fuel_per_drill_per_minute
+        burn += cells * per_cell
+    net_per_coal_cell = config.default_cell_rate - config.fuel_per_drill_per_minute
+    return max(1, math.ceil(burn * config.fuel_margin / net_per_coal_cell))
+
+
 def plan_capacity(supply, demand, *, config: CapacityConfig = CapacityConfig()) -> list[CapacityDecision]:
     """Starter capacity expansions that finish the required items sooner than waiting.
 
@@ -364,7 +405,9 @@ def plan_capacity(supply, demand, *, config: CapacityConfig = CapacityConfig()) 
     if coal is None:
         return kept
     burn = sum(_fuel_burn(decision, config) for decision in kept)
-    decision = _assess(_facts(FUEL_ITEM, coal, demand, config), supply, config, extra_fuel_burn=burn)
+    needed = fuel_cells_needed(supply, kept, config)
+    facts = _facts(FUEL_ITEM, coal, demand, config)
+    decision = _assess(facts, supply, config, extra_fuel_burn=burn, fuel_cells_needed=needed)
     if decision is None:
         return kept
     return _ordered(kept + [decision])
