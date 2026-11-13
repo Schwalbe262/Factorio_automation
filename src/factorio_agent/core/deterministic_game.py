@@ -348,6 +348,29 @@ def _whole_json(text: str) -> bool:
 CRAFT_QUEUE_ENTRIES = 8
 
 
+def _without_line_comments(line: str) -> str:
+    """The Lua line without a trailing ``--`` comment (block comments ``--[[ ]]`` and ``--`` inside quotes stay).
+
+    A script is sent as one line, so a line comment would swallow everything
+    after it ("'end' expected near <eof>"): it broke every insert on 2026-11-13.
+    """
+    quote = None
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if quote:
+            if char == "\\":
+                index += 1
+            elif char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif line.startswith("--", index) and not line.startswith("--[[", index):
+            return line[:index]
+        index += 1
+    return line
+
+
 class DeterministicGame:
     def __init__(self, cfg: AppConfig, *, backend: str = "assisted"):
         if backend not in {"assisted", "character"}:
@@ -407,7 +430,7 @@ return success{world_id=d.world_id,surface=s.name,tick=game.tick,actor_unit_numb
                         raise
         lua = "local good,result=pcall(function() " + _HELPERS + body + " end); "
         lua += "if not good then result={ok=false,reason=tostring(result)} end; rcon.print(helpers.table_to_json(result or {}))"
-        command = "/silent-command " + " ".join(lua.splitlines())
+        command = "/silent-command " + " ".join(_without_line_comments(line) for line in lua.splitlines())
         started = time.perf_counter()
         try:
             return parse_json_response(self._execute(command, drain_seconds=0.02))
@@ -712,7 +735,6 @@ if not e then return failure("target_missing") end
                 body += """
 local n=math.min(x.count or 1,inv.get_item_count(x.item))
 if n<=0 then return success{status="waiting",moved=0} end
--- an inventory name the game does not define (2.x renamed furnace_source to crafter_input) falls back to e.insert
 local dest=x.inventory and defines.inventory[x.inventory] and e.get_inventory(defines.inventory[x.inventory]) or nil
 local inserted=dest and dest.insert{name=x.item,count=n} or e.insert{name=x.item,count=n}
 if inserted>0 then inv.remove{name=x.item,count=inserted} end
