@@ -54,6 +54,7 @@ CHEST_SLOTS = {"wooden-chest": 16, "iron-chest": 32, "steel-chest": 48}  # base 
 DEPOSIT_LIMIT = 1000  # storage_transfer.validate_deposit envelope
 DEFAULT_STACK = 50
 WOOD = "wood"
+MIN_GIVE = 10  # a consumer takes surplus only with room for at least this many (owner: give 10 or a stack, not 1)
 
 
 def stack_size(catalog, item) -> int:
@@ -134,7 +135,7 @@ def consumers(obs, item, catalog, excluded=frozenset()) -> list[dict]:
             rank, inventory, room = 0, "furnace_source", stack - int(held.get(item, 0))
         else:
             continue
-        if room > 0:
+        if room >= min(MIN_GIVE, stack):  # never trickle 1-2 items into a nearly full slot
             rows.append(
                 (rank, _distance(obs, e), e["unit_number"], {"entity": e, "inventory": inventory, "room": room})
             )

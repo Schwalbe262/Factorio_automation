@@ -68,8 +68,11 @@ class DisposalOrderTests(unittest.TestCase):
         retired = drill(0, unit=4, x=40)
         rows = [furnace(**{"iron-ore": 5}), drill(30), boiler(45), retired, chest]
         state = obs(400, *rows)
+        # Room for 5 is a trickle (owner: give 10 or a stack, never 1): the nearly full boiler is skipped.
+        self.assertEqual(self.surplus.step(state)["name"], "burner-mining-drill")
+        rows[2]["inventory"]["coal"] = 30
         first = self.surplus.step(state)
-        self.assertEqual((first["name"], first["count"]), ("boiler", 5))
+        self.assertEqual((first["name"], first["count"]), ("boiler", 20))
         rows[2]["inventory"]["coal"] = 50
         self.assertEqual(self.surplus.step(state)["name"], "burner-mining-drill")
         self.assertEqual(self.surplus.step(state)["position"]["x"], 20)  # never the retiring cell's drill
