@@ -6,6 +6,8 @@ out; a port whose position is the ``source`` of a row is *taken*.
 
 Source order for one ingredient ``item`` of product ``product``:
 
+0. on the planned bus (template ``planned_main_bus``) a plate with a built
+   trunk: a tap planned together with the block (``planned_tap``);
 1. the installed shared-main-bus tap named ``tap_name(product, item)``
    (``board["shared_main_bus"]["ports"]``), the mechanism the construction
    mall and steel supply use once the main bus exists;
@@ -79,7 +81,16 @@ def free_board_ports(board: dict, item: str, *, exclude: tuple[str, ...] = ()) -
 
 
 def resolve(board: dict, product: str, item: str, *, owner: str) -> dict:
-    """``{"ok": True, "kind", "source", "block"}`` or ``{"ok": False, "reason", "item"}``."""
+    """``{"ok": True, "kind", "source", "block"}`` or ``{"ok": False, "reason", "item"}``.
+
+    On the planned bus (``planned_tap``) an item with a built trunk resolves
+    to kind ``planned_bus_tap`` without a source: the tap is planned with the
+    block's site (``production_site.place_line``), so no free port is taken.
+    """
+    from .planned_tap import carries, published
+
+    if carries(published(board, board.get("world_id")), item):
+        return {"ok": True, "kind": "planned_bus_tap", "source": None, "block": "shared_main_bus"}
     tap = bus_tap_port(board, product, item)
     if tap is not None:
         return {"ok": True, "kind": "bus_tap", "source": tap, "block": "shared_main_bus"}

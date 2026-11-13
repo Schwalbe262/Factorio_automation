@@ -66,7 +66,11 @@ def validate_parameters(parameters):
 
 
 def reconstruct_bus(bus):
-    """Recover contracts from saved reservations, capacity and typed stations."""
+    """Recover contracts from saved reservations, capacity and typed stations (development-map bus only)."""
+    if bus.get("template") == "planned_main_bus":
+        # Planned-bus taps are planned with the consumer's block (planned_tap.py);
+        # consumers still on this path need a site-plan port first.
+        raise ValueError("planned_main_bus taps go through planned_tap.connect_inputs, not BusTap")
     if bus.get("template") != "shared_north_main_bus" or bus.get("flow_direction") != 0:
         raise ValueError("unsupported existing main bus")
     materials, taps, merges = [], [], []

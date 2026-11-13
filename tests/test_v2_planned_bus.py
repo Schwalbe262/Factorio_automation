@@ -289,8 +289,9 @@ class PublicationTests(unittest.TestCase):
             self.assertIsNone(production_sources.bus_tap_port(board, "iron-gear-wheel", "iron-plate"))
             self.assertIsNone(production_sources.tap_parameters(board, "iron-gear-wheel", "iron-plate", 10))
             found = production_sources.resolve(board, "iron-gear-wheel", "iron-plate", owner="produce-x")
-            self.assertFalse(found["ok"])
-            self.assertTrue(found["bus_available"])
+            self.assertEqual((found["ok"], found["kind"], found["source"]), (True, "planned_bus_tap", None))
+            # Coal has only a reserved lane: no trunk, so no tap.
+            self.assertFalse(production_sources.resolve(board, "x", "coal", owner="produce-x")["ok"])
             (h.root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
             builder = FactoryBuilder.__new__(FactoryBuilder)
             band = next(r["area"] for r in bus["reservations"] if r["item"] == "coal")
@@ -311,19 +312,31 @@ class RoadmapTests(unittest.TestCase):
         self.assertNotIn("main_bus_factory", {s.capability for s in pg.ROADMAP})
         self.assertEqual(steps["main_bus"].capability, "planned_main_bus")
         ids = [s.id for s in pg.ROADMAP]
-        self.assertLess(ids.index("automation_science"), ids.index("main_bus"))
+        # The bus comes straight after the district; red science waits for it.
+        self.assertEqual(ids.index("main_bus"), ids.index("smelting_district") + 1)
+        self.assertEqual(steps["automation_science"].after, ("main_bus",))
         self.assertEqual(steps["dedicated_materials_coal"].after, ("main_bus",))
-        self.assertEqual(CAPABILITIES["planned_main_bus"]["requires"], ["smelting_district", "automation_science"])
+        self.assertEqual(CAPABILITIES["planned_main_bus"]["requires"], ["smelting_district"])
         self.assertIn("planned_main_bus", CAPABILITIES["steel_supply"]["requires"])
 
-    def test_bus_is_proposed_once_red_science_succeeded(self):
+    def done_through(self, last):
         jobs = []
         for step in pg.ROADMAP:
             jobs.append({"capability": step.capability, "parameters": dict(step.parameters), "status": "succeeded"})
-            if step.id == "automation_science":
-                break
-        nodes = pg.autopilot_nodes(jobs, [], {}, CAPABILITIES, limit=10)
-        self.assertIn("auto_main_bus", [n["id"] for n in nodes])
+            if step.id == last:
+                return jobs
+        raise AssertionError(last)
+
+    def test_bus_is_proposed_once_the_district_succeeded_and_red_science_after_it(self):
+        enabled = {
+            "enabled_recipes": {name: True for name in ("assembling-machine-1", "automation-science-pack", "lab")}
+        }
+        nodes = pg.autopilot_nodes(self.done_through("smelting_district"), [], enabled, CAPABILITIES, limit=10)
+        names = [n["id"] for n in nodes]
+        self.assertIn("auto_main_bus", names)
+        self.assertNotIn("auto_automation_science", names)
+        nodes = pg.autopilot_nodes(self.done_through("main_bus"), [], enabled, CAPABILITIES, limit=10)
+        self.assertIn("auto_automation_science", [n["id"] for n in nodes])
 
 
 if __name__ == "__main__":

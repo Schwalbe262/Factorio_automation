@@ -2,8 +2,8 @@
 
 ## Planned bus on fresh maps (`planned_bus.py`, capability `planned_main_bus`)
 
-Roadmap step `main_bus` (after `automation_science`) builds the bus of the
-site plan on any seed: `plan.bus` gives head, flow direction (N/E/S/W) and the
+Roadmap step `main_bus` (right after `smelting_district`, before
+`automation_science`) builds the bus of the site plan on any seed: `plan.bus` gives head, flow direction (N/E/S/W) and the
 lane table. The first `iron-plate` and the first `copper-plate` lane each get
 a straight trunk of `TRUNK_TILES = 64` belts from the head; foreign belts
 already on a lane are crossed with underground pairs. All other lanes stay
@@ -21,11 +21,60 @@ planned_main_bus`, the bus frame, lanes (built/reserved/spare), trunks,
 per-material lane-band `reservations` over the whole bus length, head/tail
 `ports`, `entities`, `underground_pairs` and `sources`.
 
-Not yet: taps. `bus_tap.BusTap`, `industrial.free_tap_parameters` and the
+### Taps (`planned_tap.py`)
+
+Consumers beside the bus take plates only from taps; no consumer runs its
+own line out of the district. A consumer plans its taps with its block
+(`planned_tap.connect_inputs`, called by red science, green science and
+`produce` via `production_site`): per plate input, the tap row nearest the
+input port inside the block's along range (+-16) that fits, then the route
+from the tap port to the input. Geometry in the bus frame (any direction,
+either side; `a` splitter row, `o` tapped lane, `s` = +1 right / -1 left):
+
+| Rows | Hardware |
+|---|---|
+| `a` | splitter on lanes `o` and `o+s` (the partner tile; may not be a built trunk) |
+| `a+1` | belt on `o+s`, bus direction |
+| `a+2` | branch: curve on `o+s` turning outward, straight to the port, the second tile outside the band; reserved and spare lanes are tunnelled under (mouths on gap tiles, span <= max span) |
+| `a+1..a+3` | each *built* trunk between `o+s` and the edge dives under the branch (underground pair `a+1 -> a+3`) |
+
+Tap windows `[a, a+3]` keep one free row apart; rows of every involved lane
+must be plain trunk belts. A lane that ends before `a + 8` is extended (paid
+belts, foreign belts crossed underground, at most the bus length); past the
+bus length the reason is `tap_beyond_bus_length`. Execution
+(`planned_tap.cutover`, run by the consumer before its own `ensure_plan`):
+stock every tap item, mine the exact trunk belts (unit numbers from planning),
+build the tap, mark it built. Taps are recorded in `planned-main-bus.json`
+`taps` and published as `stations`, tap `ports`, entities and pairs;
+`planned_bus.effective_plan` applies them to the bus plan and proof.
+
+Supply rule (`planned_tap.tap_budget`, `plate_supply.bus_budget`): a trunk
+carries the district's nominal supply; each tap records its consumer's
+declared demand; a new consumer plans with `max(nominal - other taps'
+demand, nominal / 2)` and sizes its machine count down to it (red:
+`science.py`, green: `green_science.supply_sized_count`). The half floor is
+the even splitter; with more than two taps per material declared demand can
+exceed the trunk, measured by `tools/report_run.py`.
+
+Bus band: from the moment `site-plan.json` exists the whole bus rect is hard
+for every `transport.plan_connection` route except the bus's own feed
+(`bus_route=True`); a route may not end inside it
+(`route_endpoint_inside_bus_band`). The band (28) is wider than any
+underground span, so a consumer cannot cross it; it taps from its own side.
+
+Without a planned bus (no site plan, or no bus published for this world)
+red science takes the district plate ports and green its splitter branch at
+the district (`plate_supply.plate_bus` returns None).
+
+Not yet: `bus_tap.BusTap`, `industrial.free_tap_parameters` and the
 consumers that require `planned_main_bus` (steel supply, engines, ammo,
-advanced circuits, construction mall) still read only the template below and
-block on this bus; `produce` keeps using free board ports. The legacy
-`main_bus_factory` below is no longer a roadmap step (explicit request only).
+advanced circuits, construction mall) only read the development-map
+template below; on this bus they block with `planned_main_bus taps go
+through planned_tap.connect_inputs` until they plan sites from `SiteService`
+and call `connect_inputs`. Building a reserved lane later must pass under
+existing taps' splitter/branch tiles (`planned_bus.trunk_plan` crosses only
+plain belts). The legacy `main_bus_factory` below is no longer a roadmap step
+(explicit request only).
 
 ## Development-map bus (`main_bus.py`, `bus_factory.py`)
 

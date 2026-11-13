@@ -14,6 +14,9 @@ from .manufacturing import GREEN_CORE_DEPTH, GREEN_CORE_LENGTH, green_core, raw_
 from .manufacturing import connect_power_groups, lab_green_entry, lab_green_entry_outside
 from .planning import preflight, overlap, survey_slots
 from .science import nominal_plate_supply
+from .plate_supply import bus_budget, plate_bus
+from .planned_tap import tap_budget
+from . import planned_tap
 from .smelting import merge_entities
 from .site.placement import allocated_placements, settle
 from .site.transform import Transform, apply as apply_transform, in_canonical, plan_transform
@@ -107,7 +110,10 @@ class LogisticScience:
         count = math.ceil(parameters["rate_per_minute"] * 1.15 / each)
         if count > 7:
             return {"ok": False, "reason": "green_science_row_exceeds_seven_slots"}
-        sized = self.supply_sized_count(count, each)
+        # Plates come from bus taps when the planned bus exists; the splitter
+        # branch at the district below is only the fallback without one.
+        bus = plate_bus(board, obs["world_id"]) if self.site is not None else None
+        sized = self.supply_sized_count(count, each, bus=bus)
         if not sized.get("ok"):
             return sized
         count = sized["count"]
@@ -115,6 +121,11 @@ class LogisticScience:
         for recipe, equivalent in demand["machine_equivalents"].items():
             if recipe != "logistic-science-pack" and equivalent > 1:
                 return {"ok": False, "reason": "one_intermediate_cell_insufficient", "recipe": recipe}
+        span = None
+        if bus is not None:
+            span = planned_tap.max_span(self.game)
+            if span is None:
+                return {"ok": False, "reason": "planned_bus_underground_span_unknown"}
         source_plan = deepcopy(self.smelting.state["plan"])
         removed = []
         branches = []
@@ -129,7 +140,7 @@ class LogisticScience:
         def mapped(x, y):
             return xy({"position": transform_point(turn, {"x": x, "y": y})})
 
-        for p in source_plan["ports"]:
+        for p in source_plan["ports"] if bus is None else []:
             if p["item"] not in ("iron-plate", "copper-plate"):
                 continue
             x, y = xy(apply_transform(turn.inverse(), p))
@@ -223,19 +234,35 @@ class LogisticScience:
         for index in survey.get("legal", []):
             core = candidates[index - 1]
             es = merge_entities(core["entities"], branches, join_es)
-            routes = []
-            check = preflight(self.game, self.builder, obs, es, ignored_units=ignored)
+            routes, taps = [], []
+            units, route_obs, route_builder = ignored, virtual, adapter
+            check = preflight(self.game, self.builder, obs, es, ignored_units=units)
             if not check.get("ok"):
                 failures.append(check)
                 continue
             obstacles = {(e["name"], *xy(e)): e for e in check["clear_obstacles"]}
-            connections = core["connections"] + [
-                (sources[p["item"]], p) for p in core["ports"] if p["direction"] == "input"
-            ]
+            inputs = [p for p in core["ports"] if p["direction"] == "input"]
+            connections = core["connections"] + [(sources[p["item"]], p) for p in inputs if bus is None]
+            if bus is not None:
+                tapped = self._taps(obs, bus, core, inputs, es, span, demand["raw_items_per_minute"])
+                if not tapped["ok"]:
+                    failures.append(tapped)
+                    continue
+                es, taps, routes = tapped["entities"], tapped["taps"], list(tapped["routes"])
+                units = frozenset(tapped["ignored_units"])
+                route_obs = {**obs, "entities": [e for e in obs["entities"] if e.get("unit_number") not in units]}
+                route_builder = SimpleNamespace(
+                    _occupied_by_plan=self.builder._occupied_by_plan,
+                    can_place=lambda es, units=units: preflight(self.game, self.builder, obs, es, ignored_units=units),
+                )
+                for route in routes:
+                    obstacles.update({(e["name"], *xy(e)): e for e in route["clear_obstacles"]})
             connections.append((core["ports"][-1], lab_port))
             valid = True
             for source, destination in connections:
-                route = plan_connection(self.game, adapter, virtual, source, destination, es, ignored_units=ignored)
+                route = plan_connection(
+                    self.game, route_builder, route_obs, source, destination, es, ignored_units=units
+                )
                 if not route.get("ok"):
                     failures.append(
                         {
@@ -258,12 +285,12 @@ class LogisticScience:
                 failures.append(power)
                 continue
             es = merge_entities(es, power["entities"])
-            check = preflight(self.game, self.builder, obs, es, ignored_units=ignored)
+            check = preflight(self.game, self.builder, obs, es, ignored_units=units)
             if not check.get("ok"):
                 failures.append(check)
                 continue
             obstacles.update({(e["name"], *xy(e)): e for e in check["clear_obstacles"]})
-            pairs = join_pairs + [p for r in routes for p in r["underground_pairs"]]
+            pairs = join_pairs + [p for r in routes for p in r["underground_pairs"]] + planned_tap.tap_pairs(taps)
             plan = _plan(
                 es,
                 core["ports"],
@@ -288,16 +315,38 @@ class LogisticScience:
                 "nominal_machine_rate": count * each,
                 "rated_demand": demand,
                 "route_metrics": [r["route_metrics"] for r in routes],
+                "taps": taps,
             }
         settle(self.site, obs["world_id"], "logistic_science", None)
         return {"ok": False, "reason": "no_green_science_site_with_clean_connections", "failures": failures}
 
-    def supply_sized_count(self, count, each):
+    def _taps(self, obs, bus, core, inputs, entities, span, demand):
+        """Bus taps and their routes for one candidate core (``planned_tap.connect_inputs``)."""
+        name = core.get("allocation")
+        allocation = self.site.allocation(name, obs["world_id"]) if name else None
+        if allocation is None:
+            return {"ok": False, "reason": "green_bus_tap_needs_site_allocation"}
+        return planned_tap.connect_inputs(
+            self.game,
+            self.builder,
+            obs,
+            bus,
+            owner="logistic_science",
+            allocation=allocation,
+            inputs=inputs,
+            entities=entities,
+            demand={p["item"]: demand.get(p["item"], 0) for p in inputs},
+            span=span,
+        )
+
+    def supply_sized_count(self, count, each, bus=None):
         """Green machines the connected plates can feed, at most ``count``.
 
-        The splitter branch shares each district plate belt with red science:
-        green may use what red's row leaves, and never less than the half a
-        saturated splitter hands each branch. Like red science, the row is
+        Without a bus the splitter branch shares each district plate belt
+        with red science: green may use what red's row leaves, and never less
+        than the half a saturated splitter hands each branch. With the planned
+        bus the same rule runs on the trunk with every other tap's declared
+        demand (``planned_tap.tap_budget``). Like red science, the row is
         sized down to that budget; only a budget below one machine blocks.
         """
         root = self.path.parent
@@ -308,10 +357,12 @@ class LogisticScience:
         per_machine = raw_demand(self.catalog, "logistic-science-pack", each)["raw_items_per_minute"]
         red = raw_demand(self.catalog, "automation-science-pack", self.science.state.get("nominal_machine_rate", 0))
         available = nominal_plate_supply(self.catalog, mining, smelting, per_machine)
-        budget = {
-            item: max(available[item] - red["raw_items_per_minute"].get(item, 0), available[item] / 2)
-            for item in per_machine
-        }
+        if bus is not None:
+            budget = bus_budget(bus, available, owner="logistic_science")
+        else:
+            budget = {
+                item: tap_budget(available[item], red["raw_items_per_minute"].get(item, 0)) for item in per_machine
+            }
         fit = min(count, *(int(budget[item] / rate + 1e-9) for item, rate in per_machine.items()))
         if fit < 1:
             item = min(per_machine, key=lambda name: budget[name] / per_machine[name])
@@ -434,9 +485,10 @@ class LogisticScience:
         if board.get("world_id") != obs["world_id"]:
             return {"status": "blocked", "reason": "green_science_board_world_changed"}
         if not self.state.get("published"):
-            self.smelting.state["plan"] = self.state["source_plan"]
-            _atomic_json(self.smelting.path, self.smelting.state)
-            board["blocks"]["smelting_district"] = self.state["source_plan"]
+            if self.state["remove"]:  # district splitter branch (fallback without a planned bus)
+                self.smelting.state["plan"] = self.state["source_plan"]
+                _atomic_json(self.smelting.path, self.smelting.state)
+                board["blocks"]["smelting_district"] = self.state["source_plan"]
             board["blocks"]["logistic_science"] = self.state["plan"]
             _atomic_json(board_path, board)
             self.state["published"] = True
@@ -462,6 +514,14 @@ class LogisticScience:
                 }
             self.state["phase"] = "build"
             _atomic_json(self.path, self.state)
+        taps = self.state.get("taps", [])
+        blocked = planned_tap.publish(self.path.parent, obs["world_id"], taps)
+        if blocked:
+            return blocked
+        clear = self.state["plan"].get("clear_obstacles", [])
+        cut = planned_tap.cutover(self.path.parent, self.builder, obs, taps, clear_obstacles=clear)
+        if cut is not None:
+            return cut
         result = self.builder.ensure_plan(obs, self.state["plan"])
         if result.get("status") != "succeeded":
             return result

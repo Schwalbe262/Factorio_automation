@@ -14,7 +14,8 @@ from .transport import plan_connection as belt_connection, xy, underground_proof
 from .power_grid import plan_connection as power_connection
 from .planning import overlap, survey_slots, preflight
 from .site.placement import settle
-from .plate_supply import plate_sources
+from .plate_supply import bus_budget, plate_bus, plate_sources
+from . import planned_tap
 
 
 def validate_rate(parameters):
@@ -168,11 +169,19 @@ class AutomaticScience:
         board = json.loads((root / "pcb-board.json").read_text(encoding="utf-8"))
         if board.get("world_id") != obs["world_id"] or board.get("catalog_fingerprint") != self.catalog.fingerprint:
             return {"ok": False, "reason": "science_supply_world_or_catalog_changed"}
-        # Plates come from the smelting district's registered output ports.
-        supply = plate_sources(root, board, obs["world_id"], self.catalog.fingerprint, owner="automation_science")
-        if not supply.get("ok"):
-            return supply
-        source_ports = supply["ports"]
+        # Plates come from bus taps when the planned bus exists, else from the
+        # smelting district's registered output ports (plate_supply).
+        bus = plate_bus(board, obs["world_id"]) if self.site is not None else None
+        source_ports, span = {}, None
+        if bus is None:
+            supply = plate_sources(root, board, obs["world_id"], self.catalog.fingerprint, owner="automation_science")
+            if not supply.get("ok"):
+                return supply
+            source_ports = supply["ports"]
+        else:
+            span = planned_tap.max_span(self.game)
+            if span is None:
+                return {"ok": False, "reason": "planned_bus_underground_span_unknown"}
         if not all(obs.get("enabled_recipes", {}).get(name) for name in ("automation-science-pack", "iron-gear-wheel")):
             return {"ok": False, "reason": "science_machine_recipes_not_unlocked"}
         speed = self.catalog.entities["assembling-machine-1"]["crafting_speed"]
@@ -194,6 +203,8 @@ class AutomaticScience:
             "copper-plate": nominal_each * ingredients["copper-plate"],
         }
         available = nominal_plate_supply(self.catalog, mining, smelting, per_machine)
+        if bus is not None:  # taps share the trunk (planned_tap supply rule)
+            available = bus_budget(bus, available, owner="automation_science")
         # Size the row to what the connected supply carries instead of blocking:
         # a smaller row that runs beats a full row that cannot be planned.
         count = min(count, *(int(available[item] / rate + 1e-9) for item, rate in per_machine.items()))
@@ -234,11 +245,30 @@ class AutomaticScience:
                 failures.append(clearance)
                 continue
             obstacles = {(e["name"], *xy(e)): e for e in clearance["clear_obstacles"]}
-            connections = [(source_ports[p["item"]], p) for p in science["ports"] if p["direction"] == "input"]
+            inputs = [p for p in science["ports"] if p["direction"] == "input"]
+            taps, ignored, sources = [], [], dict(source_ports)
+            if bus is not None:
+                demand = {item: count * rate for item, rate in per_machine.items()}
+                tapped = self._taps(obs, bus, site, inputs, es, span, demand)
+                if not tapped["ok"]:
+                    failures.append(tapped)
+                    continue
+                es, taps, ignored, sources = (
+                    tapped["entities"],
+                    tapped["taps"],
+                    tapped["ignored_units"],
+                    tapped["sources"],
+                )
+                routes += tapped["routes"]
+                for route in tapped["routes"]:
+                    obstacles.update({(e["name"], *xy(e)): e for e in route["clear_obstacles"]})
+            connections = [(sources[p["item"]], p) for p in inputs]
             connections += [(science["ports"][-1], labs["ports"][0])]
+            # Tap routes are already planned with their taps; the rest is routed here.
+            pending = connections[-1:] if bus is not None else connections
             good = True
-            for source, destination in connections:
-                route = belt_connection(self.game, self.builder, obs, source, destination, es)
+            for source, destination in pending:
+                route = belt_connection(self.game, self.builder, obs, source, destination, es, ignored_units=ignored)
                 if not route.get("ok"):
                     failures.append(
                         {"reason": route.get("reason"), "item": source["item"], "area": science["reserved_area"]}
@@ -266,12 +296,12 @@ class AutomaticScience:
                 es = merge_entities(es, power["entities"])
             if not good:
                 continue
-            final = preflight(self.game, self.builder, obs, es)
+            final = preflight(self.game, self.builder, obs, es, ignored_units=ignored)
             if not final.get("ok"):
                 failures.append(final)
                 continue
             obstacles.update({(e["name"], *xy(e)): e for e in final["clear_obstacles"]})
-            pairs = [pair for route in routes for pair in route["underground_pairs"]]
+            pairs = [pair for route in routes for pair in route["underground_pairs"]] + planned_tap.tap_pairs(taps)
             plan = _plan(
                 es,
                 [science["ports"][-1]],
@@ -300,6 +330,8 @@ class AutomaticScience:
                     for a, b in connections
                 ],
                 "route_metrics": [r["route_metrics"] for r in routes],
+                "allocation": site.get("allocation"),
+                "taps": taps,
             }
         settle(self.site, obs["world_id"], "automation_science", None)
         return {
@@ -308,6 +340,25 @@ class AutomaticScience:
             "failures": failures,
             "legal_sites": len(survey.get("legal", [])),
         }
+
+    def _taps(self, obs, bus, site, inputs, entities, span, demand):
+        """Bus taps and their routes for one candidate block (``planned_tap.connect_inputs``)."""
+        allocation = self.site.allocation(site["allocation"], obs["world_id"]) if site.get("allocation") else None
+        if allocation is None:
+            return {"ok": False, "reason": "science_bus_tap_needs_site_allocation"}
+        return planned_tap.connect_inputs(
+            self.game,
+            self.builder,
+            obs,
+            bus,
+            owner="automation_science",
+            allocation=allocation,
+            inputs=inputs,
+            entities=entities,
+            demand=demand,
+            span=span,
+            route=belt_connection,
+        )
 
     def step(self, obs, parameters):
         validate_rate(parameters)
@@ -338,6 +389,14 @@ class AutomaticScience:
                 changed = True
         if changed:
             _atomic_json(path, board)
+        taps = self.state.get("taps", [])
+        blocked = planned_tap.publish(self.path.parent, obs["world_id"], taps)
+        if blocked:
+            return blocked
+        clear = self.state["plan"].get("clear_obstacles", [])
+        cut = planned_tap.cutover(self.path.parent, self.builder, obs, taps, clear_obstacles=clear)
+        if cut is not None:
+            return cut
         result = self.builder.ensure_plan(obs, self.state["plan"])
         if result.get("status") != "succeeded":
             return result

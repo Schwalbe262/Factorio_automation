@@ -188,15 +188,17 @@ ROADMAP: tuple[Step, ...] = (
     # paired_smelting / paired_mining are migrations of the old development
     # map and are not roadmap steps: fresh districts publish plate ports and
     # fresh mining banks are already paired (outposts.py, pcb-paired-mining-v1).
-    Step("automation_science", "automation_science", {"rate_per_minute": 30}),
+    # The fresh-map bus comes right after the district: trunks from the site
+    # plan, fed beside the district ports (planned_bus.py); every consumer
+    # beside it then takes plates from bus taps (planned_tap.py), never from
+    # its own line out of the district. bus_factory's main_bus_factory is the
+    # old development-map migration and is only run on explicit request.
+    Step("main_bus", "planned_main_bus", {}, builds=PLANNED_BUS_BUILDS),
+    Step("automation_science", "automation_science", {"rate_per_minute": 30}, after=("main_bus",)),
     _research("logistic-science-pack"),
     _research("steel-processing"),
     _research("fast-inserter"),
     Step("logistic_science", "logistic_science", {"rate_per_minute": 30}),
-    # The fresh-map bus: trunks from the site plan, fed beside the district
-    # ports (planned_bus.py). bus_factory's main_bus_factory is the old
-    # development-map migration and is only run on explicit request.
-    Step("main_bus", "planned_main_bus", {}, builds=PLANNED_BUS_BUILDS),
     Step("steam_expansion", "steam_expansion", {}, after=("logistic_science",)),
     _research("gun-turret"),
     Step("defense_perimeter", "defense_perimeter", {}, after=("research_gun_turret", "steam_expansion")),
