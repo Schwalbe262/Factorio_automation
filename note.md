@@ -252263,3 +252263,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - failure: a Lua `--` comment I added inside the insert body cut the one-line script and blocked every run started on 19859cc (long fleet lost 22 min); fixed by stripping line comments before send + test. GUI maps froze twice on undispatchable ready research nodes and on blocked reasons that were never re-planned.
 - result: v2 c9acd07; GUI map eval-1575138435 and long fleet long-1114-0039 running.
 - next: verify the ladder on the GUI map; read all-1114-0020 and the long fleet.
+
+## 2026-11-14 04:30 Part 54 - actor death never hangs a run; attack-expected defense timing
+- goal: run all-1114-0107-1075833632 hung 75+ real min after the client-free actor died at 30.6 game min (observe agent_dead, error loop, watcher waits for the target minute).
+- evidence: all 72 presence updates say actor chunk (0,0) (assisted backend, never moved): it died at the spawn, not on a trip; no turret, gun-turret not researched (defense_perimeter is after logistic science); every survey (ticks 49877/67754/71854) "quiet, no enemy within 96 tiles of a producer, evolution 0.004-0.007"; no survey or log names the killer (no cause logged). The old actor_dead_without_player rule never fired: observe failed before actor-status.
+- actions: actor_death.py (client-free respawn emulation: 600-tick delay, empty character at the force spawn, corpse untouched; paid corpse recovery deferred while enemies within 32 tiles; death records); supervisor agent_dead state (respawn/rebind, reconcile unknown outcomes, belongings between slices, no error backoff); move trip_target_threatened check; defense attack_sources (polluted charted nest within 384, moving group within 192) -> level >= 1 -> defense_urgency_nodes pull gun-turret research + defense_perimeter forward; fleet watcher stall timeout (5x fleet pace, >= 10 real min), triage "errored: agent_dead", report "actor deaths", waste_report actor_death.
+- metrics: test_v2_actor_death 20 tests (lupa Lua included); waste_report on the incident: actor_death 4629 s.
+- result: offline; no server or fleet started.
+- next: fleet round to see (1) how often attack_sources fire and what the earlier turrets cost on the critical path, (2) a live respawn + belongings trip; AGENTS.md exception (b) wording should name the respawn (owner).

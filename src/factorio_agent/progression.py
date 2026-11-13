@@ -649,6 +649,9 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed += power_coal_tap_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
         : max(0, limit - len(proposed))
     ]
+    urgent = defense_urgency_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    proposed += urgent  # an expected attack pulls gun-turret research and the perimeter forward
+    queued_ids |= {node["id"] for node in urgent}
     for index, step in enumerate(ROADMAP):
         if len(proposed) >= limit:
             break
@@ -799,6 +802,59 @@ def defense_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[d
             "reason": f"defense growth to {posts} posts: {row.get('reason', '')}"[:300],
         }
     ]
+
+
+# Roadmap steps an expected attack pulls forward (``defense_urgency_nodes``), and their priority:
+# above every roadmap step, below need-driven capacity and produce rows.
+URGENT_DEFENSE_STEPS = ("research_gun_turret", "defense_perimeter")
+URGENT_DEFENSE_PRIORITY = TOP_PRIORITY + 10
+URGENT_DEFENSE_LEVEL = 1
+
+
+def defense_urgency_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
+    """The gun-turret research, then ``defense_perimeter``, ahead of their roadmap ``after`` steps.
+
+    Rule: the observe-time risk (``adaptive_defense_risk``, ``defense_policy.assess_risk``)
+    is at least ``URGENT_DEFENSE_LEVEL``: enemies near a producer, a recently damaged
+    producer, a charted nest inside the pollution cloud or a moving enemy group
+    (``attack_sources``). Without that the roadmap order stands (the steps wait for
+    logistic science and steam expansion). One node at a time, the same node ids
+    as the roadmap's, so the roadmap never proposes them twice.
+    """
+    risk = observation.get("adaptive_defense_risk")
+    level = risk.get("level") if isinstance(risk, Mapping) else None
+    if type(level) is not int or level < URGENT_DEFENSE_LEVEL:
+        return []
+    progress = _Progress(tuple(jobs), frozenset(_names(observation.get("technologies"))))
+    succeeded = progress.succeeded_capabilities
+    queued_ids = {node.get("id") for node in queue_nodes}
+    steps = _by_id()
+    for step_id in URGENT_DEFENSE_STEPS:
+        step = steps.get(step_id)
+        if step is None or step.capability not in capabilities:
+            return []
+        if progress.satisfied(step):
+            continue
+        node_id = NODE_PREFIX + step.id
+        if node_id in queued_ids or any(_same(node, step) for node in queue_nodes):
+            return []
+        if progress.in_flight(step) or progress.stalled(step) or _natively_queued(step, observation):
+            return []
+        if not set(capabilities[step.capability].get("requires", [])) <= succeeded:
+            return []
+        if not _research_ready(step, observation) or not _recipes_ready(step, capabilities, observation):
+            return []
+        return [
+            {
+                "id": node_id,
+                "capability": step.capability,
+                "parameters": dict(step.parameters),
+                "priority": URGENT_DEFENSE_PRIORITY,
+                "depends_on": [],
+                "reason": f"defense urgency ({risk.get('risk')}): {str(risk.get('sizing', ''))[:200]}"[:300],
+            }
+        ]
+    return []
 
 
 def _upcoming(jobs, researched: Iterable[str], horizon: int) -> list[Step]:

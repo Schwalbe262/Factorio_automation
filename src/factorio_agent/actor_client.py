@@ -31,9 +31,12 @@ continues server-only. Checks that pinned the connected player accept the
 detached actor through ``DETACHED_ACTOR_LUA`` (same unit number and world id
 as recorded at the detach).
 
-Death after the detach: the corpse keeps the inventory but nothing respawns
-without a player, so the supervisor records ``actor_dead_without_player`` and
-stops the run (no replacement character, no granted items).
+Death after the detach (``until_lab_trigger``): the corpse keeps the inventory
+but nothing respawns without a player, so the supervisor records
+``actor_dead_without_player`` and stops the run (no replacement character, no
+granted items). In client-free mode the engine's player respawn is emulated as
+part of the presence emulation (``actor_death``: a new empty character at the
+spawn after the respawn delay; the corpse keeps every item).
 """
 
 from __future__ import annotations
@@ -242,6 +245,7 @@ if not p then
  d.presence_emulation=p
  mark(math.floor((o.x-range)/32),math.floor((o.y-range)/32),math.floor((o.x+range)/32),math.floor((o.y+range)/32))
 end
+d.actor_last_known_position=pos(a.position)
 local cx=math.floor(a.position.x/32);local cy=math.floor(a.position.y/32);local m=x.move_chart_radius_chunks
 local g=math.min(x.generate_radius_chunks,math.floor(x.generate_base_chunks+game.tick/x.generate_ticks_per_chunk))
 s.request_to_generate_chunks(a.position,g);p.generate_radius_now=g

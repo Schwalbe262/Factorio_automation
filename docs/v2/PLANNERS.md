@@ -624,6 +624,10 @@ risk  = assess_risk(survey): enemies within 96 tiles of a producer, evolution, d
 posts = 0                                   quiet and evolution < QUIET_EVOLUTION (0.1)
       = tier reserve (early 0, mid 1, adv 2) quiet and evolution >= 0.1
       = 2 / 3 / 4                           approaching (<=64) / high (<=40, damage) / critical
+      = 2 (approaching, "attack expected")  attack_sources: charted nest with pollution within 384
+                                            of the spawn, or a unit group >24 from any nest within 192
+risk level >= 1 -> defense_urgency_nodes: research_gun_turret, then defense_perimeter, at
+      URGENT_DEFENSE_PRIORITY ahead of their roadmap after steps (one node at a time)
 quiet and posts == 0: defense_perimeter succeeds "quiet map, no posts required"
 each new post:
   focus     = producers ranked (damaged, nearest threat, density), FOCUS_TRIES (8) tried
@@ -640,7 +644,9 @@ growth:
 no site plan for this world: legacy POSTS / FUTURE_AREAS (development map only)
 ```
 
-Pinned by `tests/test_v2_defense_sizing.py`, `tests/test_v2_defense_policy.py`.
+Pinned by `tests/test_v2_defense_sizing.py`, `tests/test_v2_defense_policy.py`, `tests/test_v2_actor_death.py`
+(attack sources, urgency nodes, the `trip_target_threatened` move check: every `move` fails while an
+enemy unit, nest or worm stands within `TRIP_THREAT_RADIUS` (32) of its target).
 
 ## Native research queue (`research_queue.py`)
 

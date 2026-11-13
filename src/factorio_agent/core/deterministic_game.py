@@ -346,6 +346,14 @@ def _whole_json(text: str) -> bool:
 # stand still while another item was being made (user: "while crafting it
 # only crafts").
 CRAFT_QUEUE_ENTRIES = 8
+# A move whose target has enemies (units, nests, worms) this close fails ``trip_target_threatened``
+# (a known outcome): the planner defers the trip or picks another target. A player-less character
+# never fires its gun, so a biter group at the destination kills it there.
+TRIP_THREAT_RADIUS = 32
+TRIP_THREAT_LUA = """
+if s.count_entities_filtered{position=x.position,radius=TRIP_THREAT_RADIUS,force="enemy",type={"unit","unit-spawner","turret"},limit=1}>0
+ then return failure("trip_target_threatened") end
+"""
 
 
 def _without_line_comments(line: str) -> str:
@@ -654,6 +662,9 @@ if n<=0 then return failure("not_craftable") end
 return success{status="running",started=n}
 """
         elif kind == "move":
+            # Threat check of every trip: never move the actor into enemies (TRIP_THREAT_RADIUS).
+            body += f"local TRIP_THREAT_RADIUS={TRIP_THREAT_RADIUS};"
+            body += TRIP_THREAT_LUA
             if self.backend == "character":
                 body += """
 local dx=x.position.x-a.position.x;local dy=x.position.y-a.position.y

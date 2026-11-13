@@ -126,6 +126,8 @@ def run_facts(root, *, end_tick=None) -> dict:
         runtime=str(root),
         end_tick=end_tick,
         controller_errors=errors,
+        last_error=str(state.get("last_error"))[:120] if state.get("last_error") else None,
+        unrecovered_deaths=_unrecovered_deaths(root),
         last_success_tick=max(successes, default=None),
         last_action_tick=max(acted, default=None),
         last_slice_tick=slices[-1]["tick"] if slices else None,
@@ -133,6 +135,18 @@ def run_facts(root, *, end_tick=None) -> dict:
         problems=problems,
         waiting=waiting,
     )
+
+
+def _unrecovered_deaths(root) -> int:
+    """Actor deaths without a respawn (``actor_death.deaths``); 0 when the module is unavailable."""
+    try:
+        from factorio_agent.actor_death import deaths
+    except ImportError:
+        return 0
+    try:
+        return sum(d.get("recovered_tick") is None for d in deaths(root))
+    except Exception:  # noqa: BLE001 - a half-written run must not stop the triage
+        return 0
 
 
 def fleet_medians(milestone_maps, steps) -> dict:
@@ -171,8 +185,15 @@ def classify(facts, *, milestones=None, medians=None, alive=True, waste=None) ->
     flags, reasons, jobs = [], [], []
     game_minutes = round(end / TICKS_PER_MINUTE, 1) if end is not None else None
     error_jobs = [p for p in facts["problems"] if p["reason"].startswith(ERROR_REASONS)]
-    if facts["controller_errors"] >= ERROR_MIN or error_jobs or not alive:
+    dead = facts.get("unrecovered_deaths") or 0
+    if facts["controller_errors"] >= ERROR_MIN or error_jobs or not alive or dead:
         flags.append("errored")
+        if dead or facts.get("last_error"):
+            # The cause leads the verdict: "errored: agent_dead" (an unrecovered actor death).
+            reasons.append(
+                f"errored: {facts.get('last_error') or 'agent_dead'}"
+                + (f" ({dead} unrecovered actor death)" if dead else "")
+            )
         if facts["controller_errors"] >= ERROR_MIN:
             reasons.append(f"{facts['controller_errors']} controller errors")
         if not alive:
