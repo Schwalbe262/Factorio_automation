@@ -1076,6 +1076,13 @@ def _advance_job(
             result = executors.step(job["capability"], obs if view is None else view, job["parameters"])
         if guard is not None and result.get("type"):
             result = guard(result) or result
+    except InterruptedError:
+        # The operator stop arrived while planning (the builder's long searches poll stop.json):
+        # nothing was sent, so this is the same clean stop as the check above, not a crashed
+        # slice (fleet aud-1114-0703 seed 3743340251 logged it as an invalid CLI receipt).
+        job.update(status="waiting", reason="operator_stop_requested")
+        ledger.save()
+        return "stopped", {}
     except PLANNER_FAULTS as exc:
         # Planning is read-only. A planner that trips over missing state or an
         # unexpected shape blocks its own job; it must not stop the other jobs
