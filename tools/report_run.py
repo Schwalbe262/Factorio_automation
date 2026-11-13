@@ -21,25 +21,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from factorio_agent.incidents import repeat_summary  # noqa: E402
 
 
+def parse_row(line):
+    """One JSONL event row with a numeric ``time``, or None (blank, corrupt or untimed line)."""
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None
+    if isinstance(row, dict) and isinstance(row.get("time"), (int, float)):
+        return row
+    return None
+
+
 def rows(path):
     if not path.exists():
         return
     with path.open(encoding="utf-8") as lines:
         for line in lines:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(row, dict) and isinstance(row.get("time"), (int, float)):
+            row = parse_row(line)
+            if row is not None:
                 yield row
 
 
-def report(root, gap_seconds=30.0):
+def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=None):
+    """The run summary. ``job_events``, ``controller`` (row lists) and ``jobs``
+    (the ledger's ``jobs`` mapping) may be passed in already loaded, as the
+    dashboard does with its incremental readers; missing ones are read here."""
     root = Path(root)
-    job_events = list(rows(root / "job-events.jsonl"))
-    controller = list(rows(root / "logs" / "controller-events.jsonl"))
-    ledger = root / "jobs.json"
-    jobs = json.loads(ledger.read_text(encoding="utf-8")).get("jobs", {}) if ledger.exists() else {}
+    if job_events is None:
+        job_events = list(rows(root / "job-events.jsonl"))
+    if controller is None:
+        controller = list(rows(root / "logs" / "controller-events.jsonl"))
+    if jobs is None:
+        ledger = root / "jobs.json"
+        jobs = json.loads(ledger.read_text(encoding="utf-8")).get("jobs", {}) if ledger.exists() else {}
 
     actions = [r for r in job_events if r.get("event") == "action_result"]
     times = sorted(r["time"] for r in job_events + controller)
@@ -144,7 +158,10 @@ def incident_report(root, controller):
     planner = started[-1].get("planner") if started else None
     if planner is None:
         state = Path(root) / "logs" / "controller-state.json"
-        planner = json.loads(state.read_text(encoding="utf-8")).get("planner") if state.exists() else None
+        try:
+            planner = json.loads(state.read_text(encoding="utf-8")).get("planner") if state.exists() else None
+        except (OSError, ValueError, AttributeError):
+            planner = None
     episodes = []
     current = {}
     consultations = [r for r in controller if r.get("event") == "incident_decision"]

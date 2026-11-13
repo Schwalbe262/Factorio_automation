@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factorio 자동화 현황</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --text: #1d2228; --muted: #5d6670; --line: #dde1e6; --soft: #eef0f3;
+  --done: #1e7d3a; --done-bg: #e3f3e7; --active: #1f5fbf; --active-bg: #e3ecfa;
+  --blocked: #b3261e; --blocked-bg: #fbe5e3; --wait: #8a5a00; --wait-bg: #fbf0d9;
+  --pending: #5d6670; --pending-bg: #eceef1; --accent: #00a3a3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171b; --card: #1c2026; --text: #e3e6ea; --muted: #9aa3ad; --line: #2e343c; --soft: #242a31;
+    --done: #6fcf8a; --done-bg: #183324; --active: #8ab4f8; --active-bg: #1b2a42;
+    --blocked: #f2a39b; --blocked-bg: #3d1f1c; --wait: #f0c674; --wait-bg: #3a2f17;
+    --pending: #9aa3ad; --pending-bg: #262b31;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", "Malgun Gothic", sans-serif; }
+header { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; z-index: 2; }
+header h1 { font-size: 17px; margin: 0 0 6px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+header h1 small { font-weight: normal; color: var(--muted); font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { background: var(--soft); border-radius: 6px; padding: 3px 8px; font-size: 13px; max-width: 100%; overflow-wrap: anywhere; }
+td { overflow-wrap: anywhere; }
+td.t { white-space: nowrap; overflow-wrap: normal; }
+.chip b { font-weight: 600; }
+main { padding: 12px 16px 40px; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); max-width: 1500px; margin: 0 auto; }
+@media (min-width: 1000px) { main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .wide { grid-column: 1 / -1; } }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+h2 { font-size: 15px; margin: 0 0 8px; }
+h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.scroll { overflow-x: auto; }
+.badge { display: inline-block; border-radius: 4px; padding: 0 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.s-done { color: var(--done); background: var(--done-bg); }
+.s-active { color: var(--active); background: var(--active-bg); }
+.s-blocked { color: var(--blocked); background: var(--blocked-bg); }
+.s-wait { color: var(--wait); background: var(--wait-bg); }
+.s-pending { color: var(--pending); background: var(--pending-bg); }
+tr.blocked td { background: var(--blocked-bg); }
+.reason { color: var(--muted); word-break: break-word; }
+.evidence { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); word-break: break-all; margin-top: 2px; }
+.empty { color: var(--muted); font-style: italic; }
+.bar { height: 8px; background: var(--soft); border-radius: 4px; overflow: hidden; margin: 4px 0 10px; }
+.bar > div { height: 100%; background: var(--done); }
+ol.roadmap { list-style: none; padding: 0; margin: 0; max-height: 520px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+ol.roadmap li { display: grid; grid-template-columns: 2.4em 5.2em 1fr; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+ol.roadmap li:last-child { border-bottom: 0; }
+ol.roadmap li.next { outline: 2px solid var(--active); outline-offset: -2px; }
+.idx { color: var(--muted); text-align: right; }
+.timeline { max-height: 260px; overflow-y: auto; }
+.mapbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+button { font: inherit; font-size: 13px; padding: 3px 10px; border: 1px solid var(--line); background: var(--soft); color: var(--text); border-radius: 6px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+label.toggle { font-size: 13px; display: inline-flex; gap: 4px; align-items: center; }
+#map { height: 68vh; min-height: 320px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #9a9a9a; touch-action: none; cursor: grab; position: relative; }
+#map svg { width: 100%; height: 100%; display: block; }
+#map.hide-board [data-kind="board"], #map.hide-allocation [data-kind="allocation"], #map.hide-lane [data-kind="lane"] { display: none; }
+#coord { font-size: 12px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+.placeholder { padding: 40px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 8px 0 0; font-size: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 4px; }
+.sw { width: 14px; height: 10px; display: inline-block; border-radius: 2px; }
+.sw.line { height: 3px; }
+.sw.dash { background: none !important; border: 2px dashed; height: 10px; }
+.sw.dot { width: 10px; border-radius: 50%; }
+.warn { color: var(--wait); background: var(--wait-bg); padding: 6px 8px; border-radius: 6px; margin: 6px 0; font-size: 13px; }
+.cols { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1000px) { .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+#conn.bad { color: var(--blocked); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Factorio 자동화 현황 <small id="runtime">불러오는 중…</small></h1>
+  <div class="chips" id="chips"></div>
+</header>
+<main>
+  <section id="now"><h2>진행 중</h2><div class="body"></div></section>
+  <section id="done"><h2>완료 · 로켓까지의 로드맵</h2><div class="body"></div></section>
+  <section id="layout" class="wide">
+    <h2>레이아웃 구상 <small class="reason">(계획 = 마스터 플랜, 청록 = 실제 보드에 등록된 블록)</small></h2>
+    <div class="mapbar">
+      <button type="button" data-zoom="0.8">확대 +</button>
+      <button type="button" data-zoom="1.25">축소 −</button>
+      <button type="button" id="fit-core">핵심 영역</button>
+      <button type="button" id="fit-all">전체 지도</button>
+      <label class="toggle"><input type="checkbox" data-layer="board" checked> 등록 블록</label>
+      <label class="toggle"><input type="checkbox" data-layer="allocation" checked> 할당</label>
+      <label class="toggle"><input type="checkbox" data-layer="lane" checked> 버스 레인</label>
+      <span id="coord"></span>
+    </div>
+    <div id="layout-msg"></div>
+    <div id="map" hidden></div>
+    <div class="legend" id="legend"></div>
+    <div class="cols" id="layout-lists"></div>
+  </section>
+  <section id="activity" class="wide"><h2>최근 활동</h2><div class="body"></div></section>
+</main>
+<script>
+"use strict";
+const STATE_CLASS = { done: "s-done", succeeded: "s-done", completed: "s-done", active: "s-active", running: "s-active",
+  waiting: "s-wait", queued: "s-wait", ready: "s-wait", pending: "s-pending", paused: "s-pending",
+  blocked: "s-blocked", failed: "s-blocked" };
+
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") el.className = v; else el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c === null || c === undefined || c === false) continue;
+    el.append(c instanceof Node ? c : String(c));
+  }
+  return el;
+}
+function badge(state, label) { return h("span", { class: "badge " + (STATE_CLASS[state] || "s-pending") }, label || state || "-"); }
+function fmtMin(m) {
+  if (m === null || m === undefined) return "-";
+  if (m < 1) return Math.round(m * 60) + "초";
+  if (m < 120) return m.toFixed(1) + "분";
+  return (m / 60).toFixed(1) + "시간";
+}
+function ago(m) { return m === null || m === undefined ? "-" : fmtMin(m) + " 전"; }
+function table(head, rows, rowAttrs) {
+  if (!rows.length) return h("p", { class: "empty" }, "없음");
+  return h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, head.map(([t, cls]) => h("th", { class: cls }, t)))),
+    h("tbody", {}, rows.map((r, i) => h("tr", rowAttrs ? rowAttrs(i) : {}, r)))));
+}
+function fill(id, ...nodes) {
+  // Re-render a panel but keep the scroll position of its inner scroll boxes (roadmap, timeline).
+  const body = document.querySelector("#" + id + " .body");
+  const tops = [...body.querySelectorAll(".roadmap, .timeline")].map(e => e.scrollTop);
+  body.replaceChildren(...nodes.flat());
+  [...body.querySelectorAll(".roadmap, .timeline")].forEach((e, i) => { if (tops[i]) e.scrollTop = tops[i]; });
+}
+
+function renderHeader(d) {
+  const hd = d.header, sup = hd.supervisor || {};
+  document.getElementById("runtime").textContent = hd.runtime + " · seed " + (hd.seed ?? "-");
+  const chips = [
+    h("span", { class: "chip" }, "감독자 ", badge(sup.alive ? "running" : "blocked", sup.alive ? "실행 중" : "중지됨"),
+      " ", h("span", { class: "reason" }, (sup.basis || "") + (sup.last_event_seconds_ago != null ? " · 마지막 이벤트 " + ago(sup.last_event_seconds_ago / 60) : ""))),
+    h("span", { class: "chip" }, "실제 ", h("b", {}, fmtMin(hd.wall_minutes)), " / 게임 ", h("b", {}, fmtMin(hd.game_minutes))),
+    h("span", { class: "chip" }, "플래너 ", h("b", {}, hd.planner_mode || "-")),
+    h("span", { class: "chip" }, "마지막 성공 후 ", h("b", {}, fmtMin(hd.minutes_since_last_success))),
+    h("span", { class: "chip" }, "유휴 비율 ", h("b", {}, hd.idle_gap_share != null ? Math.round(hd.idle_gap_share * 100) + "%" : "-")),
+    h("span", { class: "chip" }, "로드맵 ", h("b", {}, d.done.roadmap_done + " / " + d.done.roadmap_total)),
+    hd.game_pause ? h("span", { class: "chip" }, "게임 ", badge("paused", hd.game_pause === "paused" ? "일시정지" : hd.game_pause)) : null,
+    sup.last_error ? h("span", { class: "chip s-blocked" }, "오류: " + sup.last_error) : null,
+    hd.report_error ? h("span", { class: "chip s-blocked" }, "리포트 오류: " + hd.report_error) : null,
+    h("span", { class: "chip", id: "conn" }, "갱신 " + new Date(d.generated_at * 1000).toLocaleTimeString()),
+  ];
+  document.getElementById("chips").replaceChildren(...chips.filter(Boolean));
+}
+
+function renderNow(d) {
+  const n = d.now;
+  const jobs = table([["작업"], ["상태"], ["이유 (대기/막힘)"], ["행동", "num"], ["경과", "num"], ["진척 없음", "num"]],
+    n.jobs.map(j => [
+      h("td", {}, h("b", {}, j.capability || "-"), h("div", { class: "reason" }, "…" + j.short + (j.selected ? " · 현재 선택" : ""))),
+      h("td", {}, badge(j.status, j.status_label)),
+      h("td", {}, h("div", { class: "reason" }, j.reason || "-"),
+        j.last_failure ? h("div", { class: "evidence" }, "마지막 실패: " + j.last_failure) : null,
+        j.evidence ? h("div", { class: "evidence" }, "증거: " + j.evidence) : null),
+      h("td", { class: "num" }, j.actions), h("td", { class: "num" }, fmtMin(j.age_minutes)),
+      h("td", { class: "num" }, fmtMin(j.minutes_without_progress)),
+    ]), i => (["blocked", "failed"].includes(n.jobs[i].status) ? { class: "blocked" } : {}));
+  const queue = table([["대기열 노드"], ["상태"], ["우선순위", "num"], ["사유"]],
+    n.queue.map(q => [h("td", {}, h("b", {}, q.capability), h("div", { class: "reason" }, q.id)), h("td", {}, badge(q.status, q.status_label)),
+      h("td", { class: "num" }, q.priority ?? "-"), h("td", { class: "reason" }, q.last_reason || q.reason)]));
+  const EV = { autopilot: "자동 추가", dispatch_deferred: "배정 보류", auto_retry: "자동 재시도" };
+  const auto = table([["언제"], ["이벤트"], ["노드"], ["사유"]],
+    n.autopilot.map(a => [h("td", { class: "t" }, ago(a.minutes_ago)), h("td", { class: "t" }, EV[a.event] || a.event),
+      h("td", {}, (a.tasks || []).join(", ")), h("td", { class: "reason" }, a.reason || "")]));
+  fill("now", h("h3", {}, "활성/막힌 작업 (jobs.json)"), jobs,
+    h("h3", {}, "대기열 (work_queue.json, 완료 " + n.queue_completed + "개 제외)"), queue,
+    h("h3", {}, "오토파일럿 최근 결정 (controller-events)"), auto);
+}
+
+function renderDone(d) {
+  const dn = d.done, pct = dn.roadmap_total ? (100 * dn.roadmap_done / dn.roadmap_total) : 0;
+  const list = h("ol", { class: "roadmap" }, dn.roadmap.map(s => h("li", { class: s.id === dn.next_step ? "next" : null, title: s.after.length ? "선행: " + s.after.join(", ") : null },
+    h("span", { class: "idx" }, s.index), h("span", {}, badge(s.state, s.state_label)),
+    h("span", {}, h("b", {}, s.id), s.capability !== s.id ? h("span", { class: "reason" }, " · " + s.capability) : null,
+      s.reason ? h("div", { class: "reason" }, s.reason) : null))));
+  const ms = table([["분", "num"], ["작업"], ["완료 사유"]],
+    dn.milestones.slice().reverse().map(m => [h("td", { class: "num" }, m.minute), h("td", {}, h("b", {}, m.capability || "-")), h("td", { class: "reason" }, m.reason)]));
+  fill("done", h("div", {}, "로드맵 " + dn.roadmap_done + " / " + dn.roadmap_total + " 단계 완료" + (dn.next_step ? " · 다음: " + dn.next_step : " · 전부 완료")),
+    h("div", { class: "bar", role: "img", "aria-label": Math.round(pct) + "% 완료" }, h("div", { style: "width:" + pct + "%" })),
+    h("h3", {}, "마일스톤 (성공한 작업, 최신순)"), h("div", { class: "timeline" }, ms),
+    h("h3", {}, "로드맵 체크리스트 (progression.ROADMAP)"), list);
+}
+
+function renderActivity(d) {
+  const a = d.activity;
+  const recent = table([["언제"], ["작업"], ["행동"], ["대상"], ["수량", "num"], ["결과"]],
+    a.recent.map(r => [h("td", { class: "t" }, ago(r.minutes_ago)), h("td", {}, r.job), h("td", {}, r.type),
+      h("td", {}, r.item ?? "-", r.reason ? h("div", { class: "reason" }, r.reason) : null), h("td", { class: "num" }, r.count ?? "-"),
+      h("td", {}, r.result ? badge(r.result === "succeeded" || r.result === "ok" ? "done" : "wait", r.result) : "-")]));
+  const rep = table([["작업"], ["행동"], ["대상"], ["수량", "num"], ["횟수", "num"]],
+    a.repeated.map(r => [h("td", {}, r.job ?? "-"), h("td", {}, r.type ?? "-"), h("td", {}, r.item ?? "-"), h("td", { class: "num" }, r.count ?? "-"), h("td", { class: "num" }, r.times)]));
+  const inc = table([["종류"], ["대상"], ["열린 시간", "num"]],
+    a.incidents.map(i => [h("td", {}, badge("blocked", i.kind)), h("td", {}, i.subject), h("td", { class: "num" }, fmtMin(i.minutes_open))]));
+  const err = table([["언제"], ["컨트롤러 오류"]], a.errors.map(e => [h("td", { class: "t" }, ago(e.minutes_ago)), h("td", { class: "reason" }, e.reason)]));
+  const kinds = Object.entries(a.incidents_by_kind || {}).map(([k, v]) => k + " " + v).join(", ");
+  fill("activity", h("div", { class: "cols" },
+    h("div", {}, h("h3", {}, "최근 행동 " + a.recent.length + "개 (job-events)"), recent),
+    h("div", {}, h("h3", {}, "열린 인시던트"), inc, h("p", { class: "reason" }, "누적: " + (kinds || "없음")),
+      h("h3", {}, "최근 100개 중 반복 상위 (반복 비율 " + (a.repeat_share != null ? Math.round(a.repeat_share * 100) + "%" : "-") + ")"), rep,
+      h("h3", {}, "최근 오류"), err)));
+}
+
+// ----- layout map --------------------------------------------------------
+let layoutVersion = null, layout = null, vb = null, svgEl = null, userMoved = false;
+const mapEl = document.getElementById("map");
+function applyVB() { if (svgEl && vb) svgEl.setAttribute("viewBox", vb.join(" ")); }
+function toUser(evt, matrix) {
+  const p = svgEl.createSVGPoint(); p.x = evt.clientX; p.y = evt.clientY;
+  return p.matrixTransform(matrix || svgEl.getScreenCTM().inverse());
+}
+function zoom(factor, center) {
+  if (!vb) return;
+  const cx = center ? center.x : vb[0] + vb[2] / 2, cy = center ? center.y : vb[1] + vb[3] / 2;
+  const w = Math.min(Math.max(vb[2] * factor, 40), layout.full[2] * 1.5), f = w / vb[2];
+  vb = [cx - (cx - vb[0]) * f, cy - (cy - vb[1]) * f, vb[2] * f, vb[3] * f];
+  userMoved = true; applyVB();
+}
+mapEl.addEventListener("wheel", e => { if (!svgEl) return; e.preventDefault(); zoom(e.deltaY < 0 ? 0.85 : 1 / 0.85, toUser(e)); }, { passive: false });
+let drag = null;
+mapEl.addEventListener("pointerdown", e => { if (!svgEl) return; drag = { m: svgEl.getScreenCTM().inverse(), start: null, vb: vb.slice() }; drag.start = toUser(e, drag.m); mapEl.setPointerCapture(e.pointerId); });
+mapEl.addEventListener("pointermove", e => {
+  if (!svgEl) return;
+  const p = toUser(e);
+  if (layout) document.getElementById("coord").textContent = "타일 x " + Math.floor(p.x / layout.scale + layout.origin[0]) + ", y " + Math.floor(p.y / layout.scale + layout.origin[1]);
+  if (!drag) return;
+  const q = toUser(e, drag.m);
+  vb = [drag.vb[0] - (q.x - drag.start.x), drag.vb[1] - (q.y - drag.start.y), drag.vb[2], drag.vb[3]];
+  userMoved = true; applyVB();
+});
+mapEl.addEventListener("pointerup", () => { drag = null; });
+mapEl.addEventListener("pointercancel", () => { drag = null; });
+document.querySelectorAll("[data-zoom]").forEach(b => b.addEventListener("click", () => zoom(parseFloat(b.dataset.zoom))));
+document.getElementById("fit-core").addEventListener("click", () => { if (layout) { vb = layout.focus.slice(); userMoved = false; applyVB(); } });
+document.getElementById("fit-all").addEventListener("click", () => { if (layout) { vb = layout.full.slice(); userMoved = true; applyVB(); } });
+document.querySelectorAll("[data-layer]").forEach(c => c.addEventListener("change", () => mapEl.classList.toggle("hide-" + c.dataset.layer, !c.checked)));
+
+async function loadSvg(info) {
+  const r = await fetch("/api/layout.svg?v=" + info.version, { cache: "no-store" });
+  if (!r.ok) throw new Error("layout " + r.status);
+  const text = await r.text();
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const svg = doc.documentElement;
+  if (svg.nodeName.toLowerCase() !== "svg") throw new Error("bad svg");
+  svg.removeAttribute("width"); svg.removeAttribute("height");
+  mapEl.replaceChildren(document.importNode(svg, true));
+  svgEl = mapEl.querySelector("svg");
+  if (!vb || !userMoved) vb = info.focus.slice();
+  applyVB();
+}
+
+function renderLayout(d) {
+  const info = d.layout, msg = document.getElementById("layout-msg");
+  if (!info || !info.available) {
+    mapEl.hidden = true;
+    msg.replaceChildren(h("div", { class: "placeholder" }, info && info.message ? info.message : "레이아웃 없음"));
+    document.getElementById("legend").replaceChildren(); document.getElementById("layout-lists").replaceChildren();
+    return;
+  }
+  layout = info; mapEl.hidden = false;
+  msg.replaceChildren(...[...(info.warnings || []).map(w => h("div", { class: "warn" }, "계획 경고: " + w)),
+    info.error ? h("div", { class: "warn" }, "최신 레이아웃을 읽지 못해 이전 그림을 표시합니다: " + info.error) : null].filter(Boolean));
+  if (info.version !== layoutVersion) {
+    layoutVersion = info.version;
+    loadSvg(info).catch(err => { layoutVersion = null; msg.append(h("div", { class: "warn" }, "지도 불러오기 실패: " + err.message)); });
+  }
+  const sw = (c, shape) => h("i", { class: "sw " + (shape || ""), style: (shape === "dash" ? "border-color:" : "background:") + c });
+  document.getElementById("legend").replaceChildren(
+    ...info.legend.map(l => h("span", {}, sw(l.colour, l.shape), l.label)),
+    ...info.bus.lanes.map(l => h("span", {}, sw(l.colour, "line"), "버스 레인 " + l.material + " ×" + l.count)),
+    h("span", { class: "reason" }, "구역 색은 이름별 자동 색 · 화살표 = 흐름 방향 · 버스 " + info.bus.direction + "향, 길이 " + info.bus.length + ", 폭 " + info.bus.width + ", 예비 레인 " + info.bus.spare));
+  const rect = r => r ? "[" + r[0] + "," + r[1] + ")–[" + r[2] + "," + r[3] + ")" : "-";
+  const blocks = table([["등록 블록 (pcb-board.json)"], ["템플릿"], ["영역 (타일)"], ["엔티티", "num"]],
+    info.blocks.map(b => [h("td", {}, h("b", {}, b.name)), h("td", { class: "reason" }, b.template || "-"), h("td", {}, rect(b.rect)), h("td", { class: "num" }, b.entities)]));
+  const allocs = table([["할당 (site-plan.json)"], ["종류"], ["영역"]],
+    info.allocations.map(a => [h("td", {}, h("b", {}, a.name)), h("td", {}, a.kind), h("td", {}, rect(a.rect))]));
+  const zones = table([["계획 구역"], ["종류"], ["영역"]],
+    info.zones.map(z => [h("td", {}, z.name), h("td", {}, z.kind), h("td", {}, rect(z.rect))]));
+  document.getElementById("layout-lists").replaceChildren(h("div", {}, h("h3", {}, "계획 대 실제"), blocks, allocs), h("div", {}, h("h3", {}, "마스터 플랜 구역"), zones));
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    renderHeader(d); renderNow(d); renderDone(d); renderActivity(d); renderLayout(d);
+  } catch (err) {
+    const c = document.getElementById("conn");
+    if (c) { c.textContent = "연결 끊김 — 마지막 값 표시 중"; c.classList.add("bad"); }
+  } finally {
+    setTimeout(tick, 5000);
+  }
+}
+tick();
+</script>
+</body>
+</html>
