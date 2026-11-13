@@ -11,6 +11,9 @@ from typing import Any, Mapping
 
 from .world_catalog import WorldCatalog
 
+# The cargo LAUNCH_LUA loads into the rocket: Space Age's first launch creates a
+# platform from it (``rocket_plan`` adds it to the bill of every launch).
+LAUNCH_PAYLOAD = "space-platform-starter-pack"
 
 LAUNCH_LUA = r"""
 local state=d.first_rocket_launch
@@ -134,7 +137,7 @@ class LaunchStage:
                     }
                 ],
             }
-        pack = "space-platform-starter-pack"
+        pack = LAUNCH_PAYLOAD
         if not silo.get("inventory", {}).get(pack) and not observation.get("inventory", {}).get(pack):
             source = next(
                 (

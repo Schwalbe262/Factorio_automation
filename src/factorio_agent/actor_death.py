@@ -7,7 +7,11 @@ then rebinds that successor (``recover-actor``) and recovers the corpse stacks
 (``recover-belongings``, ``corpse_recovery``).
 
 A client-free TEST run (``actor-client.json`` ``client: none``) has no player,
-so nothing respawns. ``respawn_client_free_actor`` reproduces exactly what the
+so nothing respawns. The respawn emulation is OPTIONAL and OFF by default
+(``actor-client.json`` ``respawn: true``, ``fleet.py start --respawn``): it needs
+the owner's approval as part of the written test-mode exception, not yet given.
+Off, a death is recorded (``record_unrecovered``) and the run stops
+(``errored: agent_dead``). On, ``respawn_client_free_actor`` reproduces exactly what the
 engine gives a player and nothing more (part of the presence emulation,
 docs/v2/HEADLESS.md): it waits ``RESPAWN_DELAY_TICKS`` after the death, creates
 a new ``character`` at the force spawn with an empty inventory and binds it as
@@ -33,7 +37,7 @@ import json
 from pathlib import Path
 import time
 
-from .actor_client import DETACHED_ACTOR_LUA, NONE, OPTION_FILE, mode, read
+from .actor_client import DETACHED_ACTOR_LUA, NONE, OPTION_FILE, mode, read, respawn_enabled
 from .core.deterministic_state import _atomic_json
 
 RESPAWN_ACTION = "respawn_client_free_actor"
@@ -218,6 +222,8 @@ def execute_respawn(game, action) -> dict:
         return dict(ok=False, status="blocked", reason="respawn_action_shape")
     if mode(root) != NONE:
         return dict(ok=False, status="blocked", reason="respawn_requires_client_free_mode")
+    if not respawn_enabled(root):
+        return dict(ok=False, status="blocked", reason="respawn_emulation_off")
     return game.query(RESPAWN_LUA.replace("PAYLOAD", _payload(action)))
 
 
@@ -317,6 +323,29 @@ def record_belongings(root, death_tick, receipt) -> dict | None:
         tick=receipt.get("tick"),
     )
     value["deaths"] = rows
+    _atomic_json(Path(root) / OPTION_FILE, value)
+    return row
+
+
+def record_unrecovered(root, last_tick, reason, *, detected_at=None) -> dict:
+    """A death no rule respawns (client-free with the respawn emulation off): the run ends ``errored: agent_dead``."""
+    value = read(root)
+    rows = _deaths(value)
+    tick = last_tick if type(last_tick) is int else 0
+    row = next((r for r in rows if r.get("death_tick") == tick), None)
+    if row is None:
+        row = dict(death_tick=tick)
+        rows.append(row)
+    row.update(
+        mode=mode(root),
+        tick_source="last_observed",
+        detected_at=detected_at,
+        respawn_tick=None,
+        cause=f"unknown ({reason}; no corpse survey)",
+        belongings=dict(status="not_attempted", reason=reason),
+        recorded_at=time.time(),
+    )
+    value["deaths"] = rows[-DEATHS_KEPT:]
     _atomic_json(Path(root) / OPTION_FILE, value)
     return row
 

@@ -230,7 +230,8 @@ class GreenSitePlanTests(unittest.TestCase):
             with self.subTest(kind=kind), TemporaryDirectory() as directory:
                 world = World(Path(directory), kind)
                 self.assert_taps(world, world.red, "automation_science")
-                result = world.prepare()
+                # 5/min: the cheaper cluster reaches the request (30/min picks the split row: SplitRequestTests).
+                result = world.prepare(rate=5)
                 self.assertTrue(result["ok"], (kind, result.get("reason"), result.get("failures", [])[:2]))
                 district = Transform.from_dict(world.district["site_transform"])
                 seen.add(("district", district.rotation, district.mirror))

@@ -34,8 +34,9 @@ as recorded at the detach).
 Death after the detach (``until_lab_trigger``): the corpse keeps the inventory
 but nothing respawns without a player, so the supervisor records
 ``actor_dead_without_player`` and stops the run (no replacement character, no
-granted items). In client-free mode the engine's player respawn is emulated as
-part of the presence emulation (``actor_death``: a new empty character at the
+granted items). In client-free mode a death ends the run ``errored: agent_dead``
+unless the optional respawn emulation is switched on (``respawn: true``, off by
+default, owner approval pending; ``actor_death``: a new empty character at the
 spawn after the respawn delay; the corpse keeps every item).
 """
 
@@ -333,6 +334,28 @@ def _label_run(root, credits, presence=None):
     _atomic_json(path, run)
 
 
+RESPAWN_OPTION = "respawn"
+
+
+def respawn_enabled(root) -> bool:
+    """``actor-client.json`` ``respawn: true``: the optional client-free respawn emulation (``actor_death``).
+
+    Off by default: it needs the owner's approval as part of the written test-mode exception."""
+    try:
+        value = read(root)
+    except (OSError, ValueError):
+        return False
+    return value.get("client") == NONE and value.get(RESPAWN_OPTION) is True
+
+
+def set_respawn(root, on: bool) -> dict:
+    """Written before the run starts (``fleet.py start --respawn``); only meaningful in client-free mode."""
+    value = read(root)
+    value[RESPAWN_OPTION] = bool(on)
+    _atomic_json(Path(root) / OPTION_FILE, value)
+    return value
+
+
 def test_mode(root) -> dict | None:
     """``{"test_mode": "client_free", "script_credited_triggers": [...]}`` for a client-free run, else None."""
     try:
@@ -345,6 +368,7 @@ def test_mode(root) -> dict | None:
         test_mode=TEST_MODE,
         script_credited_triggers=list(value.get("script_credited_triggers") or []),
         presence_emulation=value.get("presence_emulation"),
+        respawn_emulation=value.get(RESPAWN_OPTION) is True,
     )
 
 

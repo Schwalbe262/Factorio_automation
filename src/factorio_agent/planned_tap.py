@@ -422,7 +422,9 @@ def _connect_in_order(game, builder, obs, bus: dict, *, owner, allocation, input
             attempts = []
             for row in found:
                 units = units_of(row)
-                tap = dict(row, name=name, owner=owner, demand_per_minute=round(demand.get(item, 0), 3), built=False)
+                # A port that states its own draw (two inputs of one item) declares that, not the item's total.
+                rate = port.get("demand_per_minute", demand.get(item, 0))
+                tap = dict(row, name=name, owner=owner, demand_per_minute=round(rate, 3), built=False)
                 tap["remove_units"] = units
                 attempts.append((row["port"], units, row["entities"], tap))
         failures = []

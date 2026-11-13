@@ -155,10 +155,11 @@ CAPABILITIES = {
     "science_growth": {
         "parameters": {
             "labs": "integer [1,8], built labs of the staged red science block after growth",
-            "machines": "integer [1,8], built red science machines after growth",
+            "machines": "integer [1,8] (red) or [1,12] (pack), built pack machines after growth",
+            "pack": "optional instead of labs: another pack's block (pack_growth.PACK_STATES, today logistic-science-pack)",
         },
         "requires": ["automation_science"],
-        "effect": "build reserved lab and science machine slots of the staged red science block (science_growth.py); proposed only on observed lab activity",
+        "effect": "build reserved lab and science machine slots of the staged red science block (science_growth.py), or the reserved pack slots of another pack block ({pack, machines}: the green split row, pack_growth.py); proposed only on observed lab activity",
     },
     "logistic_science": {
         "parameters": {
@@ -510,6 +511,9 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "research_capacity": obs.get("research_capacity"),
         "research_capacity_error": obs.get("research_capacity_error"),
         "science_growth": obs.get("science_growth"),
+        # Growth of the other pack blocks (pack_growth.py): science_growth {pack, machines} nodes.
+        "pack_growth": obs.get("pack_growth"),
+        "pack_growth_error": obs.get("pack_growth_error"),
         # Plate throughput growth (throughput_growth.py): the autopilot reads it from this summary.
         "throughput_growth": obs.get("throughput_growth"),
         "science_growth_error": obs.get("science_growth_error"),
@@ -519,6 +523,13 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "wood_burner_feed": obs.get("wood_burner_feed"),
         "trunk_return_feeds": obs.get("trunk_return_feeds"),
         "feed_head_rework": obs.get("feed_head_rework"),
+        # Rule inputs the autopilot reads (mine_trunk_nodes, power_coal_tap_nodes, produce_nodes); they
+        # were computed in observe but dropped here, so those rules never fired in the supervisor.
+        "mine_trunks": obs.get("mine_trunks"),
+        "produce_plate_sources": obs.get("produce_plate_sources"),
+        # Bottleneck auditor (bottleneck_audit.py): diagnosis, proposals, idle_with_work for the supervisor.
+        "bottlenecks": obs.get("bottlenecks"),
+        "bottlenecks_error": obs.get("bottlenecks_error"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {

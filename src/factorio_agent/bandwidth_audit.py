@@ -145,12 +145,14 @@ def audit_plan(
     groups=(),
     margin=MARGIN,
     item=None,
+    probe=(),
 ) -> dict:
     """Flow + findings of one plan.
 
     ``demand_for(inserter, machine) -> {item: per min}`` gives a consumer's demand (None: a
     consumer without declared demand, which only keeps its line live); ``product_for(inserter,
-    machine) -> (item, per min)`` makes an inserter dropping onto a belt a source.
+    machine) -> (item, per min)`` makes an inserter dropping onto a belt a source. ``probe``
+    tiles are reported with their lane flows (``lanes``: ``{"tile", "left", "right"}``).
     """
     entities = [e for e in entities if isinstance(e, dict) and isinstance(e.get("position"), dict)]
     belts = _belt_tiles(entities)
@@ -179,7 +181,10 @@ def audit_plan(
     for c in consumers:
         all_sinks.append(c["tile"])
     flow = belt_flow.solve(entities, sources, consumers, sinks=all_sinks, ports=reported, groups=groups, margin=margin)
-    return belt_flow.summary(flow)
+    out = belt_flow.summary(flow)
+    if probe:
+        out["lanes"] = [{"tile": list(tile_of(t)), **flow.at(tile_of(t))} for t in probe]
+    return out
 
 
 # ----- block adapters -----------------------------------------------------------------------
@@ -519,7 +524,23 @@ def trunk_side(tap: dict, item: str, rate=None) -> tuple[list, list, list]:
     return [], [], []
 
 
-ADAPTERS = (furnace_block_rows, district_rows, bus_rows, plan_rows, mine_rows, feed_rows)
+def lab_rows(root: Path) -> list:
+    """The lab row with every pack block feeding it (``lab_feed.audit``: two packs on two lanes)."""
+    from .lab_feed import audit
+
+    science = _load(root / "automation-science.json")
+    if not isinstance(science, dict) or not isinstance(science.get("labs"), dict):
+        return []
+    blocks = {}
+    for name in ("logistic-science.json",):
+        state = _load(root / name)
+        if isinstance(state, dict) and state.get("world_id") == science.get("world_id"):
+            blocks[name] = state
+    result = audit(science, list(blocks.values()))
+    return [_row("laboratories", "lab_feed", result)] if result else []
+
+
+ADAPTERS = (furnace_block_rows, district_rows, bus_rows, plan_rows, mine_rows, feed_rows, lab_rows)
 
 
 def _row(block: str, kind: str, result: dict, **extra) -> dict:
@@ -560,6 +581,13 @@ def rework_proposals(rows) -> list:
     """Built furnace blocks whose feed delivers less than their declared demand (receipt only)."""
     out = []
     for row in rows:
+        if row.get("type") == "lab_feed":
+            from .lab_feed import rework
+
+            proposal = rework(row)  # structural findings only; source_short grows the pack block instead
+            if proposal is not None:
+                out.append(proposal)
+            continue
         if row.get("type") not in ("furnace_block", "smelting_bank"):
             continue
         if row.get("type") == "furnace_block" and row.get("phase") not in (
@@ -603,6 +631,7 @@ def receipt(root, obs=None) -> dict:
             "counts": r.get("counts") or {},
             "findings": (r.get("findings") or [])[:MAX_KEPT],
             **({"error": r["error"]} if r.get("error") else {}),
+            **({"packs": r["packs"]} if r.get("packs") else {}),  # lab feed: per pack made / drawn / cause
         }
         for r in rows
     ]

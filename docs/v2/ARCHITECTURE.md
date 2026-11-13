@@ -42,14 +42,18 @@ jobs.run_jobs: per pass one observe and at most one drill-cell survey (bootstrap
 | Jobs | `executors.py` | `StarterExecutors`: controller construction, lazy factories, upkeep helpers, `step`/`proof`/`record_action` dispatch, `idle_action` |
 | Jobs | `capability_registry.py`, `handlers/` | one `Handler` (step, proof, validate, record_action) per capability, grouped by domain; `handlers/upkeep.py` shared upkeep |
 | Plan | `progression.py` | `ROADMAP` (Step list), `autopilot_nodes`, `capacity_nodes`, `produce_nodes`, `lookahead_demand`, `bulk_item_demand` |
+| Plan | `rocket_plan.py` | the roadmap after `chemical_science`, from the catalog: `rocket_bill` (unresearched `rocket-silo` closure with packs, silo / part / payload bills down to ores, crude and water, rates, machines, belts, the producer of every item and its status roadmap/wired/unwired/missing), `tail` (research, `produce` and missing-capability rows, `rocket_silo` / `rocket_parts` / `rocket_launch`), observe receipt `rocket_plan` -> `progression.roadmap_for`; CLI `tools/rocket_plan.py <run>` |
 | Plan | `early_start.py` | early start ("pre-build"): `CAPABILITIES[c]["early_start"]`, inputs checks (receipt `early_start_inputs`), `early_ready`, admission requires, `Deferral` for `ensure_plan(defer=)`, early clock |
 | Plan | `critical_path.py` | computed critical path of the roadmap; critical jobs first in `run_jobs`, slack jobs plan on `slack_view` and may not take or spend items critical jobs claim (PLANNERS.md "Critical path and item allocation"); also used by `tools/critical_path.py` |
 | Plan | `capacity_planning.py` | `plan_capacity`: starter cells, wait vs expand by time |
 | Plan | `research_capacity.py` | labs + science assemblers sized together; `research_capacity_receipt`, `recommended_science_rate` |
 | Plan | `science_growth.py` | staged red science block: start size, reserved slots, evidence growth rule (`science_growth` capability) |
+| Plan | `pack_growth.py` | every other pack block (green split row): same chain, real growth unit, declared plate draw, next unit when no slot (`science_growth {pack, machines}`) |
+| Plan | `lab_feed.py` | lab feed audit: every built lab gets every pack, one pack per lane (`belt_flow`; bandwidth block type `lab_feed`) |
 | Plan | `research_policy.py` | `choose_research` from catalog data (idle research lane) |
 | Plan | `incidents.py` | incident kinds, remedy menus, incident documents, `check_decision` |
 | Plan | `plan_needs.py`, `remedy.py` | failure contract `needs` of planners; remedy ladder rungs, options, resolver, read-only `what_if` |
+| Plan | `bottleneck_audit.py`, `growth_providers.py` | bottleneck auditor: sampled machine/lab/job evidence, chain diagnosis, observe receipt `bottlenecks`, idle watchdog `idle_with_work`; one `growth_options` interface per producer block type (PLANNERS.md "Bottleneck auditor") |
 | Plan | `luna_client.py` | `LunaDecisionClient.decide(document)` via the Codex CLI (planner luna only) |
 | Game | `core/rcon.py`, `core/deterministic_game.py` | RCON client; `query`/`observe`/`act` (all world effects are Lua bodies in `act`) |
 | Game | `runtime.py` | `create`/`start`/`game_for`/`catalog_for`; `WorldBoundGame`; `NETWORK_SEGMENT_SETTINGS` |
@@ -96,7 +100,8 @@ All other top-level modules are capability controllers constructed in
 | `site-map.json`, `site-plan.json` | `site.service.SiteService.save` | surveyed map with reservations; master plan + allocations |
 | `catalog.json` | `runtime.catalog_for` | world catalog |
 | `rate-samples.json` | `diagnostics.production_rates` (every CLI `observe`) | production rate samples |
-| `logs/controller-events.jsonl` | `Supervisor._event` | cycle events: slice, autopilot, auto_retry, incident_*, call, error |
+| `bottleneck-samples.json` | `bottleneck_audit.record` (every CLI `observe`) | rolling window of machine-group states, waiting-job claims, port fill, stock; `last_action` |
+| `logs/controller-events.jsonl` | `Supervisor._event` | cycle events: slice, autopilot, auto_retry, incident_*, call, error, idle_with_work |
 | `logs/controller-state.json` | `Supervisor._save` | status, active jobs, open incidents, resume keys |
 | `logs/incidents.jsonl` | `Supervisor._record_incident` | incident documents (also with planner none) |
 | `logs/actions.jsonl` | `DeterministicGame._record_action` | every act and its receipt |
@@ -108,7 +113,7 @@ All other top-level modules are capability controllers constructed in
 
 | Layer | Code | May | May not |
 |---|---|---|---|
-| Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps, priority `-100 - index`; a step with `early_start` once its inputs are planned (`early_start.early_ready`, PLANNERS.md "Early start") | propose a step whose job is blocked/failed; touch the world |
+| Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps of `roadmap_for(observation)` (`ROADMAP` + the generated rocket tail; a tail step whose capability is not registered is never proposed), priority `-100 - index`; a step with `early_start` once its inputs are planned (`early_start.early_ready`, PLANNERS.md "Early start") | propose a step whose job is blocked/failed; touch the world |
 | Capacity planner | `progression.capacity_nodes` -> `capacity_planning.plan_capacity` | add `starter_capacity` nodes at priority -50 | expand without measured production and known cell cost; before `starter` succeeded; after that resource's `mining_outpost` succeeded |
 | Produce planner | `progression.produce_nodes` | add `produce` nodes at priority -51 | propose without positive measured plate net rate |
 | Obsolete blocks | `obsolete.py`; `supply_cell_nodes`, `starter_retirement_nodes`, `science_retirement_nodes` | one retire node per obsolete block at -1000 (startup science: -599 while growth wants hardware) | retire before the successor is verified, while a dependent job is open or a bootstrap batch is funded; propose twice |
@@ -170,7 +175,8 @@ rules (`_auto_retry`, `_replan_retry`).
 On the ladder today (pure `prepare` + declared rungs): `mining_outpost` (shrink
 drills), `dedicated_materials` (trunk-tap failure named in `change`),
 `smelting_district`, `planned_main_bus`, `produce` (next row layout, routes),
-`logistic_science` (other green form, routes), `supply_cell`, `steam_expansion`,
+`logistic_science` (other green form, routes), `science_growth` (pack slots: dry run, replan only),
+`supply_cell`, `steam_expansion`,
 `brick_production` / `steel_production` / `steel_supply` (planned furnace block),
 `trunk_return_feed` (`site:past_first_tap`), `steam_expansion` (`site:wider_steam_search`),
 `engine_production` / `ammo_production` (produce rows on a planned world, `produce` rungs),

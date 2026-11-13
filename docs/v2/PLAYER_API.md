@@ -41,7 +41,8 @@ proof uses `verified_postcondition`. Terminal receipts remain historical.
   Client-free runs (no player owns the corpse): `recover_client_free_belongings`
   (`actor_death`): the recorded death's corpse, `waiting` while an enemy is
   within 32 tiles of it, the assisted actor moves there and back, counts conserved.
-- `respawn-actor` (client-free runs only): one step of the emulated player
+- `respawn-actor` (client-free runs with `actor-client.json` `respawn: true` only; optional, owner
+  approval pending, off by default; else `respawn_emulation_off`): one step of the emulated player
   respawn after a death (`waiting` `respawn_delay` for 600 ticks after the death,
   then a new empty character at the force spawn bound as the actor; the corpse
   keeps every item). HEADLESS.md "Death and respawn".

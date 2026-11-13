@@ -343,7 +343,21 @@ def _same(row: Mapping, step: Step) -> bool:
     parameters = row.get("parameters", {})
     if step.capability in RATE_SIZED_CAPABILITIES and isinstance(parameters, Mapping):
         return _without_rate(parameters) == _without_rate(step.parameters)
+    if step.capability == PRODUCE_CAPABILITY and isinstance(parameters, Mapping):
+        # One row per item: any produce job or node for the item is this step's row
+        # (a higher rate fills the row's reserved slots in place, production_rows).
+        return parameters.get("item") == step.parameters.get("item")
     return parameters == step.parameters
+
+
+def _rate_covers(row: Mapping, step: Step) -> bool:
+    """A produce row's rate reaches the step's; other capabilities have no rate rule here."""
+    if step.capability != PRODUCE_CAPABILITY:
+        return True
+    rate, wanted = (row.get("parameters") or {}).get("rate_per_minute"), step.parameters.get("rate_per_minute")
+    if not isinstance(wanted, (int, float)):
+        return True
+    return isinstance(rate, (int, float)) and not isinstance(rate, bool) and rate >= wanted
 
 
 def _without_rate(parameters: Mapping) -> dict:
@@ -387,7 +401,9 @@ class _Progress:
         """A matching job succeeded, or the step's technology is already researched."""
         if step.parameters.get("technology") in self.researched:
             return True
-        return any(_same(job, step) and job.get("status") == "succeeded" for job in self.jobs)
+        return any(
+            _same(job, step) and job.get("status") == "succeeded" and _rate_covers(job, step) for job in self.jobs
+        )
 
     def stalled(self, step: Step) -> bool:
         """A matching job is blocked or failed; the planner owns that blocker."""
@@ -398,8 +414,53 @@ class _Progress:
         return any(_same(job, step) and job.get("status") not in TERMINAL_STATUSES for job in self.jobs)
 
 
-def _by_id() -> dict[str, Step]:
-    return {step.id: step for step in ROADMAP}
+def _by_id(steps: Iterable[Step] = ROADMAP) -> dict[str, Step]:
+    return {step.id: step for step in steps}
+
+
+# Generated tail rows a receipt may carry (``rocket_plan.tail``): plain ids and JSON parameters.
+_TAIL_ID = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+
+
+def tail_steps(observation: Mapping) -> tuple[Step, ...]:
+    """Steps after ``ROADMAP`` from the receipt's ``rocket_plan["tail"]`` (``rocket_plan.receipt``).
+
+    The tail is generated from the catalog (the rocket silo technology closure,
+    the silo, part and payload bills, the producer of every item), so the roadmap
+    reaches a launch without a hand-written step per item. Malformed rows and ids
+    that clash with ``ROADMAP`` are dropped; ``after`` keeps only ids the
+    combined roadmap has (an unknown id would never be satisfied).
+    """
+    plan = observation.get("rocket_plan") if isinstance(observation, Mapping) else None
+    rows = plan.get("tail") if isinstance(plan, Mapping) else None
+    if not isinstance(rows, list):
+        return ()
+    known = {step.id for step in ROADMAP}
+    steps: list[Step] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        sid, capability, parameters = row.get("id"), row.get("capability"), row.get("parameters")
+        after = row.get("after")
+        if (
+            not isinstance(sid, str)
+            or not sid
+            or len(NODE_PREFIX + sid) > 64
+            or not set(sid) <= _TAIL_ID
+            or sid in known
+            or not isinstance(capability, str)
+            or not isinstance(parameters, Mapping)
+            or not isinstance(after, list)
+        ):
+            continue
+        steps.append(Step(sid, capability, dict(parameters), tuple(a for a in after if a in known)))
+        known.add(sid)
+    return tuple(steps)
+
+
+def roadmap_for(observation: Mapping) -> tuple[Step, ...]:
+    """``ROADMAP`` plus the generated rocket tail (``tail_steps``)."""
+    return ROADMAP + tail_steps(observation or {})
 
 
 def _recipes_ready(step: Step, capabilities: Mapping, observation: Mapping) -> bool:
@@ -623,7 +684,8 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     jobs = tuple(jobs)
     progress = _Progress(jobs, frozenset(_names(observation.get("technologies"))))
     succeeded = progress.succeeded_capabilities
-    steps = _by_id()
+    roadmap = roadmap_for(observation)
+    steps = _by_id(roadmap)
     queued_ids = {node.get("id") for node in queue_nodes}
     proposed: list[dict] = capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit)]
     proposed += produce_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
@@ -649,10 +711,12 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed += power_coal_tap_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
         : max(0, limit - len(proposed))
     ]
-    urgent = defense_urgency_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    urgent = defense_urgency_nodes(jobs, queue_nodes, observation, capabilities, steps=steps)[
+        : max(0, limit - len(proposed))
+    ]
     proposed += urgent  # an expected attack pulls gun-turret research and the perimeter forward
     queued_ids |= {node["id"] for node in urgent}
-    for index, step in enumerate(ROADMAP):
+    for index, step in enumerate(roadmap):
         if len(proposed) >= limit:
             break
         node_id = NODE_PREFIX + step.id
@@ -685,7 +749,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
                 "parameters": parameters,
                 "priority": step.priority if step.priority is not None else TOP_PRIORITY - index,
                 "depends_on": [],
-                "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}{note}"[:300],
+                "reason": f"autopilot roadmap step {index + 1}/{len(roadmap)}: {step.id}{note}"[:300],
             }
         )
     proposed += throughput_growth_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities, critical=False)[
@@ -712,48 +776,69 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
 
 
 def science_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
-    """One ``science_growth`` node when the receipt's ``science_growth`` decision grows the staged block.
+    """One ``science_growth`` node when a growth receipt grows a staged science block.
 
-    The decision (``science_growth.growth_decision``) already holds the
-    evidence rule; here only: the capability exists, its ``requires``
-    succeeded, no growth node or job is open, and the same target has not
-    stalled (blocked/failed) before.
+    The red block (receipt ``science_growth``, ``science_growth.growth_decision``:
+    ``{labs, machines}``) first, then every other pack block (receipt ``pack_growth``,
+    ``pack_growth.growth_decision``: ``{pack, machines}``). The decisions hold the
+    evidence rule; here only: the capability exists, its ``requires`` succeeded, no
+    growth node or job is open, and the same target has not stalled (blocked/failed).
     """
     if SCIENCE_GROWTH_CAPABILITY not in capabilities:
-        return []
-    row = observation.get("science_growth")
-    if not isinstance(row, Mapping) or not row.get("grow"):
         return []
     succeeded = {job.get("capability") for job in jobs if job.get("status") == "succeeded"}
     if not set(capabilities[SCIENCE_GROWTH_CAPABILITY].get("requires", [])) <= succeeded:
         return []
-    labs, machines = row.get("target_labs"), row.get("target_machines")
-    if type(labs) is not int or type(machines) is not int:
-        return []
-    parameters = {"labs": labs, "machines": machines}
+    # The red block (labs and red machines) first, then every other pack block (pack_growth receipt).
+    wanted = []
+    row = observation.get("science_growth")
+    if isinstance(row, Mapping) and row.get("grow"):
+        labs, machines = row.get("target_labs"), row.get("target_machines")
+        if type(labs) is int and type(machines) is int:
+            wanted.append(({"labs": labs, "machines": machines}, f"{labs}_{machines}", row))
+    packs = observation.get("pack_growth")
+    for pack, pack_row in sorted(packs.items()) if isinstance(packs, Mapping) else ():
+        machines = (pack_row or {}).get("target_machines")
+        if isinstance(pack_row, Mapping) and pack_row.get("grow") and type(machines) is int:
+            wanted.append(({"pack": pack, "machines": machines}, f"{pack}_{machines}", pack_row))
     for node in queue_nodes:
         if node.get("capability") == SCIENCE_GROWTH_CAPABILITY and node.get("status", "pending") in OPEN_NODE_STATUSES:
             return []
     for job in jobs:
-        if job.get("capability") != SCIENCE_GROWTH_CAPABILITY:
-            continue
-        if job.get("status") not in TERMINAL_STATUSES:
+        if job.get("capability") == SCIENCE_GROWTH_CAPABILITY and job.get("status") not in TERMINAL_STATUSES:
             return []
-        if job.get("status") in STALLED_STATUSES and job.get("parameters") == parameters:
-            return []
-    node_id = f"{NODE_PREFIX}science_growth_{labs}_{machines}"
+    for parameters, suffix, row in wanted:
+        node = _science_growth_node(jobs, queue_nodes, parameters, suffix, row)
+        if node is not None:
+            return [node]
+    return []
+
+
+def _science_growth_node(jobs, queue_nodes, parameters, suffix, row) -> dict | None:
+    """The node for one growth target, unless the same target stalled before or is queued."""
+    target = (
+        f"{parameters['labs']} labs, {parameters['machines']} machines"
+        if "labs" in parameters
+        else f"{parameters['machines']} {parameters['pack']} machines"
+    )
+    for job in jobs:
+        if (
+            job.get("capability") == SCIENCE_GROWTH_CAPABILITY
+            and job.get("status") in STALLED_STATUSES
+            and job.get("parameters") == parameters
+        ):
+            return None
+    node_id = f"{NODE_PREFIX}science_growth_{suffix}"
     if node_id in {node.get("id") for node in queue_nodes}:
-        return []
-    return [
-        {
-            "id": node_id,
-            "capability": SCIENCE_GROWTH_CAPABILITY,
-            "parameters": parameters,
-            "priority": SCIENCE_GROWTH_PRIORITY,
-            "depends_on": [],
-            "reason": f"science growth to {labs} labs, {machines} machines: {row.get('reason', '')}"[:300],
-        }
-    ]
+        return None
+    return {
+        "id": node_id,
+        "capability": SCIENCE_GROWTH_CAPABILITY,
+        "parameters": parameters,
+        "priority": SCIENCE_GROWTH_PRIORITY,
+        "depends_on": [],
+        "reason": f"science growth to {target}: {row.get('reason', '')}"[:300],
+    }
 
 
 def defense_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
@@ -811,7 +896,7 @@ URGENT_DEFENSE_PRIORITY = TOP_PRIORITY + 10
 URGENT_DEFENSE_LEVEL = 1
 
 
-def defense_urgency_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
+def defense_urgency_nodes(jobs, queue_nodes, observation, capabilities, *, steps=None) -> list[dict]:
     """The gun-turret research, then ``defense_perimeter``, ahead of their roadmap ``after`` steps.
 
     Rule: the observe-time risk (``adaptive_defense_risk``, ``defense_policy.assess_risk``)
@@ -828,7 +913,7 @@ def defense_urgency_nodes(jobs, queue_nodes, observation, capabilities) -> list[
     progress = _Progress(tuple(jobs), frozenset(_names(observation.get("technologies"))))
     succeeded = progress.succeeded_capabilities
     queued_ids = {node.get("id") for node in queue_nodes}
-    steps = _by_id()
+    steps = steps if steps is not None else _by_id(roadmap_for(observation))
     for step_id in URGENT_DEFENSE_STEPS:
         step = steps.get(step_id)
         if step is None or step.capability not in capabilities:

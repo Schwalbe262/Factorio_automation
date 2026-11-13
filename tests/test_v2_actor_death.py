@@ -194,7 +194,13 @@ class ActionGuardTests(unittest.TestCase):
             self.assertEqual(actor_death.execute_respawn(game, faster)["reason"], "respawn_action_shape")
             wider = dict(actor_death.belongings_action("w", 41, 1000, "assisted"), threat_radius=0)
             self.assertEqual(actor_death.execute_belongings(game, wider)["reason"], "belongings_action_shape")
+            # Off by default (owner approval pending): no query at all.
+            self.assertEqual(
+                actor_death.execute_respawn(game, actor_death.respawn_action("w"))["reason"], "respawn_emulation_off"
+            )
             game.query.assert_not_called()
+            actor_client.set_respawn(root, True)
+            self.assertTrue(actor_client.test_mode(root)["respawn_emulation"])
             actor_death.execute_respawn(game, actor_death.respawn_action("w"))
             game.query.assert_called_once()
 
@@ -330,6 +336,7 @@ class SupervisorDeathTests(unittest.TestCase):
 
     def test_death_respawn_reconcile_belongings_resume(self):
         actor_client.set_mode(self.root, "none")
+        actor_client.set_respawn(self.root, True)
         self.cli.jobs["k"] = dict(
             key="k",
             world_id="w",
@@ -388,6 +395,7 @@ class SupervisorDeathTests(unittest.TestCase):
 
     def test_dead_actor_never_enters_error_backoff_and_the_run_still_stops(self):
         actor_client.set_mode(self.root, "none")
+        actor_client.set_respawn(self.root, True)
         self.cli.dead = True
         self.cli.respawns = [dict(status="waiting", reason="respawn_delay", ready_tick=9e9)] * 400
         self.s.max_seconds = 20
@@ -399,12 +407,32 @@ class SupervisorDeathTests(unittest.TestCase):
 
     def test_a_blocked_respawn_stops_the_run(self):
         actor_client.set_mode(self.root, "none")
+        actor_client.set_respawn(self.root, True)
         self.cli.dead = True
         self.cli.respawns = [dict(status="blocked", reason="respawn_no_free_spawn_position")]
         with self.assertRaises(ActorDeathPending):
             self.s._cycle()
         self.assertTrue(self.s.stopping)
         self.assertIn("actor_death_unrecoverable", self.kinds())
+
+    def test_with_the_respawn_emulation_off_the_death_is_recorded_and_the_run_ends_errored(self):
+        actor_client.set_mode(self.root, "none")
+        self.assertFalse(actor_client.respawn_enabled(self.root))
+        self.cli.dead = True
+        self.s.state["last_observed_tick"] = 110048
+        self.s.max_seconds = 20
+        result = self.s.run()
+        self.assertEqual(result["status"], "safe_stopped")
+        self.assertNotIn("respawn-actor", [c[0] for c in self.cli.calls])
+        self.assertIn("actor_death_recorded", self.kinds())
+        self.assertNotIn("error", self.kinds())
+        row = actor_client.read(self.root)["deaths"][0]
+        self.assertEqual((row["death_tick"], row["belongings"]["status"]), (110048, "not_attempted"))
+        self.assertTrue(fleet.death_stopped(self.root))
+        self.assertEqual(fleet_triage._unrecovered_deaths(self.root), 1)
+        verdict = fleet_triage.classify(fleet_triage.run_facts(self.root))
+        self.assertEqual(verdict["class"], "errored")
+        self.assertTrue(verdict["reasons"][0].startswith("errored: agent_dead"))
 
     def test_a_connected_player_is_rebound_to_its_engine_respawned_successor(self):
         self.cli.dead = True
@@ -486,6 +514,23 @@ class WatcherStallTests(unittest.TestCase):
             verdict = fleet_triage.classify(fleet_triage.run_facts(root))
             self.assertEqual(verdict["class"], "errored")
             self.assertTrue(verdict["reasons"][0].startswith("errored: agent_dead"))
+
+    def test_a_run_the_supervisor_stopped_after_a_death_ends_at_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "v2" / "f-1"
+            (root / "logs").mkdir(parents=True)
+            state = dict(state="stopped", status="safe_stopped", stop_reason="actor_death_unrecoverable:agent_dead")
+            (root / "logs" / "controller-state.json").write_text(json.dumps(dict(state, last_observed_tick=5)))
+            f = fleet.Fleet(base)
+            f.dir.mkdir(parents=True)
+            manifest = dict(
+                kind="factorio-fleet-v1", name="f", runs=[dict(seed=1, runtime=str(root), status="running")]
+            )
+            (f.dir / "f.json").write_text(json.dumps(manifest))
+            f.finish_runs = Mock(return_value=["finished"])
+            self.assertEqual(f.enforce_stall("f", now=1000), ["finished"])
+            self.assertTrue(f.finish_runs.call_args.kwargs["reason"].startswith("errored: agent_dead"))
 
     def test_report_counts_deaths_and_causes(self):
         runs = [

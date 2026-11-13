@@ -31,7 +31,7 @@ research flags that a real run never uses.
 | `mine_entity`, `can_reach_entity`, `teleport`, `walking_state` | yes | tree mined (+4 wood), 8.3 tiles walked in 62 ticks |
 | `create_entity{..., raise_built=true, player=a.player}` | yes | built; `last_user` is nil instead of the player |
 | Main/ammo/gun inventories | yes | 10 magazines in the ammo slot, pistol selected |
-| Death | partly | `a.die()` leaves a `character-corpse` with the whole inventory (`character_corpse_player_index` 65536 = none); nothing respawns, so `recover-actor` (player successor) has no successor to bind; client-free runs emulate the player respawn ("Death and respawn" below) |
+| Death | partly | `a.die()` leaves a `character-corpse` with the whole inventory (`character_corpse_player_index` 65536 = none); nothing respawns, so `recover-actor` (player successor) has no successor to bind; client-free runs end `errored: agent_dead`, or emulate the player respawn with the optional switch ("Death and respawn" below) |
 | Offline player keeps the actor | **no** | killing the client "logs off" the controlled character: `d.actor` invalid, `p.character` nil, as the API documents for associated characters |
 | Detach, then disconnect | yes | `p.set_controller{type=spectator}` while connected leaves the actor in the world; after the client is closed the actor stays valid and crafts (not credited, as above) |
 
@@ -101,9 +101,9 @@ furnace plates and `oil-processing` is a pumpjack mine.
 No item is granted, no other research is touched, lab research stays real.
 
 The written exception has exactly two parts (AGENTS.md): (a) the hand-craft
-trigger credit above; (b) the player-presence emulation below, which includes
-the engine's player respawn after a death (a new empty character at the spawn;
-no item). Nothing else.
+trigger credit above; (b) the player-presence emulation below. Nothing else.
+The respawn emulation after a death ("Death and respawn" below) is optional,
+requires the owner's approval (not yet given) and is off by default.
 
 #### (b) Player presence: chart and generate around the actor
 
@@ -139,11 +139,24 @@ actor. The first call writes `presence_emulation` (radii, start tick) into
 
 Other player-dependent behaviour checked: alerts and `last_user` (nil for
 player-less builds) are read by no framework code; `auto_pause=false` is set by
-`runtime.start`; respawn does not exist without a player (emulated, below);
+`runtime.start`; respawn does not exist without a player (optional emulation, below);
 freeplay's `created_items` go to the player's own join character, which the
 bind discards, so neither mode gives them to the actor.
 
-#### Death and respawn (part of the presence emulation)
+#### Death and respawn (optional, requires the owner's approval (not yet given), off by default)
+
+Switch: `actor-client.json` `respawn: true|false` (default false), written by
+`tools/fleet.py start --respawn` into each client-free run and recorded in the
+fleet manifest (`respawn`); `fleet.py status` / `report` headers then show
+"respawn emulation on". It would widen exception (b) of AGENTS.md, so it stays
+off until the owner approves it. With it **off** (default) a client-free death
+is recorded (`actor-client.json` `deaths`, cause "respawn emulation off",
+belongings `not_attempted`, event `actor_death_recorded`), the supervisor
+stops the run through its safe stop (active jobs paused, world saved,
+`stop_reason` `actor_death_unrecoverable:...`, `last_error` `agent_dead`), the
+watcher ends that run at once (`fleet.death_stopped`) and the triage says
+`errored: agent_dead`. With it **on** the rest of this section applies
+(`respawn_client_free_actor` refuses `respawn_emulation_off` otherwise).
 
 What the engine gives a connected player whose character dies: after the
 respawn delay (`LuaPlayer.ticks_to_respawn`, 10 s) a new character at the
@@ -236,8 +249,9 @@ Death after the detach (`until_lab_trigger`): the corpse keeps the inventory
 and nothing respawns, so the supervisor writes `actor_dead` (reason
 `actor_dead_without_player`) to `actor-client.json`, logs
 `actor_dead_without_player` and safe-stops the run. No replacement character
-is created. In client-free mode (`none`) the death is respawned as a player's
-would be ("Death and respawn" above).
+is created. In client-free mode (`none`) the death ends the run as
+`errored: agent_dead`, or, with the optional respawn switch on, is respawned as
+a player's would be ("Death and respawn" above).
 
 Production statistics after the detach / in client-free mode count only
 machine output: the observation reads iron/copper plates, coal, science packs,

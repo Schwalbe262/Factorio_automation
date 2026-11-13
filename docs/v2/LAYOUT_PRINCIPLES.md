@@ -51,8 +51,21 @@ delivers less than its downstream demand x `MARGIN` 1.1; single lane when both l
 have sufficed), `side_load_before_splitter` (a feeder with more than one lane of an item is
 side-loaded within `SIDE_LOAD_REACH` tiles before a splitter that splits it: half the feeder is
 lost and each branch gets half a lane), `lane_starvation` (the item reaches the consumer on
-neither lane), `unbalanced_lanes` (parallel belts of one flow). A side-load whose lane covers
-the demand is not a finding: one lane is all a consumer below half a belt needs.
+neither lane), `unbalanced_lanes` (parallel belts of one flow), `source_short` (the line
+delivers everything its finite sources make and that is below the demand: the producers are the
+limit, a second lane or belt would carry nothing more; never a rework). A side-load whose lane
+covers the demand is not a finding: one lane is all a consumer below half a belt needs.
+
+Lab feed (`lab_feed.py`, adapter `bandwidth_audit.lab_rows`, receipt block type `lab_feed` with
+per pack `made_per_minute` / `lab_demand_per_minute` / `cause`): the red block's built stage, its
+lab row and every pack block's plan, the pack machines' output inserters as sources at their
+machine rate, every built lab's inserter a consumer of every pack at 60 / `LAB_UNIT_SECONDS` (30)
+per minute. Causes: `source_short` (grow that pack's block: `pack_growth`), `lane_starvation`
+(a pack never reaches a lab), `shared_lane` (two packs on one lane at a lab: the one backing up
+blocks the other), belt or lane capacity. A structural cause is a `rework` proposal
+(`rework_lab_feed`, not built by a capability yet). eval-1575138435 (~185 min): red 24/min
+reaches all 8 labs on the right lane, green 5/min on the left lane where the labs draw 16/min:
+`source_short` at the row's first lab. The lab feed was never the fault; the green block was.
 
 Audit (`bandwidth_audit.audit_root`, every plan with ports or consumers): furnace blocks and
 smelting banks (every furnace input inserter at full reserved growth: raw and coal per
@@ -345,7 +358,7 @@ each: plate ports' `site.fit` cost + `W_PORT` x the pack port's distance to the 
 | candidate | geometry | start | growth story |
 |---|---|---|---|
 | `cl-am1-4x2t-...` (cluster) | one pack machine + one machine per intermediate, all direct insertion, plates on one two-lane belt | 6 machines, 23 x 14, 5/min | none in place: a second pack machine flips the gear / inserter / belt edges to belts (`grow_decision`): a second cluster or a rebuild |
-| `green-split-6` (split row) | the inserter cluster (cable -> circuit -> inserter <- gear) and the belt cluster (gear -> belt, mirrored below) as their own direct-insertion clusters sized for the frame, dropping onto one intermediate belt (inserter on one lane, belt on the other: the inserter cluster's port tile feeds straight into the belt cluster's, no side-load), a pack row along it (1 built, 5 slots reserved), packs to a port at the far end | 7 machines, 46 x 16, 5/min | in place up to 30/min (each sub-cluster's one output arm, `inserter_rate`) by building the reserved pack slots; beyond: a second split row |
+| `green-split-6` (split row) | the inserter cluster (cable -> circuit -> inserter <- gear) and the belt cluster (gear -> belt, mirrored below) as their own direct-insertion clusters sized for the frame, dropping onto one intermediate belt (inserter on one lane, belt on the other: the inserter cluster's port tile feeds straight into the belt cluster's, no side-load), a pack row along it (1 built, 5 slots reserved), packs to a port at the far end | 7 machines, 46 x 16, 5/min | in place up to 30/min (each sub-cluster's one output arm, `inserter_rate`) by building the reserved pack slots (`science_growth {pack, machines}`, `pack_growth.py`); beyond: a second split row (proposed, not built yet) |
 
 Audit of the split (`audit_split`): no overlap, every inserter between a belt and a machine,
 the two intermediates on different lanes, every pack slot (built or reserved) reaching the
@@ -354,11 +367,20 @@ the frame; each sub-cluster also passes `audit_cluster`. The split's ports: thre
 (the inserter cluster's iron and copper, the belt cluster's iron, each its own tap) on the bus
 edge and the pack port opposite.
 
-Default: the horizon is the request (no green growth capability builds reserved slots yet), and
-the split's ceiling is not credited (`capability: not_implemented`), so the cheaper cluster wins
-unless the site favours the split (pack port much nearer the lab entry). With a growth
-capability the in-place slots would count (`demand_for`'s horizon). The inserter produce row
-keeps one geometry (its tree is a chain; the split's inserter sub-cluster is the same cluster).
+Reachability first (`planned_green_layouts`): the horizon is `max(request, what the built labs
+consume)` (`LogisticScience.lab_demand`: `research_capacity.lab_pack_rate` over the queue, at most
+30/min), and a candidate whose ceiling (`green_science.ceiling`: start or in-place growth; a second
+cluster is not stackable on the site, it would need a second lab entry) is below that horizon is
+never an option while another reaches it; the record lists it under `excluded` and keeps
+`horizon`. The split's reserved slots are built by `science_growth {pack, machines}`
+(`pack_growth.py`, capability `science_growth` in the descriptor), so its 30/min ceiling counts.
+A 30/min request therefore plans the split row; a 5/min request without labs keeps the cheaper
+cluster unless the site favours the split. eval-1575138435 got the split only by its site; a map
+whose cluster won a 30/min request had a 5/min dead end. Each split input declares its own
+sub-cluster's draw (`per_pack` on the port, `demand_per_minute` on the tap: inserter cluster iron
+4/pack and copper 1.5/pack, belt cluster iron 1.5/pack), not the item's total twice (the live map's
+two iron taps each declared 27.5/min for one machine). The inserter produce row keeps one
+geometry (its tree is a chain; the split's inserter sub-cluster is the same cluster).
 
 Not yet: twin machine rows sharing one plate belt. Their two output belts put red packs on
 both lanes of the lab belt (an inserter always drops on the far lane, a side-load moves

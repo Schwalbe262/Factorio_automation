@@ -1,5 +1,7 @@
-"""Green science: on a planned world one direct-insertion cluster (``blocks.cluster``) on bus taps;
-without a site service the development-map ``green_core`` at fixed anchors. Packs join the lab belt lane."""
+"""Green science: on a planned world the audited green candidates (the direct-insertion cluster, the
+split row; ``green_layout``) on bus taps, the split's reserved pack slots grown by ``grow``
+(``science_growth {pack, machines}``, ``pack_growth.py``); without a site service the
+development-map ``green_core`` at fixed anchors. Packs join the lab belt lane."""
 
 from __future__ import annotations
 
@@ -74,21 +76,34 @@ def green_cluster(catalog, origin, output_side=None):
 SPLIT_NAME = "logistic_science_split"  # allocation name of the split geometry (held beside the cluster's)
 
 
-def planned_green_layouts(site, world_id, catalog, lab_port, *, rate, tick=None, root=None):
+def ceiling(descriptor) -> float:
+    """Packs/minute a candidate reaches without a new block: its start or its in-place growth (the
+    reserved slots ``science_growth`` builds). A second cluster is not stackable on the site (it would
+    need a second lab entry), so a cluster's ceiling is its start."""
+    growth = descriptor.get("growth") or {}
+    return max(float(descriptor["rate_now"]), float(growth.get("max_rate_in_place") or 0.0))
+
+
+def planned_green_layouts(site, world_id, catalog, lab_port, *, rate, tick=None, root=None, horizon=None):
     """Green cores of every audited candidate (``green_layout``: the cluster, the split row), best first.
 
     Each candidate is probed on one allocation: ``layout_selection.score`` with the plate ports'
     ``site.fit`` cost plus the distance from the pack port to the lab entry (``W_PORT`` per tile).
-    The horizon is the request: green has no growth capability yet, so reserved slots earn nothing
-    now. Exploration (``layout_selection.settings``) may pick a close runner-up. Every core
-    carries its ``layout`` record; the caller keeps one allocation (``settle_green``).
+    The horizon is ``max(rate, horizon)``: the request, or what the built labs consume
+    (``LogisticScience.prepare``: ``research_capacity.lab_pack_rate``). Reachability first: a
+    candidate whose ceiling (``ceiling``) is below that horizon is never an option while another
+    candidate reaches it (a 5/min cluster for a 30/min request is a dead end: eval-1575138435);
+    it stays listed in the record's ``excluded``. Exploration (``layout_selection.settings``) may
+    pick a close runner-up. Every core carries its ``layout`` record; the caller keeps one
+    allocation (``settle_green``).
     """
     from . import green_layout as gl
     from . import layout_selection as selection
     from .blocks.cluster_audit import audit_cluster
 
+    need = max(float(rate), float(horizon or 0.0))
     demand = selection.demand_for(rate, tick=tick)
-    demand = selection.Demand(demand.now, demand.now, demand.plates_scarce)
+    demand = selection.Demand(demand.now, need, demand.plates_scarce)
     target = (lab_port["position"]["x"], lab_port["position"]["y"])
 
     def distance(plan):
@@ -122,7 +137,7 @@ def planned_green_layouts(site, world_id, catalog, lab_port, *, rate, tick=None,
         cost = cores[0].get("port_cost", 0.0) + selection.W_PORT * distance(cores[0])
         scored = descriptor
         if descriptor["growth"].get("capability") == "not_implemented":
-            # Reserved slots nothing builds yet earn no ceiling credit (the record keeps the real one).
+            # Reserved slots nothing builds earn no ceiling credit (the record keeps the real one).
             scored = dict(descriptor, growth=dict(descriptor["growth"], max_rate_in_place=descriptor["rate_now"]))
         candidate = {
             "genome": genome,
@@ -131,8 +146,14 @@ def planned_green_layouts(site, world_id, catalog, lab_port, *, rate, tick=None,
             "niche": f"{form}/{descriptor['port_relation']}",
             "source": "generated",
         }
-        options.append(selection.option(candidate, demand, cost, form=form))
-    options = selection.ranked(options)
+        options.append(selection.option(candidate, demand, cost, form=form, ceiling=ceiling(scored)))
+    reaching = [o for o in options if o["ceiling"] + 1e-9 >= need]
+    excluded = (
+        []
+        if not reaching
+        else [{"variant": o["id"], "ceiling": o["ceiling"], "needed": need} for o in options if o not in reaching]
+    )
+    options = selection.ranked(reaching or options)
     if not options:
         return []
     config = selection.settings(root) if root is not None else selection.Settings()
@@ -148,7 +169,9 @@ def planned_green_layouts(site, world_id, catalog, lab_port, *, rate, tick=None,
             cores = planned_green_clusters(site, world_id, catalog, lab_port)
         else:
             cores = planned_green_split(site, world_id, catalog)
-        record = selection.record(options, option, config=config, pool_size=pool, tick=tick)
+        record = selection.record(
+            options, option, config=config, pool_size=pool, tick=tick, horizon=need, excluded=excluded or None
+        )
         for core in cores:
             core["layout"] = dict(record, source="generated")
         found += cores
@@ -459,6 +482,7 @@ class LogisticScience:
                 rate=parameters["rate_per_minute"],
                 tick=obs.get("tick"),
                 root=self.path.parent,
+                horizon=self.lab_demand(obs),
             )
             if not cores:
                 return self.no_allocation(obs["world_id"])
@@ -562,12 +586,32 @@ class LogisticScience:
         settle_green(self.site, obs["world_id"], None)
         return {"ok": False, "reason": "no_green_science_site_with_clean_connections", "failures": failures}
 
+    def lab_demand(self, obs):
+        """Green packs/minute the built labs consume over the research queue (``research_capacity.lab_pack_rate``),
+        at most the step's 30/min; None without a staged lab row or a queued technology using green."""
+        from .research_capacity import GREEN_PACK, lab_pack_rate
+
+        try:
+            labs = len(built_labs(self.science.state))
+            rate = lab_pack_rate(self.science._queue_targets(obs), labs, GREEN_PACK) if labs else None
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None
+        return None if rate is None else round(min(30.0, rate), 3)
+
     def _taps(self, obs, bus, core, inputs, entities, span, demand):
-        """Bus taps and their routes for one candidate core (``planned_tap.connect_inputs``)."""
+        """Bus taps and their routes for one candidate core (``planned_tap.connect_inputs``).
+
+        An input port that states its own draw (``per_pack``: the split's sub-clusters) declares
+        that draw at the built rate; otherwise the item's whole draw (one input per item)."""
         name = core.get("allocation")
         allocation = self.site.allocation(name, obs["world_id"]) if name else None
         if allocation is None:
             return {"ok": False, "reason": "green_bus_tap_needs_site_allocation"}
+        packs = float(core.get("rated_per_minute") or 0.0)
+        inputs = [
+            dict(p, demand_per_minute=round(p["per_pack"] * packs, 3)) if p.get("per_pack") and packs else p
+            for p in inputs
+        ]
         return planned_tap.connect_inputs(
             self.game,
             self.builder,
@@ -787,6 +831,154 @@ class LogisticScience:
             "evidence": proof,
         }
 
+    def plan_growth(self, obs, parameters):
+        """The grown plan for ``parameters["machines"]`` pack machines, without writing anything (dry run).
+
+        ``{"ok": True, "plan", "added", "machines", "built"}`` (``added`` empty when nothing is to build),
+        or a blocked result with ``plan_needs`` (no slot left: the next unit; a slot meets something:
+        the preflight blocker).
+        """
+        from . import plan_needs
+        from .pack_growth import block_view
+
+        machines = parameters.get("machines")
+        if parameters.get("pack") != "logistic-science-pack" or type(machines) is not int:
+            return {"ok": False, "status": "blocked", "reason": "green_growth_parameters_invalid"}
+        if not self.state or self.state.get("world_id") != obs["world_id"]:
+            return {"ok": False, "status": "blocked", "reason": "green_science_world_or_catalog_changed"}
+        if self.state.get("catalog_fingerprint") != self.catalog.fingerprint:
+            return {"ok": False, "status": "blocked", "reason": "green_science_world_or_catalog_changed"}
+        if self.state.get("phase") != "verified":
+            return {"ok": False, "status": "blocked", "reason": "green_growth_needs_verified_block"}
+        view = block_view(self.state, "logistic-science-pack")
+        if view is None or machines > view["frame"]:
+            form = (view or {}).get("form")
+            return {
+                "ok": False,
+                "status": "blocked",
+                "reason": "green_growth_has_no_reserved_slot",
+                "form": form,
+                "frame": (view or {}).get("frame"),
+                "plan_needs": plan_needs.make(
+                    "site",
+                    "green_growth_has_no_reserved_slot",
+                    block="logistic_science",
+                    change="a second green unit or the rebuild cluster -> split row (pack_growth next_step)",
+                ),
+            }
+        added = [dict(e) for group in view["slots"][: max(0, machines - view["machines"])] for e in group]
+        if not added:
+            return {
+                "ok": True,
+                "plan": self.state["plan"],
+                "added": [],
+                "machines": view["machines"],
+                "built": view["machines"],
+            }
+        clearance = preflight(self.game, self.builder, obs, added)
+        if not clearance.get("ok"):
+            return {
+                "ok": False,
+                "status": "blocked",
+                "reason": "green_growth_slot_preflight_failed",
+                "detail": clearance.get("reason"),
+                **{k: clearance.get(k) for k in ("failed_check", "blocked", "first_blocker") if clearance.get(k)},
+            }
+        plan = self.state["plan"]
+        obstacles = {(e["name"], *xy(e)): e for e in plan.get("clear_obstacles", [])}
+        obstacles.update({(e["name"], *xy(e)): e for e in clearance.get("clear_obstacles", [])})
+        extra = {k: v for k, v in plan.items() if k not in ("ok", "reason", "entities", "ports", "required_items")}
+        extra["clear_obstacles"] = list(obstacles.values())
+        grown = _plan(merge_entities(plan["entities"], added), plan["ports"], **extra)
+        return {"ok": True, "plan": grown, "added": added, "machines": machines, "built": view["machines"]}
+
+    def grow(self, obs, parameters):
+        """Build reserved pack slots of the split row up to ``parameters["machines"]`` (``science_growth``
+        with a ``pack``; decided by ``pack_growth.growth_decision``).
+
+        The grown plan (``plan_growth``: planned entities + the slot groups, slots in order so poles
+        stay one chain) is saved first, then the board block republished (only over this block's own
+        previous plan), then built; the block's ``core`` commits the new count once every new entity
+        stands powered. Never shrinks; a cluster or a full frame has no slot (``pack_growth`` names the
+        next step).
+        """
+        from .science import _built
+        from .science_growth import _fingerprint
+
+        pending = (self.state or {}).get("growth")
+        if not pending or pending.get("machines") != parameters.get("machines"):
+            planned = self.plan_growth(obs, parameters)
+            if not planned.get("ok"):
+                return {k: v for k, v in planned.items() if k != "ok"}
+            if not planned["added"]:
+                return {
+                    "status": "succeeded",
+                    "reason": "reserved green pack slots built",
+                    "evidence": self.growth_proof(obs),
+                }
+            replaces = list((pending or {}).get("replaces") or []) + [_fingerprint(self.state["plan"])]
+            if pending:  # an earlier target's plan may already stand on the board
+                replaces.append(_fingerprint(pending["plan"]))
+            self.state["growth"] = {
+                "machines": planned["machines"],
+                "built": planned["built"],
+                "plan": planned["plan"],
+                "added": planned["added"],
+                "replaces": replaces,
+            }
+            _atomic_json(self.path, self.state)  # saved before the board: a restart republishes it
+            pending = self.state["growth"]
+        board_path = self.path.parent / "pcb-board.json"
+        board = json.loads(board_path.read_text(encoding="utf-8"))
+        if board.get("world_id") != obs["world_id"]:
+            return {"status": "blocked", "reason": "green_science_board_world_changed"}
+        old = board["blocks"].get("logistic_science")
+        if old != pending["plan"]:
+            if old is not None and old != self.state["plan"] and _fingerprint(old) not in pending["replaces"]:
+                return {"status": "blocked", "reason": "green_reserved_block_changed"}
+            board["blocks"]["logistic_science"] = pending["plan"]
+            _atomic_json(board_path, board)
+        result = self.builder.ensure_plan(obs, pending["plan"])
+        if result.get("status") != "succeeded":
+            return result
+        if _built(obs, pending["plan"]) is None:
+            return {"status": "waiting", "reason": "waiting for grown green slots to be observed and powered"}
+        core = dict(self.state["core"])
+        built, machines = pending["built"], pending["machines"]
+        core["entities"] = merge_entities(core.get("entities") or [], pending["added"])
+        core["growth_slots"] = list(core.get("growth_slots") or [])[machines - built :]
+        core["count"] = machines
+        each = float(core.get("rated_per_minute") or 0.0) / max(1, built)
+        core["rated_per_minute"] = round(each * machines, 3)
+        self.state.update(plan=pending["plan"], core=core, nominal_machine_rate=core["rated_per_minute"])
+        # Grown slots count for the supply proof once built and powered (a first craft may wait for plates).
+        grown_keys = {tuple(k) for k in self.state.get("grown_machines") or ()}
+        grown_keys |= {(e["name"], *xy(e)) for e in pending["added"] if e.get("recipe")}
+        self.state["grown_machines"] = sorted(list(k) for k in grown_keys)
+        self.state.pop("growth", None)
+        _atomic_json(self.path, self.state)
+        return {"status": "succeeded", "reason": "reserved green pack slots built", "evidence": self.growth_proof(obs)}
+
+    def growth_proof(self, obs, parameters=None):
+        """Every planned entity stands powered and the block holds ``parameters["machines"]`` pack machines."""
+        from .pack_growth import block_view
+        from .science import _built
+
+        if not self.state or self.state.get("world_id") != obs["world_id"] or self.state.get("growth"):
+            return None
+        view = block_view(self.state, "logistic-science-pack")
+        if view is None or (parameters and view["machines"] < int(parameters.get("machines") or 0)):
+            return None
+        if _built(obs, self.state["plan"]) is None:
+            return None
+        return {
+            "tick": obs.get("tick"),
+            "pack": "logistic-science-pack",
+            "machines": view["machines"],
+            "free_slots": len(view["slots"]),
+            "rated_per_minute": self.state["core"].get("rated_per_minute"),
+        }
+
     def proof(self, obs):
         if (
             not self.state
@@ -796,12 +988,14 @@ class LogisticScience:
             return None
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
         machines = []
+        grown = {tuple(k) for k in self.state.get("grown_machines") or ()}
         for wanted in self.state["plan"]["entities"]:
             e = actual.get((wanted["name"], *xy(wanted)))
             if not e or e["direction"] != wanted.get("direction", 0):
                 return None
             if wanted.get("recipe"):
-                if e.get("recipe") != wanted["recipe"] or e.get("products_finished", 0) < 1:
+                first = 0 if (wanted["name"], *xy(wanted)) in grown else 1
+                if e.get("recipe") != wanted["recipe"] or e.get("products_finished", 0) < first:
                     return None
                 machines.append(e)
             if e["name"] in ("assembling-machine-1", "inserter", "fast-inserter") and (

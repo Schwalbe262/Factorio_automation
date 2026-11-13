@@ -120,6 +120,8 @@ INCIDENT_LOG_BYTES = 5_000_000
 INTENT_TAIL_BYTES = 262_144
 LOW_QUEUE = 2
 AUTOPILOT_LIMIT = 3
+IDLE_WATCH_SECONDS = 60  # game seconds between idle_with_work events of one episode and gate
+GROWTH_LIMIT = 2  # bottleneck growth packages merged per cycle (Supervisor._growth)
 FORBIDDEN = {
     "x",
     "y",
@@ -1111,7 +1113,11 @@ class Supervisor:
             self.stop_marker = {"request_id": "actor-dead-" + self.controller_id, "world_id": self.world}
             self.stop_marker["source"] = "actor_death_unrecoverable"
             self.stopping = True
-            self._save(status="stopping", stop_reason="actor_death_unrecoverable:" + str(reason)[:120])
+            self._save(
+                status="stopping",
+                stop_reason="actor_death_unrecoverable:" + str(reason)[:120],
+                last_error=actor_death.AGENT_DEAD,
+            )
 
     def _actor_dead(self):
         """``observe`` reported ``agent_dead``: the death state machine (actor_death).
@@ -1135,6 +1141,16 @@ class Supervisor:
             )
             self._save(status="actor_dead", actor_death=death)
             self._event("actor_died", last_tick=death["last_tick"], client_mode=death["client_mode"])
+        if death["client_mode"] == actor_client.NONE and not actor_client.respawn_enabled(self.root):
+            # The respawn emulation needs the owner's approval (off by default): record and end the run.
+            if not death.get("recorded"):
+                row = actor_death.record_unrecovered(
+                    self.root, death["last_tick"], "respawn emulation off", detected_at=death["detected_at"]
+                )
+                self._save(actor_death=dict(death, recorded=True))
+                self._event("actor_death_recorded", death_tick=row["death_tick"], respawn="off", cause=row["cause"])
+            self._stop_for_death("agent_dead: respawn emulation off")
+            raise ActorDeathPending("respawn_emulation_off")
         if death["client_mode"] == actor_client.NONE:
             receipt = self.cli.invoke(["respawn-actor"])
             status, reason = receipt.get("status"), receipt.get("reason")
@@ -1920,9 +1936,12 @@ class Supervisor:
             return True
         if self._belongings():
             context = self._snapshot()
+        self._idle_watch(context)
         if self._resume_known(context):
             context = self._snapshot()
         if self._autopilot(context):
+            context = self._snapshot()
+        if self._growth(context):
             context = self._snapshot()
         if self._auto_retry(context):
             context = self._snapshot()
@@ -1938,6 +1957,65 @@ class Supervisor:
             return True
         # Approved queue work runs while a model call is pending.
         return self._run_authorized(context)
+
+    def _growth(self, context):
+        """Merge the bottleneck auditor's growth packages every cycle, whatever the roadmap queue holds.
+
+        ``growth_providers.growth_nodes`` over the receipt's ranked ``bottlenecks``: one package per
+        bottleneck, at most ``GROWTH_LIMIT`` per cycle, none while one of its lane is in flight or
+        settling. Before, growth nodes came only from the autopilot, which runs only while fewer
+        than ``LOW_QUEUE`` nodes could dispatch: a full roadmap queue starved every growth.
+        """
+        observation, status, capabilities, _ = context
+        receipt = observation.get("bottlenecks")
+        rows = receipt.get("bottlenecks") if isinstance(receipt, dict) else None
+        if not rows:
+            return False
+        try:
+            from .growth_providers import growth_nodes
+
+            jobs = list(status.get("jobs", {}).values())
+            known = {q["id"] for q in self.work.data["nodes"]}
+            nodes = [
+                n
+                for n in growth_nodes(
+                    rows, jobs, deepcopy(self.work.data["nodes"]), observation, capabilities, limit=GROWTH_LIMIT
+                )
+                if str(n.get("id", "")).startswith("auto_") and n.get("id") not in known
+            ]
+            if not nodes:
+                return False
+            self._merge(nodes, capabilities, observation, "bottleneck")
+        except Exception as exc:
+            self._event("bottleneck_growth_rejected", reason=str(exc)[:600])
+            return False
+        self.work.refresh(jobs, capabilities)
+        self._event("bottleneck_growth", task_ids=[n["id"] for n in nodes])
+        return True
+
+    def _idle_watch(self, context):
+        """Log the observe receipt's ``bottlenecks.idle_with_work`` (bottleneck_audit): the actor is idle while
+        work exists; the event names the item that should have been proposed and its gate.
+
+        One event per episode start, top-gate change or ``IDLE_WATCH_SECONDS`` more idle time, so
+        ``tools/waste_report.py`` and the fleet report can sum the seconds per gate.
+        """
+        from .bottleneck_audit import event_fields
+
+        observation = context[0]
+        fields = event_fields(observation.get("bottlenecks") or {})
+        if fields is None:
+            return
+        last = getattr(self, "_idle_logged", None) or {}
+        idle = fields.get("idle_seconds") or 0
+        if (
+            last.get("since_tick") == fields.get("since_tick")
+            and last.get("top_gate") == fields.get("top_gate")
+            and idle - (last.get("idle_seconds") or 0) < IDLE_WATCH_SECONDS
+        ):
+            return
+        self._idle_logged = fields
+        self._event("idle_with_work", tick=observation.get("tick"), **fields)
 
     def _auto_retry(self, context):
         """Retry a blocked job once another job has succeeded since it blocked.

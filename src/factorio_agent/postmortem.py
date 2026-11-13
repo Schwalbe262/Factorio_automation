@@ -262,6 +262,11 @@ DRY_RUN = {
         lambda ex, obs, p: ex.material_supply.prepare(obs, p), lambda ex, obs, p: ex.material_supply.step(obs, p)
     ),
     "logistic_science": DryRun(lambda ex, obs, p: ex.green.prepare(obs, p)),
+    # Another pack block's reserved slots (science_growth {pack, machines}); the red block's growth has no
+    # pure planner (its frame extension writes the widened reservation first).
+    "science_growth": DryRun(
+        lambda ex, obs, p: ex.green.plan_growth(obs, p) if (p or {}).get("pack") else {"reason": "no_pure_planner"}
+    ),
     "brick_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "brick")),
     "steel_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "steel")),
     # steel_supply plans the same planned furnace block (planned_furnaces.supply_step) on a planned world.

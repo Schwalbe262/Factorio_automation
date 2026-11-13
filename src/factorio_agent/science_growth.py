@@ -442,10 +442,127 @@ def lab_activity(state, observation):
         "labs_powered": sum(1 for e in labs if _powered(e)),
         "lab_status": [(e or {}).get("status_name") for e in labs],
         "lab_packs": [int(((e or {}).get("inventory") or {}).get(RED_PACK, 0) or 0) for e in labs],
+        # Every pack each built lab holds: a lab missing packs while red backs up misses another pack.
+        "lab_stock": [
+            {k: int(v or 0) for k, v in ((e or {}).get("inventory") or {}).items() if str(k).endswith("science-pack")}
+            for e in labs
+        ],
         "machines_observed": sum(1 for e in machines if e),
         "machine_status": [(e or {}).get("status_name") for e in machines],
         "belt_packs": sum(int(((e or {}).get("belt_inventory") or {}).get(RED_PACK, 0) or 0) for e in belts),
     }
+
+
+LAB_BLOCKS = frozenset({"laboratories", "automation_science"})
+
+
+def _provider_option(provider, **fields):
+    """``growth_providers._option`` (imported lazily); the same field list when that module is absent."""
+    try:
+        from .growth_providers import _option
+    except ImportError:
+        keys = ("gain_per_minute", "cost", "seconds_saved")
+        return {
+            "provider": provider,
+            "kind": fields.get("kind", "in_place"),
+            "capability": fields.get("capability"),
+            "parameters": fields.get("parameters"),
+            "nodes": list(fields.get("nodes") or ()),
+            **{k: fields.get(k) for k in keys},
+            "feasible": bool(fields.get("feasible", True)),
+            "reason": str(fields.get("reason", ""))[:240],
+        }
+    return _option(provider, **fields)
+
+
+def growth_options(bottleneck, observation, state) -> list[dict]:
+    """Growth options for a science-pack or lab bottleneck of any pack type (bottleneck auditor hook).
+
+    The red block and labs read the ``science_growth`` receipt, every other pack its
+    ``pack_growth[pack]`` receipt (``pack_growth.growth_decision``): one rule, one receipt.
+    ``state`` holds ``jobs``, ``queue_nodes`` and ``capabilities`` (``growth_providers``).
+    A growing receipt gives an in-place option with its ``science_growth`` node; a waiting one an
+    infeasible option naming why; no slot left adds the next unit (second unit / rebuild,
+    not built yet). Labs without research in progress are a research-queue problem, never a lab
+    or pack surplus: the option says so and nothing grows.
+    """
+    pack = str((bottleneck or {}).get("item") or "")
+    red = pack == RED_PACK or not pack.endswith("science-pack") or (bottleneck or {}).get("block") in LAB_BLOCKS
+    research = observation.get("research")
+    if not isinstance(research, str) or not research:
+        return [
+            _provider_option(
+                "science",
+                feasible=False,
+                reason="no research in progress: the research queue is the limit (research_queue), not labs or packs",
+            )
+        ]
+    if red:
+        row, parameters = observation.get("science_growth"), None
+        if isinstance(row, Mapping):
+            parameters = {"labs": row.get("target_labs"), "machines": row.get("target_machines")}
+        missing = row.get("missing_pack") if isinstance(row, Mapping) else None
+        if missing and not row.get("grow"):
+            # Red backs up while the labs miss another pack: that pack's block is the bottleneck.
+            row = ((observation.get("pack_growth") or {}).get(missing)) or row
+            parameters = {"pack": missing, "machines": row.get("target_machines")}
+    else:
+        row = (observation.get("pack_growth") or {}).get(pack)
+        parameters = {"pack": pack, "machines": (row or {}).get("target_machines")}
+    if not isinstance(row, Mapping):
+        return [_provider_option("science", feasible=False, reason=f"no growth receipt for {pack or 'the labs'}")]
+    saved = (row.get("decision") or {}).get("seconds_saved") if isinstance(row.get("decision"), Mapping) else None
+    gain, each = None, row.get("pack_rate_per_machine")
+    if isinstance(each, (int, float)) and isinstance(row.get("target_machines"), int):
+        gain = round(each * (row["target_machines"] - int(row.get("machines") or 0)), 3)
+    options = []
+    if row.get("grow"):
+        from .progression import science_growth_nodes
+
+        nodes = science_growth_nodes(
+            state.get("jobs") or [], state.get("queue_nodes") or [], observation, state.get("capabilities") or {}
+        )
+        nodes = [n for n in nodes if n.get("parameters") == parameters]
+        options.append(
+            _provider_option(
+                "science",
+                capability="science_growth",
+                parameters=parameters,
+                nodes=nodes,
+                gain_per_minute=gain,
+                cost=(row.get("unit") or {}).get("raw_cost"),
+                seconds_saved=saved,
+                reason=str(row.get("reason") or ""),
+            )
+        )
+    else:
+        options.append(_provider_option("science", feasible=False, reason=str(row.get("reason") or "science waits")))
+    step = row.get("next_step") if isinstance(row.get("next_step"), Mapping) else None
+    if step:
+        for o in step.get("options") or ():
+            if isinstance(o, Mapping):
+                options.append(
+                    _provider_option(
+                        "science",
+                        kind="new_unit" if str(o.get("option", "")).startswith("second") else "rebuild",
+                        feasible=False,
+                        cost=o.get("raw_cost"),
+                        reason=f"{o.get('option')}: {o.get('seconds')}s vs wait {step.get('wait_seconds')}s; "
+                        "not a capability yet",
+                    )
+                )
+    return options
+
+
+def missing_pack(activity, status, targets):
+    """The non-red pack of the running research that a lab missing packs holds none of, or None."""
+    running = next(iter(targets or ()), None)
+    packs = sorted(p for p in getattr(running, "packs_per_unit", {}) if p != RED_PACK)
+    stock = activity.get("lab_stock") or []
+    for pack in packs:
+        if any(s == PACK_SHORT and not (stock[i] if i < len(stock) else {}).get(pack) for i, s in enumerate(status)):
+            return pack
+    return None
 
 
 def growth_receipt(root, catalog, jobs, observation):
@@ -622,11 +739,13 @@ def growth_decision(catalog, state, observation, targets, evidence, *, expected=
         or all(n >= LAB_BACKUP_PACKS for n in activity["lab_packs"])
         or "full_output" in activity["machine_status"]
     )
-    starving = PACK_SHORT in status and not backlog
+    # A red shortage: a lab missing packs holds no red (one holding red misses another pack: missing_pack).
+    starving = any(s == PACK_SHORT and n == 0 for s, n in zip(status, activity["lab_packs"])) and not backlog
     short = any(s in MACHINE_INGREDIENT_SHORT for s in activity["machine_status"])
     machines_busy = all(s == "working" for s in activity["machine_status"])
     labs_busy = all(s == "working" for s in status)
     costs = expansion_costs(catalog, RED_PACK, current_assemblers=machines)
+    row["pack_rate_per_machine"] = costs["pack_rate_per_assembler"]
     stock = sum(activity["lab_packs"]) + activity["belt_packs"]
     hardware = ResearchHardware(
         {RED_PACK: machines}, {RED_PACK: costs["pack_rate_per_assembler"]}, labs, pack_stock={RED_PACK: stock}
@@ -660,6 +779,12 @@ def growth_decision(catalog, state, observation, targets, evidence, *, expected=
     wants_machines = starving and not short and machines_busy
     may_machines = wants_machines and free_machines > 0
     row["chain"] = "demand" if idle_for_demand else "plates" if starving and short else "packs" if starving else "labs"
+    missing = missing_pack(activity, status, targets)
+    if missing is not None and backlog:
+        # Red backs up and a lab misses another pack of the running research: that pack's block is the
+        # limit (pack_growth), not the lab feed (eval-1575138435: 8 labs, red 24/min backing up, green 5/min).
+        row["chain"] = f"packs:{missing}"
+        row["missing_pack"] = missing
     if not may_labs and not may_machines:
         if idle_for_demand:
             why = f"built labs are idle without a pack shortage ({', '.join(sorted(set(idle_for_demand)))})"
@@ -676,8 +801,13 @@ def growth_decision(catalog, state, observation, targets, evidence, *, expected=
             why = "labs starve for packs and every slot of the frame is built: " + beyond["reason"]
         elif wants_machines:
             why = f"labs starve for packs and the plate supply carries no further machine (limit {plates})"
+        elif not labs_busy and row.get("missing_pack"):
+            why = (
+                f"labs miss {row['missing_pack']} while red packs back up: the {row['missing_pack']} block is the "
+                "limit (pack_growth receipt), not the red stage or the lab feed"
+            )
         elif not labs_busy:
-            why = "a lab misses packs while packs back up: the lab feed, not a stage"
+            why = "a lab misses packs while packs back up: the lab feed, not a stage (bandwidth receipt lab_feed)"
         else:
             why = "every lab slot is built"
         return dict(row, reason=why[:300])

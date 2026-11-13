@@ -37,6 +37,10 @@ overlap, they are views, not a partition):
   seconds from the death to its recovery (respawn, then the corpse items back or
   given up), or to the run end when it was never recovered; the example names
   the cause seen at the corpse and the items lost.
+- ``idle_with_work``: the supervisor's idle watchdog (``logs/controller-events.jsonl``
+  event ``idle_with_work``, ``bottleneck_audit``): actor seconds without an action
+  beyond ``IDLE_SECONDS`` while a bottleneck, an untried remedy or ready queue work
+  existed; the row names the top item and the gates that held it.
 
 Not measurable from current logs (need a new log field): supply counted that
 cannot reach the consumer (needs per-machine ingredient status over time in the
@@ -370,6 +374,20 @@ def analyse(root: Path) -> dict:
                     n,
                 )
 
+    # --- idle with work: the supervisor's idle watchdog (bottleneck_audit) ------------------------
+    for episode in idle_with_work(root):
+        gates = sorted(episode["gates"].items(), key=lambda kv: -kv[1])
+        w.add(
+            "idle_with_work",
+            episode["seconds"],
+            {
+                "tick": episode["since_tick"],
+                "job": gates[0][0] if gates else "-",
+                "reason": f"{episode.get('top_item') or '-'}; gates "
+                + ", ".join(f"{g} {round(s)}s" for g, s in gates[:3]),
+            },
+        )
+
     # --- remedy ladder: seconds blocked per needs kind, remedies applied and resolved ---------
     remedies = remedy_summary(run.events, end, w, cap)
 
@@ -465,6 +483,15 @@ def actor_death_waste(root, end, w) -> list[dict]:
             },
         )
     return rows
+
+
+def idle_with_work(root) -> list[dict]:
+    """Idle episodes of the supervisor's ``idle_with_work`` events (``bottleneck_audit.idle_episodes``)."""
+    try:
+        from factorio_agent.bottleneck_audit import _events, idle_episodes
+    except ImportError:
+        return []
+    return idle_episodes(_events(root))
 
 
 def remedy_summary(events, end, w=None, cap=str) -> dict:

@@ -252271,3 +252271,16 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - metrics: test_v2_actor_death 20 tests (lupa Lua included); waste_report on the incident: actor_death 4629 s.
 - result: offline; no server or fleet started.
 - next: fleet round to see (1) how often attack_sources fire and what the earlier turrets cost on the critical path, (2) a live respawn + belongings trip; AGENTS.md exception (b) wording should name the respawn (owner).
+## 2026-11-14 Part 54 - green science grows with its labs (pack_growth, lab feed audit)
+- goal: eval-1575138435 at ~185 min: 8 labs, red 24/min backing up, green 5/min, nothing grew green.
+- hypothesis/cause: (1) no capability built the split row's 5 reserved slots, and selection gave them no ceiling (so a 30/min request could also pick the 5/min cluster); (2) the red receipt counted red only: labs missing green read as "the lab feed"; (3) research_capacity priced green as "+1 assembler" with a plate cap from a measured net of ~0.
+- actions: pack_growth.py (pack-agnostic chain, real unit, declared draw, beyond = second unit / rebuild to split); science_growth {pack, machines} builds the slots (LogisticScience.plan_growth/grow, dry run); reachability filter + lab-demand horizon in planned_green_layouts; per-port tap demand; red missing_pack; lab_feed.py + belt_flow source_short; research_capacity unit_bill + with_spare.
+- metrics: lab feed audit on the live state: green source_short 5 vs 16/min, red ok; live-shape decision: 1 -> 6 machines (headroom), 1 -> 5 (spare 120 iron), or hold + declare 110 iron / 30 copper (short).
+- result: offline only (tests/test_v2_pack_growth.py); no fleet.
+- next: restart the GUI supervisor, read pack_growth and belt_bandwidth lab_feed; fleet to confirm green growth timing; second lab entry for a second green unit.
+## 2026-11-14 part 54 rocket tail from the catalog
+- goal: roadmap ends at chemical_science, no step can reach a launch; derive the tail from data.
+- actions: rocket_plan.rocket_bill (rocket-silo closure 1000x3 packs; SA silo 50 parts of PU+LDS+RF; payload starter pack; flow to ores/crude/water, coproduct rule), tools/rocket_plan.py, tail rows -> observe receipt rocket_plan -> progression.roadmap_for; produce rows match by item, satisfied at >= rate.
+- result: 25-step tail on the real 2.1.20 catalog; 13 research, 4 produce rows (EC, pipe, foundation), inert rows for missing capabilities. Gate passed (worktree, lupa skipped).
+- next: fluid_assembly (PU, RF, concrete, EEU), chemical_product (solid fuel), produce_merged (LDS), wire advanced_petroleum/fluid_products, rocket_silo/parts/launch; verify on a long fleet.
+- follow-up (coordinator): respawn emulation behind actor-client.json respawn (default false, fleet.py start --respawn, header "respawn emulation on"); off = death recorded, safe stop, watcher ends the run at once, triage errored: agent_dead; merged v2 1c13a77 (idle watch, growth pass, rocket tail: defense_urgency_nodes uses roadmap_for steps).
