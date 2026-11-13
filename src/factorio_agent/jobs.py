@@ -490,6 +490,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "belt_lane_observation": obs.get("belt_lane_observation"),
         "smelting_throughput_bounds": obs.get("smelting_throughput_bounds"),
         "furnace_block_claims": obs.get("furnace_block_claims"),
+        "belt_bandwidth": obs.get("belt_bandwidth"),
         "factory_constraints": obs.get("factory_constraints"),
         "available_research": obs.get("available_research"),
         "native_capability_gates": obs.get("native_capability_gates"),
