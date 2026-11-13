@@ -11,6 +11,13 @@ python -B tools/report_run.py runtime/v2/<name> --json     # full data
 python -B tools/waste_report.py runtime/v2/<name>          # wasted game seconds by type (or a fleet name)
 ```
 
+`waste_report` ends with the critical chain to the 20-minute target (`critical_chain`: power ->
+research (drill + logistics) -> outposts -> district producer (its first bank's plan prefix) ->
+district -> bus, each segment's median end and the constraint that bound it: `labs: 1 lab`,
+`pack supply / funding`, `logistics research`, `waits for <entity>`, `plates` = half the iron takes
+came back short). `fleet.py report` prints `pace vs target 20 min` (district and bus median minus
+20, runs under it).
+
 Read in this order:
 
 | Field | Meaning | Stall sign |
