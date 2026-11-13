@@ -252324,3 +252324,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - live: engine_production (steel 8) and oil_gathering (steel 5, past scouting) blocked "required item needs a production machine"; the steel furnaces were idle no_ingredients (no recipe observed) holding 85/78 steel, and the slack view hid claimed output.
 - fixes: idle furnace holding the item counts as producer; no producer at all -> evidence producer (rocket_plan.producer_for) and Supervisor._missing_producers queues it (produce rows at MISSING_PRODUCER_RATE); basic_petroleum DryRun + plan_needs (_petroleum_needs) + rungs incl. relax:waypoint_route (two crude pipe legs).
 - gate OK (3277). open: pump segments, clear rung, refinery site rung (6 fixed anchors around refinery_origin).
+
+## 2026-11-14 06:40 Part 55 - rocket path exists on paper, live map through steel
+- goal: make the rocket reachable; make the framework act without being told; keep fixing what fleets and the live map show.
+- actions: merged rocket bill + generated tail, rocket_silo/parts/launch, produce generalisation (belt output, lane merge, fluid inputs), fluid modules + cracking, planned-world siting/taps for oil and chemical blocks, bottleneck auditor + growth providers, pack growth, power growth, death handling (respawn off), pace fixes, engine/oil unblock, missing-producer rule.
+- metrics: round aud-1114-0436 (af83ce4): producer 21.1 (was 30.4), district 26.5 (plate-bound 9/12), bus 31.3 (7/12); GUI map steel at 334 min after 2 h blocked on power (plant at full load read as unpowered) and a 176-tile coal route.
+- failure: a fleet round hung 75 min on a dead actor; jobs.summary dropped receipts three times (guard test added); a 0.5 wood pole made green growth "unfundable".
+- result: v2 1b89a38, gate PASS; long fleets 0448 and 0612 running; nothing after steel proven live.
+- next: read the long fleets at the oil stage; pace round with payback-driven starter cells; owner decisions pending (starter cap, respawn).
