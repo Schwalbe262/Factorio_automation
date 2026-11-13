@@ -8,6 +8,7 @@
 | [ADDING_A_CAPABILITY.md](ADDING_A_CAPABILITY.md) | controller contract, registration, site, routing, state, roadmap, tests |
 | [DEBUGGING_A_STALL.md](DEBUGGING_A_STALL.md) | report, ledger, read-only live inspection, known stall patterns, fix rules |
 | [PLANNERS.md](PLANNERS.md) | planner formulas, defaults, tuning, pinning tests |
+| [BALANCERS.md](BALANCERS.md) | belt balancer concepts (output/input balanced, throughput unlimited, lane balance) and where one is or is not needed |
 | [LAYOUT_PRINCIPLES.md](LAYOUT_PRINCIPLES.md) | block layout rules (direct insertion vs belt, compactness, growth) and the code/audit enforcing each |
 | [SUPERVISOR.md](SUPERVISOR.md) | supervisor flags, planner none/luna, incident replay |
 | [LIFECYCLE.md](LIFECYCLE.md) | BAT menu and `lifecycle` commands; parallel measurement runs: "Fleet runs" below |
