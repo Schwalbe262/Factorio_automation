@@ -125,10 +125,41 @@ def supplied_networks(obs) -> set:
     return {e.get("electric_network_id") for e in obs.get("entities", []) if generating(e)}
 
 
+def _plan_corridors(game, world_id, goal):
+    """``[[x0, y0], [x1, y1]]`` of the site plan's belt corridor segments that do not hold ``goal``.
+
+    Fleet aud-1114-0526 seed 2446866888: the iron bank's bridge ran a pole column along x 23.5 inside
+    the 4-tile header corridor between the smelting zone and the bus; the pole at (23.5, 10.5) stood
+    on the tile in front of the iron lane head and the bus feed found no corridor for 25 minutes.
+    Corridors are narrower than one hop, so a bridge jumps them. Any problem reading the plan gives none.
+    """
+    try:
+        path = Path(game.cfg.runtime_dir) / "site-plan.json"
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if payload.get("world_id") != world_id:
+            return []
+        rects = [s["rect"] for c in payload["plan"].get("corridors", []) for s in c.get("segments", [])]
+    except (AttributeError, OSError, TypeError, ValueError, KeyError):
+        return []
+    return [[[x0, y0], [x1, y1]] for x0, y0, x1, y1 in rects if not (x0 <= goal[0] <= x1 and y0 <= goal[1] <= y1)]
+
+
 def plan_connection(game, builder, obs, destination, reserved=(), *, keep_out=()):
     """Pole hops from the supplied network to ``destination``; no new pole on ore, in a mining
     reservation, on another block or its planned hardware, on ``reserved`` tiles, or touching a
-    ``keep_out`` area (``[[x0, y0], [x1, y1]]``, e.g. belt corridors a caller must keep free)."""
+    ``keep_out`` area (``[[x0, y0], [x1, y1]]``, e.g. belt corridors a caller must keep free).
+
+    The site plan's belt corridors (:func:`_plan_corridors`) are kept out too; only when no hop
+    route exists that way is the search repeated with them open."""
+    corridors = _plan_corridors(game, obs.get("world_id"), (destination["x"], destination["y"]))
+    if corridors:
+        result = _plan_connection(game, builder, obs, destination, reserved, list(keep_out) + corridors)
+        if result.get("reason") != "no_bounded_pole_hop_connection":
+            return result
+    return _plan_connection(game, builder, obs, destination, reserved, keep_out)
+
+
+def _plan_connection(game, builder, obs, destination, reserved, keep_out):
     networks = supplied_networks(obs)
     sources = [
         e for e in obs["entities"] if e["name"] == "small-electric-pole" and e.get("electric_network_id") in networks

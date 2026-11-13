@@ -99,6 +99,7 @@ SITE_RETRY_PERIOD_SECONDS = 900
 REMEDY_CHECK_SECONDS = 60
 REMEDY_FACTS_SECONDS = 120
 REMEDY_RECHECK_SECONDS = 300
+REMEDY_IDLE_RECHECK_SECONDS = 90  # ... while no job is active (an idle run re-plans eagerly)
 REMEDY_MAX_CHECKS = 12
 REMEDY_BUDGET_SECONDS = remedy.WHAT_IF_SECONDS
 SITE_RETRY_FACT_FILES = ("pcb-board.json", "material-sources.json", "site-plan.json")
@@ -2230,6 +2231,10 @@ class Supervisor:
             rung, skipped = remedy.choose(capability, needs, state["tried"], claimed=self._critical_claims(context))
             if rung is None or state["checks"] >= REMEDY_MAX_CHECKS:
                 wait = REMEDY_FACTS_SECONDS if changed else REMEDY_RECHECK_SECONDS
+                if not any(j.get("status") in ACTIVE for j in jobs):
+                    # Nothing else runs: a re-plan costs only planning time (aud-1114-0436 seed
+                    # 3242269094: the district re-planned every 5 min while the run idled 25 min).
+                    wait = min(wait, REMEDY_IDLE_RECHECK_SECONDS)
                 if now - state["last"] < wait:
                     self._remedy_wait(job, needs, state, wait, skipped)
                     continue

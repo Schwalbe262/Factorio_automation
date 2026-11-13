@@ -69,6 +69,7 @@ from .core.deterministic_builder import FactoryBuilder, _plan
 from .core.deterministic_state import _atomic_json
 from .planning import preflight
 from .plate_supply import district_ports
+from .routing import VECTORS
 from .site.busframe import Bus
 from .site.transform import Transform, apply as apply_transform
 from .smelting import merge_entities
@@ -642,24 +643,46 @@ class PlannedBus:
             for lane in lanes
         }
         failures = []
-        for order in (feeds, feeds[::-1]):
+        # The feed ends on the lane head inside the bus band: a bus route.
+        extra = {"bus_route": True} if guide is None else {"guide": guide, "bus_route": True}
+
+        vx, vy = VECTORS[facing]
+        approach = {
+            feed["item"]: (heads[feed["item"]]["position"]["x"] - vx, heads[feed["item"]]["position"]["y"] - vy)
+            for feed in feeds
+        }
+
+        def route(feed, reserved, keep_clear=()):
+            more = {"keep_clear": keep_clear} if keep_clear else {}
+            return self.route(
+                self.game, self.builder, obs, feed["source"], heads[feed["item"]], reserved, **extra, **more
+            )
+
+        attempts = [(order, False) for order in (feeds, feeds[::-1])]
+        if len(feeds) > 1:
+            # Feeds whose sources lie beyond each other's lane head must cross (seed 3098273696: iron
+            # from the north to the southern head, copper from the south to the northern one; either
+            # feed alone fits, the second never: the first took the tile in front of the other head,
+            # where no underground fits). An earlier feed keeps off the later feeds' head approach
+            # tiles, so the later one can pass under its straight leg.
+            attempts += [(order, True) for order in (feeds, feeds[::-1])]
+        for order, spaced in attempts:
             es, pairs, metrics, good = list(entities), [], [], True
-            for feed in order:
-                # The feed ends on the lane head inside the bus band: a bus route.
-                extra = {"bus_route": True} if guide is None else {"guide": guide, "bus_route": True}
-                route = self.route(self.game, self.builder, obs, feed["source"], heads[feed["item"]], es, **extra)
-                if not route.get("ok"):
-                    failures.append({"item": feed["item"], "reason": route.get("reason")})
+            for index, feed in enumerate(order):
+                later = [approach[f["item"]] for f in order[index + 1 :]] if spaced else []
+                result = route(feed, es, later)
+                if not result.get("ok"):
+                    failures.append({"item": feed["item"], "reason": result.get("reason")})
                     good = False
                     break
                 try:
-                    es = merge_entities(es, route["entities"])
+                    es = merge_entities(es, result["entities"])
                 except ValueError:
                     failures.append({"item": feed["item"], "reason": "feed_route_conflicts_with_bus"})
                     good = False
                     break
-                pairs += route.get("underground_pairs", [])
-                metrics.append({"item": feed["item"], **(route.get("route_metrics") or {})})
+                pairs += result.get("underground_pairs", [])
+                metrics.append({"item": feed["item"], **(result.get("route_metrics") or {})})
             if good:
                 return {"ok": True, "entities": es, "pairs": pairs, "metrics": metrics}
         return {

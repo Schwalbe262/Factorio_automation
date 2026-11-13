@@ -562,6 +562,9 @@ def _recipient(belt):
     return (x + vx, y + vy)
 
 
+CORRIDOR_SURVEY_TILES = 40000  # most tiles one native belt corridor survey covers
+
+
 def guided_bounds(bounds, guide):
     """Widen the search box to cover ``guide`` = (x0, y0, x1, y1) tile rect.
 
@@ -592,6 +595,7 @@ def plan_connection(
     guide=None,
     bus_route=False,
     max_detour_ratio=None,
+    keep_clear=(),
 ):
     """``_plan_connection``; a post-mortem dry run notes every route attempt (``evidence_capture``).
 
@@ -604,6 +608,8 @@ def plan_connection(
         bus_route=bus_route,
         max_detour_ratio=max_detour_ratio,
     )
+    if keep_clear:
+        options["keep_clear"] = tuple(tuple(p) for p in keep_clear)
     result = _plan_connection(game, builder, obs, source, destination, reserved, **options)
     if not result.get("ok") and result.get("reason") == "no_clean_trunk_corridor":
         if remedy.option("route_waypoints"):
@@ -720,6 +726,7 @@ def _plan_connection(
     guide=None,
     bus_route=False,
     max_detour_ratio=None,
+    keep_clear=(),
 ):
     """Route one belt from ``source`` to ``destination`` port.
 
@@ -729,6 +736,7 @@ def _plan_connection(
     reserved corridor that itself detours (``smelting_site.corridor_detour``).
     ``bus_route`` marks the bus's own feed; every other route keeps out of
     the site plan's bus band (``bus_band``) and may not end inside it.
+    ``keep_clear``: tile centres ``(x, y)`` left free for another route's way in.
     """
     if source.get("item") != destination.get("item"):
         return {"ok": False, "reason": "port_item_mismatch"}
@@ -748,8 +756,17 @@ def _plan_connection(
         "min_y": min(a["y"], b["y"]) - 16,
         "max_y": max(a["y"], b["y"]) + 16,
     }
-    bounds = guided_bounds(bounds, guide)
-    if (bounds["max_x"] - bounds["min_x"] + 1) * (bounds["max_y"] - bounds["min_y"] + 1) > 40000:
+
+    def area(box):
+        return (box["max_x"] - box["min_x"] + 1) * (box["max_y"] - box["min_y"] + 1)
+
+    # A guide only widens the box: one too far or too large to survey is dropped, not a failure
+    # (aud-1114-0436 seed 3242269094: copper ore (-8.5, -52.5) -> (-39.5, -88.5), a 63 x 68 box,
+    # widened to the planned copper corridor at (60..247, 156..314); every district site failed
+    # belt_corridor_survey_budget_exceeded because the bank stood on another patch).
+    guided = guided_bounds(bounds, guide)
+    bounds = guided if area(guided) <= CORRIDOR_SURVEY_TILES else bounds
+    if area(bounds) > CORRIDOR_SURVEY_TILES:
         return {"ok": False, "reason": "belt_corridor_survey_budget_exceeded"}
     prospective = _prospective_mining_source(game, builder, obs, source, reserved)
     if not prospective.get("ok"):
@@ -957,6 +974,7 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
     hard.update(builder._occupied_by_plan([e for e in reserved if e["name"] != "transport-belt"]))
     if band is not None:
         hard.update(_band_cells(band, bounds))
+    hard.update(tuple(p) for p in keep_clear)
     hard -= ends
     surface = {xy(e) for e in foreign if e["name"] in ("transport-belt", "pipe")}
     rejected = 0

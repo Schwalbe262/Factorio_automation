@@ -28,7 +28,6 @@ from factorio_agent import supply_cell as sc
 from factorio_agent.board import (
     LINK_POLE_LUA,
     Board,
-    _hub_science_cell,
     _plan,
     entity,
     hardware_conflicts,
@@ -273,9 +272,7 @@ class SupplySiteLandTests(unittest.TestCase):
         for plan in self.payloads[0]:
             for e in plan["entities"]:
                 if e["name"] != "small-electric-pole":
-                    self.assertFalse(
-                        {(int(x // 1), int(y // 1)) for x, y in GEOMETRY._occupied_by_plan([e])} & lake, e
-                    )
+                    self.assertFalse({(int(x // 1), int(y // 1)) for x, y in GEOMETRY._occupied_by_plan([e])} & lake, e)
         nearest = min(
             abs(e["position"]["x"]) + abs(e["position"]["y"])
             for e in result["plan"]["entities"]
@@ -298,7 +295,10 @@ class SupplySiteLandTests(unittest.TestCase):
 
         def hop(game, builder, obs, destination, reserved=(), *, keep_out=()):
             calls.append((dict(destination), [list(map(list, a)) for a in keep_out]))
-            return {"ok": True, "entities": [entity("small-electric-pole", 7.5, 0.5), entity("small-electric-pole", **destination)]}
+            return {
+                "ok": True,
+                "entities": [entity("small-electric-pole", 7.5, 0.5), entity("small-electric-pole", **destination)],
+            }
 
         with patch.object(sc, "plan_connection", side_effect=hop):
             result = self.prepare(FakeWorld(zones=zones))

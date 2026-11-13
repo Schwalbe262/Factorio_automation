@@ -493,6 +493,7 @@ class SupervisorLadderTests(LadderFixture):
     def test_a_spent_ladder_waits_for_new_facts_or_the_recheck_period(self):
         self.s.max_seconds = None
         ladder = LadderCLI(self.cli, lambda rung, options: {"fits": False, "reason": "no"})
+        self.cli.jobs["busy"] = job("busy", "power", status="running")  # the run is not idle
         self.blocked(
             "mine",
             "mining_outpost",
@@ -511,6 +512,28 @@ class SupervisorLadderTests(LadderFixture):
         self.clock.advance(REMEDY_RECHECK_SECONDS)
         self.s._auto_retry(self.s._snapshot())
         self.assertEqual(ladder.what_ifs[-1], "replan")
+
+    def test_an_idle_run_replans_a_spent_ladder_sooner(self):
+        # aud-1114-0436 seed 3242269094: the district re-planned every 5 min while nothing else ran (25 min idle).
+        from factorio_agent.supervisor import REMEDY_IDLE_RECHECK_SECONDS
+
+        self.s.max_seconds = None
+        ladder = LadderCLI(self.cli, lambda rung, options: {"fits": False, "reason": "no"})
+        self.blocked(
+            "mine",
+            "mining_outpost",
+            "no_policy_compliant_paired_bank_with_growth_and_power",
+            {"candidate_failures": [], "exit_sides_tried": ["E", "N", "S", "W"]},
+            {"resource": "iron-ore", "rate_per_minute": 300.0},
+        )
+        for _ in range(3):
+            self.clock.advance(REMEDY_CHECK_SECONDS + 1)
+            self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(ladder.what_ifs, ["shrink:half_drills", "shrink:two_drills"])
+        self.clock.advance(REMEDY_IDLE_RECHECK_SECONDS)
+        self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(ladder.what_ifs[-1], "replan")
+        self.assertLess(REMEDY_IDLE_RECHECK_SECONDS + REMEDY_CHECK_SECONDS, REMEDY_RECHECK_SECONDS)
 
     def test_a_deferred_retry_keeps_the_confirmed_rung_and_an_error_is_no_fit(self):
         self.s.max_seconds = None
