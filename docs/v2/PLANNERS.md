@@ -169,6 +169,9 @@ skip when any plate net is unmeasured or <= 0, or rate < PRODUCE_MIN_RATE (1.0)
 ```
 
 `bulk_item_demand`: `Step.builds` of the next 4 steps. Pinned by `tests/test_v2_produce_autopilot.py`.
+A row is proposed only when every plate of `raw_per_item` has a belt source now (receipt
+`produce_plate_sources`, `production_sources.plate_sources`: a published bus lane, a free board
+port or a bus tap); before, it only blocked `production_row_input_source_missing`.
 
 Line design (`production_layout.plan_sources`): at most two routed solid
 inputs; an unsourced one-level intermediate gets a sub-row; two unsourced
@@ -315,9 +318,20 @@ wood/boiler    base boiler: ONE fuel slot (fuel_inventory_size=1, data/base enti
                belt-fed: capability wood_burner_feed (wood_burner_feed.py) puts a wooden chest -> burner arm ->
                splitter in place of one straight feed belt, input priority on the wood side; the chest is
                the wood sink; proposed once wood >= WOOD_BATCH is carried/in depots and splitters are enabled
+return feed    coal/ore with a trunk_return_feed (trunk_return_feed.py, LAYOUT_PRINCIPLES "Return feed"):
+               its chest is the FIRST sink (whole surplus, one deposit), then consumers, then depots;
+               the chest receives only its own item and is never a depot; depots holding the item are
+               drained towards it only in an idle pass or within PASSING_DISTANCE (10) (drain_depot)
+trigger        receipt trunk_return_feeds, wait vs spend per resource with a patch bank:
+               wait  = (ceil(surplus / stack) + trips in the last 10 game min) * TRIP_SECONDS (12)
+               spend = BUILD_SECONDS (40) + 2 * distance(actor, trunk head) / 8.9 tiles/s
+               surplus = carried - allowance + depot stock; trips = moves to consumers/depots
+               (carried-surplus.json, log_trip); proposed once per trunk when wait > spend, the trunk
+               is observed, belt rate x built lanes > proven supply and splitters are enabled
 fetch          V2Bootstrap._take_output takes fuel from a depot before any other chest (depot_take);
                "collect produced coal" stays bounded by the requested count
-source         starter retirement coal: trip_room = allowance + consumer/depot room - carried
+source         starter retirement coal: trip_room = allowance + feed chest/consumer/depot room - carried;
+               its previous trip goes through sink_action, so a return feed chest is its sink first
 ```
 
 Not built: a new depot chest on a SiteService spot; the existing InventoryStorage chest (built when
@@ -408,12 +422,16 @@ so the decided machines and labs stand before the first batch binds. Pinned by
 
 ## Staged red science (`science_growth.py`, capability `science_growth`)
 
-`automation_science` reserves the whole block (all requested machine slots,
-eight lab slots, belts for the full row) on the board, but builds only a start:
+`automation_science` reserves the whole growth frame on the board (machine slots,
+eight lab slots, belts for the full row) but builds only a start:
 
 ```
+frame    = clamp(max(requested slots ceil(1.15 x rate / 6), research_capacity target), 1, SITE_MACHINE_SLOTS (6))
+           research_capacity: queue_targets(horizon FRAME_HORIZON 12) from the start, funding free (a reservation
+           costs no items), max_step = max_assemblers = 6, max_labs = 8 -> largest row whose last machine still pays
 labs     = START_LABS (2)
 machines = clamp(ceil(lab_pack_rate(queue, 2 labs) / pack_rate_per_machine), 1, min(START_SCIENCE_MACHINES (2), plate-supported machines))
+taps     = declared for the plate-supported count at plan time (stage.tap_machines)
 proof    = built machines made packs, built labs powered and one holds packs or works
 ```
 
@@ -430,24 +448,50 @@ idle for demand = some built lab status not in (working, missing_science_packs) 
 backlog  = lab-row belt holds >= BELT_BACKUP_PACKS (8) packs or every lab >= LAB_BACKUP_PACKS (2) or a machine is full_output
 starving = some lab missing_science_packs and no backlog            (a PACK shortage, not idle labs)
 short    = some machine item_ingredient_shortage / no_ingredients  -> the plate supply is the limit (throughput_growth)
-may add machines = starving and not short and every machine working and machines < machine_limit
+limit    = min(frame_capacity, plate_limit)                          read live every receipt (receipt field frame)
+           frame_capacity = slots along the slot pitch inside the row's reserved_area whose inserters reach the
+                            row's belts and that overlap no planned entity (frame_slot_groups), at most 6;
+                            the reserved slots only once an extension failed (frame.extension_blocked)
+           plate_limit    = machines + min over plates floor((max(0, net) + 60 stock / T_queue) / draw per machine)
+may add machines = starving and not short and every machine working and machines < limit
 may add labs     = every lab working and free lab slots; without a backlog only when
                    research_capacity's baseline is labs-limited (else re-planned with labs fixed)
 how many: plan_research_capacity(queue, observed hardware + pack stock,
           max_labs = labs + free if may add labs else labs,
-          max_assemblers = machines + free if may add machines else machines)   (max_step 2)
+          max_assemblers = limit if may add machines else machines)   (max_step 2)
+declared  plate_draw_per_minute = draw per machine (declared taps / tap_machines) x target machines;
+          throughput_growth adds what exceeds the declared taps (undeclared_plate_draw) to its tap rate,
+          from the decision on (before the build) and from the built stage afterwards
+frame full and machines wanted -> next_step (beyond_frame), same wait-vs-spend rule as the planner:
+          second_block_k (k = 1..2 machines in a new row: row template bill, machines 20 s, other entities 3 s;
+                          taps and routes unpriced) | rebuild (every machine -> assembling-machine-2 once
+                          enabled, 2 placements each, output lost meanwhile) | wait; implemented: false
 ```
 
+Growth into slots beyond the reserved ones (`science.grow`): the reservation is widened first
+(`science_growth.extended_state`: new slot groups after the planned ones, in the science plan and in
+the merged plan), the whole frame tried first, then fewer down to the wanted count; the new entities
+must pass `preflight` (trees become the block's clear obstacles). The extended state is saved, then
+the board republished (`step` republishes a board block whose fingerprint is in `frame.replaces`,
+any other changed block is still refused), then the slots are built. No width holds the wanted
+count -> `frame.extension_blocked`, job blocked `science_frame_extension_blocked`, and the receipt
+turns to `next_step`. Neither a second block nor the rebuild is a capability yet (next step).
+
 eval-4177156614 at 82 min: lab_status [missing_science_packs, working], belt 2 packs, both machines
-working; research_capacity said "+1 assembler +2 labs saves 232 s (packs-limited)", science_growth
-answered "built labs are idle" (a lab idle for packs blocked the pack machine that would feed it).
-Now that reads as a pack shortage and grows +1 machine; labs follow once every lab works.
-Note: that block reserved only 2 machine slots (`science.py`: slots = ceil(1.15 x requested rate /
-6), 10/min -> 2) and `machine_limit` is the plate-supported count at plan time, so it has no slot to
-grow into; reserving the full row (6 slots, same 32x32 square) and a dynamic plate limit are open.
+working; research_capacity said "+1 assembler +2 labs saves 232 s (packs-limited)". The block was
+planned at 10/min: 2 machine slots and `machine_limit` 2 frozen at plan time, so growth had no slot.
+Its reserved square and both row belts were drawn for six slots (`science_row`), so its frame is 6:
+the receipt now asks 2 -> 3 machines (`frame.extend_to` 6); `science_growth {labs 2, machines 3}`
+widens the reservation to six slots (republished) and builds the third machine; labs 2 -> 4 follow
+once every lab works (8 lab slots). Its taps were declared for 2 machines (iron 24, copper 12/min):
+the decision to grow declares +12 iron and +6 copper per minute to throughput_growth.
 
 A lab is never added while a built lab is idle. The startup cell (`industry._extend_labs`,
-`_grow_cell`) adds no slot lab while research runs and a powered lab is idle without packs.
+`_grow_cell`) adds no slot lab while research runs and a powered lab is idle without packs (its
+machines may still grow by its time model: labs starving for packs are a pack shortage), and neither
+grows once the bus science block takes over (`industry.permanent_science_due`: `planned_main_bus`
+succeeded, an `automation_science` job not failed, or the permanent block planned). Green science is
+one cluster (`blocks.cluster`), not a slot row: its growth is a second cluster, not modelled yet.
 Pinned by `tests/test_v2_science_growth.py`, `tests/test_v2_template_power.py`.
 
 ## Plate throughput growth (`throughput_growth.py`, capabilities `mining_outpost`, `smelting_capacity`)
@@ -513,9 +557,15 @@ production during the build: "wait 628 s, expand 675 s" -> wait. Packages on the
 +1 furnace slot -> 120/min T1 608 s; +1 drill pair +1 slot per row -> 150/min T1 533 s (saves 103 s, chosen);
 180/min and up are above the demand cap. Its measured 148.9/min was 112.5 district + ~36 starter cells
 being retired (rate samples fell to 112.5 by tick 246000), not bus supply.
-Not modelled yet: roadmap steps without `builds` add no lookahead demand; bus lanes filling and
-science/production-row growth beyond their declared taps are not demand; mine_trunk growth sizes
-to the trunk demand directly (no time comparison).
+Science growth beyond its declared taps is tap demand (`science_growth.undeclared_plate_draw`,
+receipt `demand.growth_taps_per_minute`): the receipt's growth target first, the built stage after.
+Production-row growth needs no term: their taps are excluded as stock rows, their product demand is
+already in the bill. Roadmap steps without `builds` add their plan's bill to the lookahead
+(`progression.step_bill`, `PLAN_BILLS`): `logistic_science` = the `green_cluster` plan,
+`steam_expansion` = one `steam_bank` pair + `MINING_OUTPOST_BUILDS` for its coal bank (taps and
+routes not counted). Not derived (map- or threat-dependent): defense_perimeter, dedicated_materials,
+steel/brick blocks, oil, chemical and later steps. Not modelled yet: bus lanes filling; mine_trunk
+growth sizes to the trunk demand directly (no time comparison).
 `bottleneck_blocks_critical_path` is the single swap point for the shared
 critical-path rule. Furnace growth adds coal burn (1.35/min per stone furnace)
 that this rule does not size. Pinned by `tests/test_v2_throughput_growth.py`.
@@ -730,7 +780,8 @@ runs early (runs_early): a strict requires missing OR a locked_until technology 
 parked (early_start.parked): ensure_plan's deferred wait whose reasons are all research (or plan order behind it)
   reports evidence.research_only; such a waiting job keeps its lane but holds no job slot
   (jobs._admission_error, supervisor._dispatch); it is still stepped every pass
-outposts: one lane per resource (PER_RESOURCE_CAPABILITIES); while electric-mining-drill is coming the bank is
+outposts: one lane per resource (PER_RESOURCE_CAPABILITIES) and one job slot for all of them
+  (SHARED_SLOT_CAPABILITIES, jobs.slots_used); while electric-mining-drill is coming the bank is
   prepared, saved and published (port final), collector belts, poles, bridge and exit route are built, drills
   (sorted last in resource cells) wait; blocked electric_mining_research_required only when it is not coming;
   proof unchanged (ready only after drill output); an early outpost is not an "existing capacity task" for

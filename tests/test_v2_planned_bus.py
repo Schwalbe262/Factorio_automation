@@ -226,6 +226,26 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue(h.bus.prepare(h.obs())["ok"])
             self.assertEqual(calls[2:], ["copper-plate", "iron-plate"])
 
+    def test_a_failed_feed_route_and_preflight_leave_scalar_evidence(self):
+        # all-1113-2107: three feed-route blocks kept evidence {} (the ledger keeps only scalars).
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[4])
+            h.bus.route = lambda *a, **k: {"ok": False, "reason": "no_route_within_bounds"}
+            failed = h.bus.step(h.obs())
+            self.assertEqual(failed["reason"], "planned_bus_feed_route_failed")
+            self.assertIn("iron-plate: no_route_within_bounds", failed["route_failures"])
+            h.bus.route = h.route
+            h.bus.check = Mock(return_value={
+                "ok": False, "reason": "reserved block placement is obstructed",
+                "entity": {"name": "transport-belt", "position": {"x": 1.5, "y": 2.5}},
+                "blockers": [{"name": "tree-01", "reason": "terrain_or_entity_collision"}],
+            })  # fmt: skip
+            failed = h.bus.step(h.obs())
+            self.assertEqual(failed["reason"], "planned_bus_whole_preflight_failed")
+            self.assertEqual(failed["failed_check"], "reserved block placement is obstructed")
+            self.assertEqual(failed["position"], {"x": 1.5, "y": 2.5})
+            self.assertEqual(failed["first_blocker"], "tree-01: terrain_or_entity_collision")
+
     def test_step_builds_splices_cuts_over_and_proves(self):
         with TemporaryDirectory() as root:
             h = Harness(root, PLANS[7])
@@ -274,6 +294,66 @@ class ControllerTests(unittest.TestCase):
             self.assertIsNone(h.bus.proof(h.obs(extra=mixed)))
             self.assertIsNone(h.bus.proof(h.obs(extra=built[1:])))
             self.assertIsNone(h.bus.proof(dict(h.obs(extra=built), world_id="other")))
+
+    def test_proof_ignores_the_crossing_belt_of_a_built_tap_that_dives_the_other_lane(self):
+        # all-1113-2107 (1864327666, 2769633409, 684076408, 978391276): the
+        # inserter row's iron tap dived the copper lane; its iron branch belt sat
+        # on the copper trunk tile and the bus waited 10-15 minutes, plates flowing.
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[1])
+            h.bus.state = h.bus.prepare(h.obs())
+            h.bus.state["phase"] = "commission"
+            bus = Bus.from_dict(h.bus.state["bus"])
+            lanes = {lane.index: lane for lane in bus.lanes}
+            copper = next(t for t in h.bus.state["trunks"] if t["item"] == "copper-plate")
+            iron = next(t for t in h.bus.state["trunks"] if t["item"] == "iron-plate")
+            tiles = [pb.lane_tile(bus, lanes[copper["lane"]], a) for a in (18, 19, 20)]
+            cut = pb.lane_tile(bus, lanes[iron["lane"]], 17)
+            facing = pb.FACING[bus.direction]
+            across = (facing + 4) % 16
+            splitter = {"name": "splitter", "position": cut, "direction": facing, "_width": 2, "_height": 1}
+            tap = {
+                "splitter": splitter,
+                "name": "production_row_inserter:iron-plate",
+                "item": "iron-plate",
+                "along": 19,
+                "dived_lanes": [copper["lane"]],
+                "built": True,
+                "remove": tiles,
+                "entities": [
+                    splitter,
+                    {"name": "underground-belt", "position": tiles[0], "direction": facing, "type": "input"},
+                    {"name": "transport-belt", "position": tiles[1], "direction": across},
+                    {"name": "underground-belt", "position": tiles[2], "direction": facing, "type": "output"},
+                ],
+                "underground_pairs": [
+                    {"input": [tiles[0]["x"], tiles[0]["y"]], "output": [tiles[2]["x"], tiles[2]["y"]],
+                     "direction": facing, "span": 2}
+                ],
+                "port": {"kind": "item", "item": "iron-plate", "position": tiles[1], "facing": across,
+                         "direction": "output", "role": "tap"},
+            }  # fmt: skip
+            h.bus.state["taps"] = [tap]
+            removed = {at(p) for p in tiles}
+            observed = [e for e in self.built(h, plates=True) if xy(e) not in removed or e["name"] != "transport-belt"]
+            observed += [
+                dict(splitter, unit_number=90000, **pb.tap_priorities(tap)),
+                dict(tap["entities"][1], unit_number=90001, underground_pair_verified=True,
+                     underground_neighbour={"unit_number": 90002}),
+                dict(tap["entities"][2], unit_number=90003, belt_inventory={"iron-plate": 4}),
+                dict(tap["entities"][3], unit_number=90002, underground_pair_verified=True,
+                     underground_neighbour={"unit_number": 90001}),
+            ]  # fmt: skip
+            proof = h.bus.proof(h.obs(extra=observed))
+            self.assertIsNotNone(proof)
+            # Still a real check: copper on the copper trunk past the tap is required.
+            self.assertIsNone(h.bus.proof(h.obs(extra=[
+                dict(e, belt_inventory={"iron-plate": 1}) if e["name"] == "transport-belt"
+                and at(e["position"]) == at(copper["tail"]) else e for e in observed
+            ])))  # fmt: skip
+            # A recorded tap not cut in yet leaves the trunk as planned: the proof does not wait for it.
+            h.bus.state["taps"] = [dict(tap, built=False)]
+            self.assertIsNotNone(h.bus.proof(h.obs(extra=self.built(h, plates=True))))
 
     def test_commission_configures_each_feed_splitter_once_and_proof_requires_the_priorities(self):
         with TemporaryDirectory() as root:

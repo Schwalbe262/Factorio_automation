@@ -264,6 +264,22 @@ def execute(argv=None, services=None):
             except Exception as exc:  # a demand estimate must never break observe
                 obs["bulk_item_demand"] = {}
                 obs["bulk_item_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .production_sources import plate_sources
+
+            try:  # where a new produce row's plates would come from (progression.produce_nodes)
+                plates = sorted(
+                    {
+                        p
+                        for row in obs["bulk_item_demand"].values()
+                        if isinstance(row, dict)
+                        for p in row.get("raw_per_item") or {}
+                    }
+                )
+                board_path = root / "pcb-board.json"
+                board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
+                obs["produce_plate_sources"] = plate_sources(board, plates, world_id=obs.get("world_id"))
+            except Exception as exc:  # a source check must never break observe
+                obs["produce_plate_sources_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .supply_cell import candidates as supply_cell_candidates
 
             try:
@@ -306,6 +322,14 @@ def execute(argv=None, services=None):
                     obs["mine_trunks"] = trunks
             except Exception as exc:  # a growth estimate must never break observe
                 obs["mine_trunks_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .trunk_return_feed import receipt as return_feed_receipt
+
+            try:  # surplus trips vs a return feed on the patch trunk (trunk_return_feed.trunk_return_feed_nodes)
+                feeds = return_feed_receipt(root, obs, services.catalog(root, game))
+                if feeds is not None:
+                    obs["trunk_return_feeds"] = feeds
+            except Exception as exc:  # an estimate must never break observe
+                obs["trunk_return_feeds_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .defense_perimeter import growth_receipt as defense_growth_receipt
 
             try:

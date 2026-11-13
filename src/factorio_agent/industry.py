@@ -171,6 +171,38 @@ def _idle_powered_labs(obs):
     ]
 
 
+def permanent_science_due(root, obs):
+    """Why the temporary science cell must not grow any more because the bus science block takes over, or None.
+
+    Owner rule: build the factory, do not tend the transition. Once the
+    planned bus exists (``planned_main_bus`` succeeded; the bus science block
+    is the next step and fundable from bus taps) or the permanent block is
+    planned (``automation-science.json`` of this world, or an
+    ``automation_science`` job not failed), the cell keeps what it has.
+    """
+    root = Path(root)
+    try:
+        science = json.loads((root / "automation-science.json").read_text(encoding="utf-8"))
+        if isinstance(science, dict) and science.get("world_id") == obs.get("world_id"):
+            return "permanent_science_block_planned"
+    except (OSError, ValueError):
+        pass
+    try:
+        ledger = json.loads((root / "jobs.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(ledger, dict) or ledger.get("world_id") != obs.get("world_id"):
+        return None
+    for job in (ledger.get("jobs") or {}).values():
+        if not isinstance(job, dict):
+            continue
+        if job.get("capability") == "automation_science" and job.get("status") != "failed":
+            return "permanent_science_job_open"
+        if job.get("capability") == "planned_main_bus" and job.get("status") == "succeeded":
+            return "bus_science_fundable"
+    return None
+
+
 def _powered(entity):
     energy = (entity or {}).get("energy")
     return bool(
@@ -1548,7 +1580,7 @@ class BootstrapLogistics:
         not retried for this target. The cell's bound machines, ports and
         plan hash are never changed: lab slots are a separate builder plan.
         """
-        if _idle_powered_labs(obs):
+        if _idle_powered_labs(obs) or permanent_science_due(self.path.parent, obs):
             return None
         decision = self._capacity_decision(obs, plan)
         if not decision or decision.get("lab_extension_blocked"):
@@ -1622,6 +1654,8 @@ class BootstrapLogistics:
         Returns a builder action/status to return now, or None to continue
         with the (possibly grown) saved plan.
         """
+        if permanent_science_due(self.path.parent, obs):  # the bus science block takes over: no transition tending
+            return None
         decision = self._capacity_decision(obs, plan)
         if not decision or decision.get("cell_extension_blocked"):
             return None

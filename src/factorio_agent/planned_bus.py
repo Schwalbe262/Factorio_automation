@@ -371,6 +371,20 @@ def publication(state: dict) -> dict:
 
 
 # ----- controller ----------------------------------------------------------------
+def failure_scalars(detail: dict) -> dict:
+    """Scalar fields of a nested preflight failure: the job ledger keeps only scalars as evidence."""
+    out = {"failed_check": str(detail.get("reason"))[:200]}
+    entity = detail.get("entity")
+    if isinstance(entity, dict):
+        out["failed_entity"] = str(entity.get("name"))
+        if isinstance(entity.get("position"), dict):
+            out["position"] = dict(entity["position"])
+    blockers = detail.get("blockers")
+    if isinstance(blockers, list) and blockers and isinstance(blockers[0], dict):
+        out["first_blocker"] = f"{blockers[0].get('name')}: {blockers[0].get('reason')}"[:200]
+    return out
+
+
 def _splitter_over(live: dict, belt: dict):
     """A live splitter with the belt's direction covering the belt's tile, or None."""
     x, y = xy(belt)
@@ -487,7 +501,12 @@ class PlannedBus:
         pairs += routed["pairs"]
         whole = self.check(self.game, self.builder, obs, entities, ignored_units=anchors)
         if not whole.get("ok"):
-            return {"ok": False, "reason": "planned_bus_whole_preflight_failed", "detail": whole}
+            return {
+                "ok": False,
+                "reason": "planned_bus_whole_preflight_failed",
+                "detail": whole,
+                **failure_scalars(whole),
+            }
         ports_out = trunk_ports(bus, trunks)
         common = dict(
             layout_policy="pcb-planned-main-bus-v1",
@@ -545,7 +564,14 @@ class PlannedBus:
                 metrics.append({"item": feed["item"], **(route.get("route_metrics") or {})})
             if good:
                 return {"ok": True, "entities": es, "pairs": pairs, "metrics": metrics}
-        return {"ok": False, "reason": "planned_bus_feed_route_failed", "failures": failures[-4:]}
+        return {
+            "ok": False,
+            "reason": "planned_bus_feed_route_failed",
+            "failures": failures[-4:],
+            # The job ledger keeps only scalar result fields as evidence (all-1113-2107: three
+            # feed-route blocks with evidence {}, cause unknowable after the run).
+            "route_failures": "; ".join(f"{f['item']}: {f.get('reason')}" for f in failures[-4:])[:400],
+        }
 
     # ----- execution ---------------------------------------------------------------
     def _save(self):
@@ -692,9 +718,17 @@ class PlannedBus:
             or state.get("phase") not in ("commission", "verified")
         ):
             return None
-        plan = effective_plan(state)
+        # Built taps only: a consumer records its tap before it cuts it in, and
+        # until then the trunk belt stays under it (a blocked row's recorded tap
+        # must not hold the bus proof).
+        plan = build_plan(state, state["plan"])
         if not underground_proof(obs, plan):
             return None
+        # A built tap that dives one lane under its branch puts that branch's
+        # belt (another item, crossing) on the dived lane's trunk tile: that tile
+        # is tap hardware now, not trunk (all-1113-2107: 4 of 12 buses waited
+        # 10-15 minutes on the crossing belt of their own produce rows' taps).
+        replaced = {_at(p) for tap in state.get("taps", []) if tap.get("built") for p in tap.get("remove", ())}
         live = {(e["name"], *xy(e)): e for e in obs["entities"]}
         for wanted in plan["entities"]:
             found = live.get((wanted["name"], *xy(wanted)))
@@ -706,7 +740,7 @@ class PlannedBus:
                 found = _splitter_over(live, wanted)
             if found is None or (wanted["name"] in BELTS and found.get("direction") != wanted.get("direction")):
                 return None
-        splitters = wanted_splitters(state)
+        splitters = wanted_splitters(dict(state, taps=[t for t in state.get("taps", []) if t.get("built")]))
         if not all(priorities_match(live.get(("splitter", *xy(s))), wanted) for s, wanted in splitters):
             return None
         bus = Bus.from_dict(state["bus"])
@@ -714,15 +748,19 @@ class PlannedBus:
         evidence = []
         for trunk in state["trunks"]:
             item = trunk["item"]
-            belts = [
-                live[("transport-belt", *_at(row["position"]))]
+            tiles = [
+                _at(row["position"])
                 for row in trunk_segments(bus, lanes[trunk["lane"]], trunk["length"])
-                if ("transport-belt", *_at(row["position"])) in live
+                if _at(row["position"]) not in replaced
             ]
+            if not tiles:
+                return None
+            belts = [live[("transport-belt", *tile)] for tile in tiles if ("transport-belt", *tile) in live]
             contents = [e.get("belt_inventory") or {} for e in belts]
             if any(set(c) - {item} for c in contents):
                 return None
-            tail = live.get(("transport-belt", *_at(trunk["tail"])))
+            # The last trunk tile still a trunk belt (a tap may have replaced the tail tile).
+            tail = live.get(("transport-belt", *tiles[-1]))
             if tail is None or (tail.get("belt_inventory") or {}).get(item, 0) < 1:
                 return None
             evidence.append(

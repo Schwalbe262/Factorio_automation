@@ -179,6 +179,8 @@ class PlateFacts:
     off_bus_measured: float | None = None
     starter_phase: str = ""
     patch_rows: int = 0
+    # part of tap_rate a consumer grows into beyond its declared taps (science growth)
+    growth_tap_rate: float = 0.0
 
 
 def _fund(cost: Mapping[str, float], facts: PlateFacts) -> float:
@@ -440,6 +442,7 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
         "grow": False,
         "demand": {
             "taps_per_minute": round(taps, 2),
+            "growth_taps_per_minute": round(facts.growth_tap_rate, 2),
             "bill_plates": round(bill, 1),
             "horizon_minutes": horizon,
             "per_minute": round(demand, 2),
@@ -647,9 +650,24 @@ def critical_plate_claims(catalog, jobs, observation) -> dict[str, float]:
 
 
 def plate_facts(
-    catalog, plate, bank, bound, mining_banks, stations, jobs, observation, *, claimed=0.0, starter_phase=""
+    catalog,
+    plate,
+    bank,
+    bound,
+    mining_banks,
+    stations,
+    jobs,
+    observation,
+    *,
+    claimed=0.0,
+    starter_phase="",
+    growth_taps=0.0,
 ) -> PlateFacts:
-    """``PlateFacts`` of one district bank from saved state rows and the observe receipt."""
+    """``PlateFacts`` of one district bank from saved state rows and the observe receipt.
+
+    ``growth_taps`` is plate draw a consumer grows into beyond its declared
+    taps (``science_growth.undeclared_plate_draw``); it counts as tap rate.
+    """
     from .progression import MINING_OUTPOST_BUILDS, raw_cost
 
     resource = PLATES[plate]
@@ -701,7 +719,9 @@ def plate_facts(
             and s.get("item") == plate
             and s.get("built", True)
             and not str(s.get("owner") or "").startswith("production_row")
-        ),
+        )
+        + max(0.0, finite_number(growth_taps) or 0.0),
+        growth_tap_rate=max(0.0, finite_number(growth_taps) or 0.0),
         bill=bill,
         furnace_nominal=nominal,
         furnace_each=each,
@@ -792,6 +812,10 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
         claims = critical_plate_claims(catalog, jobs, observation)
     except Exception:  # a claim estimate never breaks the receipt: no claim known
         claims = {}
+    # Science growth beyond its declared taps (built stage, or the growth it decided now) is tap demand.
+    from .science_growth import undeclared_plate_draw
+
+    growth_taps = undeclared_plate_draw(read("automation-science.json"), observation.get("science_growth"))
     facts_by_plate: dict[str, PlateFacts] = {}
     order: list[str | dict] = []
     for plate, resource in PLATES.items():
@@ -816,6 +840,7 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
             observation,
             claimed=claims.get(plate, 0.0),
             starter_phase=_starter_phase(retirement, resource, jobs),
+            growth_taps=growth_taps.get(plate, 0.0),
         )
         order.append(plate)
     funded = _bus_funding(facts_by_plate)

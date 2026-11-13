@@ -21,8 +21,8 @@ import uuid
 from factorio_agent.core.deterministic_character import _identity
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from factorio_agent.errors import CLIError
-from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane
-from factorio_agent.early_start import admission_requires, parked
+from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane, slot_group, slots_added, slots_used
+from factorio_agent.early_start import admission_requires
 from factorio_agent import incidents as incident_rules
 from factorio_agent import actor_client
 
@@ -46,11 +46,17 @@ RETRY_CLEARED_BY = {
         {"planned_main_bus", "main_bus", "automation_science", "smelting_capacity", "produce"}
     ),
 }
-# Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan):
-# their answer changes with the map, not with a job success, so they never run out of
-# retries. Retried when the published facts change (board plans and connections,
-# material sources, site plan, researched technologies), at most every
-# SITE_RETRY_CHANGE_SECONDS, and otherwise every SITE_RETRY_PERIOD_SECONDS.
+# Re-planning blockers (a route, a whole-plan preflight or a site search that found nothing):
+# the world, neighbours and the planning budget change the answer without any job success.
+REPLAN_SUFFIXES = ("_route_failed", "_preflight_failed")
+# Extra quiet-interval retries of such a blocker while no job at all is active.
+IDLE_RETRY_LIMIT = 10
+# Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan) are
+# re-planning blockers too. Past AUTO_RETRY_LIMIT every re-planning blocker is still retried,
+# with no limit, when the published facts change (board plans and connections, material
+# sources, site plan, researched technologies; at most every SITE_RETRY_CHANGE_SECONDS) and
+# otherwise every SITE_RETRY_PERIOD_SECONDS, also while other jobs run (eval-4177156614:
+# brick_production was retried once, then stayed blocked 20+ minutes).
 SITE_RETRY_MARKERS = (
     "_with_complete_connections",
     "no_clean_trunk_corridor",
@@ -62,6 +68,12 @@ SITE_RETRY_MARKERS = (
 SITE_RETRY_CHANGE_SECONDS = 300
 SITE_RETRY_PERIOD_SECONDS = 900
 SITE_RETRY_FACT_FILES = ("pcb-board.json", "material-sources.json", "site-plan.json")
+
+
+def _replannable(reason: str) -> bool:
+    return reason.startswith("no_clear_") or reason.endswith(REPLAN_SUFFIXES) or _site_blocked(reason)
+
+
 QUEUED = ("pending", "ready")
 # Existing nodes in these states absorb a new node with the same capability and parameters.
 DEDUPE_STATUSES = {"pending", "ready", "running", "completed"}
@@ -1547,21 +1559,26 @@ class Supervisor:
         jobs = list(status.get("jobs", {}).values())
         active = _active_keys(jobs)
         busy = {admission_lane(j["capability"], j.get("parameters")) for j in jobs if j["status"] in ACTIVE}
-        # A job parked for research (early_start.parked) keeps its lane but holds no slot.
-        slots = sum(1 for j in jobs if j["status"] in ACTIVE and not parked(j))
-        candidates = [q for q in self.work.ready_nodes() if _lane(q) not in busy]
-        if slots >= MAX_ACTIVE_JOBS or not candidates or self._stop_requested():
+        # A job parked for research (early_start.parked) keeps its lane but holds no slot;
+        # the per-resource outposts share one slot (jobs.slots_used).
+        used = slots_used([j for j in jobs if j["status"] in ACTIVE])
+
+        def fits(node):
+            return len(used) + slots_added(used, node["capability"]) <= MAX_ACTIVE_JOBS
+
+        candidates = [q for q in self.work.ready_nodes() if _lane(q) not in busy and fits(q)]
+        if not candidates or self._stop_requested():
             return active
         tick = self._fresh_tick(actor)
         for node in candidates:
-            if slots >= MAX_ACTIVE_JOBS or self._stop_requested():
+            if self._stop_requested():
                 break
-            if _lane(node) in busy:
+            if _lane(node) in busy or not fits(node):
                 continue
             if self._submit(node, tick):
                 active.append(node["job_key"])
                 busy.add(_lane(node))
-                slots += 1
+                used.add(slot_group(node["capability"], node["job_key"]))
         return active
 
     def _submit(self, node, tick):
@@ -1723,9 +1740,6 @@ class Supervisor:
             reason = str(job.get("reason", ""))
             if _unknown(job) or "rollback" in reason or "deadline" in reason:
                 continue
-            if _site_blocked(reason):
-                retried = self._site_retry(job, reason, context) or retried
-                continue
             cleared_by = RETRY_CLEARED_BY.get(reason)
             succeeded = len(done) if cleared_by is None else sum(c in cleared_by for c in done)
             seen = memory.setdefault(key, {"successes": succeeded, "count": 0, "first_seen": self.clock()})
@@ -1733,7 +1747,30 @@ class Supervisor:
                 # The baseline counts other successes for the new reason: start it afresh.
                 seen["successes"] = succeeded
             seen["cleared_by"] = cleared_by and sorted(cleared_by)
+            quiet = self.clock() - float(seen.get("first_seen", self.clock())) >= AUTO_RETRY_STALL_SECONDS
             if seen["count"] >= AUTO_RETRY_LIMIT:
+                # Nothing else can run (every job terminal): a re-planning blocker is tried again
+                # after each quiet interval, a bounded number of times (all-1113-2107 1834967787,
+                # 3272954496: the bus blocked planned_bus_feed_route_failed, its 3 retries spent in
+                # one minute, and the run did nothing for the last 17 minutes; 978391276 routed its
+                # feeds on the 4th attempt).
+                idle_run = not any(other["status"] in ACTIVE for other in jobs)
+                if not (idle_run and _replannable(reason) and quiet and seen.get("idle", 0) < IDLE_RETRY_LIMIT):
+                    if _replannable(reason):
+                        # Never blocked forever: new facts or the slow period re-plan it.
+                        since = float(seen.get("first_seen", self.clock()))
+                        retried = self._replan_retry(job, reason, context, since) or retried
+                    continue
+                if self._control_command("retry", key):
+                    seen.update(idle=seen.get("idle", 0) + 1, first_seen=self.clock())
+                    self._event(
+                        "auto_retry",
+                        key=key,
+                        capability=job.get("capability"),
+                        blocked_reason=reason[:200],
+                        idle_run=True,
+                    )
+                    retried = True
                 continue
             # A stalled job waited on something (fuel, plates) that upkeep may
             # since have fixed; with every job blocked no success can ever
@@ -1743,7 +1780,7 @@ class Supervisor:
             # the answer without a job success (pace1 seed 2692229611: the district blocked at
             # 19.8 min, found its site on the first retry at 25.0, after the next success).
             stalled_long_enough = (
-                (reason == "objective_progress_stalled" or reason.startswith("no_clear_"))
+                (reason == "objective_progress_stalled" or reason.startswith("no_clear_") or _replannable(reason))
                 # The stall path does not stamp blocked_at_time on the job, so
                 # fall back to when this supervisor first saw it blocked.
                 and self.clock() - float(job.get("blocked_at_time") or seen.get("first_seen", self.clock()))
@@ -1775,13 +1812,13 @@ class Supervisor:
         facts.append(["technologies", len(_technology_names(technologies))])
         return facts
 
-    def _site_retry(self, job, reason, context) -> bool:
-        """Rule-driven retry of a site/connection blocker; records the next condition on its queue node.
+    def _replan_retry(self, job, reason, context, since) -> bool:
+        """A re-planning blocker past AUTO_RETRY_LIMIT; records the next condition on its queue node.
 
         Retry when the facts (``_site_facts``) changed since the last attempt and
         SITE_RETRY_CHANGE_SECONDS passed, or when SITE_RETRY_PERIOD_SECONDS passed
-        anyway. Each retry re-plans (the planner allocates sites afresh), with no
-        attempt limit: a site blocker is never left blocked forever.
+        anyway (``since``: the last counted retry). Each retry re-plans (the planner
+        allocates sites afresh), with no attempt limit: never left blocked forever.
         """
         memory = self.__dict__.setdefault("_site_retries", {})
         key = job["key"]
@@ -1789,7 +1826,6 @@ class Supervisor:
         facts = self._site_facts(context[0])
         seen = memory.get(key)
         if seen is None or seen.get("reason") != reason:
-            since = float(job.get("blocked_at_time") or now)
             seen = memory[key] = {"reason": reason, "facts": facts, "last": since, "count": 0}
         changed = facts != seen["facts"]
         wait = SITE_RETRY_CHANGE_SECONDS if changed else SITE_RETRY_PERIOD_SECONDS
@@ -1797,7 +1833,7 @@ class Supervisor:
         if now - seen["last"] < wait:
             # The stall stays visible: the node says when and on what it is retried.
             plan = {
-                "rule": "site_connection_retry",
+                "rule": "replan_retry",
                 "reason": reason[:200],
                 "attempts": seen["count"],
                 "next_retry_at_time": round(seen["last"] + wait, 1),
@@ -1812,14 +1848,14 @@ class Supervisor:
             return False
         seen.update(facts=facts, last=now, count=seen["count"] + 1)
         if node is not None:
-            node["retry_plan"] = {"rule": "site_connection_retry", "reason": reason[:200], "attempts": seen["count"]}
+            node["retry_plan"] = {"rule": "replan_retry", "reason": reason[:200], "attempts": seen["count"]}
             self.work.save()
         self._event(
             "auto_retry",
             key=key,
             capability=job.get("capability"),
             blocked_reason=reason[:200],
-            rule="site_connection_retry",
+            rule="replan_retry",
             trigger="facts_changed" if changed else "period",
             attempt=seen["count"],
         )
