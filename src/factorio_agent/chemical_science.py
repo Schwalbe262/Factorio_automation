@@ -78,6 +78,30 @@ def chemical_science_rates(catalog, count=2):
     }
 
 
+def count_for_rate(catalog, rate) -> int:
+    """Smallest supported machine count (2..4) whose nameplate covers ``rate`` items/min (4 above)."""
+    for count in (2, 3, 4):
+        if chemical_science_rates(catalog, count)["science_per_minute"] + 1e-9 >= rate:
+            return count
+    return 4
+
+
+def validate_chemical_science(parameters) -> None:
+    """``{}`` (two machines) or ``{"rate_per_minute": (0, 600]}`` (sized by ``count_for_rate``)."""
+    if parameters in (None, {}):
+        return
+    if not isinstance(parameters, dict) or set(parameters) != {"rate_per_minute"}:
+        raise ValueError("takes {} or {rate_per_minute}")
+    rate = parameters["rate_per_minute"]
+    if type(rate) not in (int, float) or not math.isfinite(rate) or not 0 < rate <= 600:
+        raise ValueError("rate_per_minute must be finite in (0, 600]")
+
+
+def growth_slots(core) -> list[list[dict]]:
+    """Reserved in-place slots (``pack_growth.block_view``): one entity group per free machine slot."""
+    return [list(group) for group in core.get("growth_slots") or ()]
+
+
 def chemical_science_core(catalog, x, y, count=2):
     rated = chemical_science_rates(catalog, count)
     if any(type(v) not in (int, float) or not math.isfinite(v) or v % 1 != 0.5 for v in (x, y)):
@@ -132,6 +156,17 @@ def chemical_science_core(catalog, x, y, count=2):
         underground_pairs=[],
         output_access=[entity("transport-belt", x - i, y + 9, 12) for i in (4, 5)],
         extension_slots=[entity("assembling-machine-1", x + 3 + 6 * i, y + 6, recipe=PRODUCT) for i in range(count, 4)],
+        growth_slots=[
+            [
+                entity("assembling-machine-1", x + 3 + 6 * i, y + 6, recipe=PRODUCT),
+                entity("inserter", x + 3 + 6 * i, y + 4),
+                entity("long-handed-inserter", x + 2 + 6 * i, y + 4),
+                entity("inserter", x + 3 + 6 * i, y + 8),
+                entity("small-electric-pole", x + 1 + 6 * i, y + 5),
+                entity("small-electric-pole", x + 5 + 6 * i, y + 8),
+            ]
+            for i in range(count, 4)
+        ],
         mixed_feed_lanes={"left": "engine-unit", "right": "advanced-circuit"},
         layout_policy="blue-science-three-item-headers-v1",
     )
@@ -305,6 +340,7 @@ class ChemicalScience:
         )
         self.path = Path(game.cfg.runtime_dir) / "chemical-science.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        self.count = 2  # pack machines of a new block (count_for_rate of the job's rate_per_minute)
         self.last_proof_failure = None
 
     def _identity(self, obs, value):
@@ -443,7 +479,7 @@ class ChemicalScience:
         if not lab.get("ok"):
             return lab
         try:
-            rated = chemical_science_rates(self.catalog)
+            rated = chemical_science_rates(self.catalog, self.count)
             board = lab["board"]
             red = self.advanced.state["core"]["reserved_area"]
             engine = self.engine.state["core"]["reserved_area"]
@@ -451,7 +487,7 @@ class ChemicalScience:
             x = math.ceil(max(red[1][0], engine[1][0])) + 6.5
             y = math.floor(min(red[0][1], engine[0][1])) + 16.5
             anchors = [(x + dx, y + dy) for dx, dy in ((0, 0), (0, 16), (0, -16), (32, 0), (32, 16), (32, -16))]
-            cores = [chemical_science_core(self.catalog, a, b) for a, b in anchors]
+            cores = [chemical_science_core(self.catalog, a, b, self.count) for a, b in anchors]
             for core in cores:
                 audit = audit_chemical_science_core(core, self.catalog)
                 if not audit["ok"]:

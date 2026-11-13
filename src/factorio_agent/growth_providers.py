@@ -404,7 +404,53 @@ def produce_options(b, observation, state) -> list[dict]:
     ]
 
 
+# ----- fixed-size blocks (advanced circuits): block_growth data ------------------------------------
+def _block_matches(b) -> bool:
+    return b.get("block") == "advanced_circuit_production" or (
+        b.get("item") == "advanced-circuit" and not str(b.get("block") or "").startswith("production_row_")
+    )
+
+
+def block_options(b, observation, state) -> list[dict]:
+    """``block_growth.growth_options`` for the advanced-circuit block (``state["root"]``: runtime dir).
+
+    A built block has reserved slots but no in-place extension: the option is the slot unit as a
+    rebuild, infeasible until the controller extends in place; without a block it is a new block
+    sized by ``rate_per_minute``."""
+    from .block_growth import growth_options as block_growth
+
+    root = state.get("root")
+    rows = [
+        r
+        for r in (block_growth(root, observation.get("world_id")) if root else [])
+        if r["capability"] == "advanced_circuit_production"
+    ]
+    if not rows:
+        return [
+            _option(
+                "blocks",
+                kind="copy",
+                capability="advanced_circuit_production",
+                feasible=False,
+                reason="no built advanced-circuit block in the runtime folder",
+            )
+        ]
+    row = rows[0]
+    return [
+        _option(
+            "blocks",
+            kind="rebuild",
+            capability="advanced_circuit_production",
+            feasible=False,
+            reason=f"{row['slots']} reserved red slot(s); {row['beyond']}",
+            gain_per_minute=row["step_rate"],
+            cost=row["cost"]["items"],
+        )
+    ]
+
+
 PROVIDERS: list[tuple[str, Callable[[Mapping], bool], Callable[..., list]]] = [
+    ("blocks", _block_matches, block_options),
     ("power", _power_matches, power_options),
     ("produce_row", _produce_matches, produce_options),
     ("science", _science_matches, science_options),

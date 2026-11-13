@@ -132,7 +132,17 @@ def advanced_circuit_production_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "advanced_circuit_production")
     if early is not None:
         return early
+    from ..advanced_circuits import count_for_rate
+
+    rate = (parameters or {}).get("rate_per_minute")
+    ex.advanced_circuits.count = count_for_rate(ex.catalog, rate) if rate else 2
     return ex.advanced_circuits.step(obs)
+
+
+def validate_advanced_circuit_production(parameters):
+    from ..advanced_circuits import validate_advanced_circuits
+
+    validate_advanced_circuits(parameters)
 
 
 def advanced_circuit_production_proof(ex, obs, result, parameters):
@@ -209,7 +219,12 @@ register("steel_coal_supply", step=steel_coal_supply_step, proof=steel_coal_supp
 register("brick_production", step=brick_production_step, proof=brick_production_proof)
 register("engine_production", step=engine_production_step, proof=engine_production_proof)
 register("engine_capacity", step=engine_capacity_step, proof=engine_capacity_proof, validate=validate_engine_capacity)
-register("advanced_circuit_production", step=advanced_circuit_production_step, proof=advanced_circuit_production_proof)
+register(
+    "advanced_circuit_production",
+    step=advanced_circuit_production_step,
+    proof=advanced_circuit_production_proof,
+    validate=validate_advanced_circuit_production,
+)
 register("produce", step=produce_step, proof=produce_proof, validate=validate_produce)
 register(
     "construction_mall",

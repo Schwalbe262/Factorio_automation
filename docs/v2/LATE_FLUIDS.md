@@ -75,8 +75,16 @@ that item (`rocket_produce_engine_unit_belt`). A belt row is its own instance
 science-growth / bottleneck machinery (a `growth_options` provider): each `produce` row
 (including fluid and lane-merge rows) offers `in_place` growth while reserved slots remain (one
 machine more: `step_rate`, `cost.items`, and the `produce` request at the higher rate as
-`action`), else `rebuild`; `advanced_circuit_production` and `chemical_science` are `fixed`
-(`limit: no_rate_parameter`) until their controllers take a rate. The rocket bill's `bus` rows
+`action`), else `rebuild`. `advanced_circuit_production` and `chemical_science` take
+`{"rate_per_minute"}` (validate; `count_for_rate`: two to four machines for a new block; the
+roadmap's `chemical_science` step is rate-sized from `research_capacity` like red/green, default
+5/min) and publish `core.growth_slots` (one entity group per reserved machine slot: machine,
+arms, poles, belts), the `pack_growth.block_view` contract. A built block reports kind
+`rebuild` (`limit: no_in_place_extension`): neither controller extends in place yet.
+`growth_providers` has a `blocks` provider for the advanced-circuit bottleneck
+(`state["root"]` = the runtime folder). For blue packs `pack_growth` needs
+`PACK_STATES["chemical-science-pack"] = "chemical-science.json"` (the state has `plan`,
+`core.growth_slots`) and an in-place extension in `ChemicalScience` before a slot can be built. The rocket bill's `bus` rows
 declare lanes by demand (`lanes_needed`, `lanes_short` against the site plan's `lane_order`,
 `taps` per consuming recipe); the site plan's lane order itself is unchanged.
 

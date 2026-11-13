@@ -315,7 +315,13 @@ ROADMAP: tuple[Step, ...] = (
         {"product": "sulfur"},
         after=("research_sulfur_processing", "gas_distribution", "water_distribution"),
     ),
-    Step("chemical_science", "chemical_science", {}, after=("research_chemical_science_pack",)),
+    # Two machines by default (5/min); research_capacity's recommendation may size it (2-4 machines).
+    Step(
+        "chemical_science",
+        "chemical_science",
+        {"rate_per_minute": 5},
+        after=("research_chemical_science_pack",),
+    ),
 )
 
 
@@ -334,6 +340,7 @@ def _names(value) -> set[str]:
 RATE_SIZED_CAPABILITIES = {
     "automation_science": "automation-science-pack",
     "logistic_science": "logistic-science-pack",
+    "chemical_science": "chemical-science-pack",
 }
 
 
