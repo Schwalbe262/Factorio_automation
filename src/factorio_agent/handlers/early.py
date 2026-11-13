@@ -21,6 +21,17 @@ def starter_step(ex, obs, parameters):
         extra = capacity.step(obs, {"resource": "iron-ore", "cells": STARTER_IRON_CELLS})
         if isinstance(extra, dict) and extra.get("type"):
             return extra
+    return _precraft_science(ex, obs, result)
+
+
+def _precraft_science(ex, obs, result):
+    """While ``result`` is only a wait, hand-craft a small batch of starter science packs (``precraft.py``)."""
+    if isinstance(result, dict) and not result.get("type") and result.get("status") == "waiting":
+        from ..precraft import starter_science
+
+        action = starter_science(ex.catalog, obs)
+        if action is not None:
+            return action
     return result
 
 
@@ -46,7 +57,7 @@ def power_step(ex, obs, parameters):
     result = ex.builder.ensure_power(obs)
     from ..power_coal_feed import publish_planned_feed  # reserved, unbuilt coal feed on the board
 
-    return publish_planned_feed(ex, obs) or result
+    return publish_planned_feed(ex, obs) or _precraft_science(ex, obs, result)
 
 
 def power_coal_feed_step(ex, obs, parameters):

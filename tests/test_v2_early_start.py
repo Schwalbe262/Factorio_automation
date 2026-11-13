@@ -439,6 +439,7 @@ class StarterSecondIronCellTests(unittest.TestCase):
 
         build = {"type": "build", "name": "burner-mining-drill"}
         ex = SimpleNamespace(
+            catalog=None,
             builder=Mock(),
             starter_upkeep=Mock(return_value={"status": "waiting", "reason": "waiting for unlock"}),
             capacity=Mock(step=Mock(return_value=build)),
