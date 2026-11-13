@@ -53,6 +53,9 @@ MAX_PAIRS = 8
 MAX_TILES = 4096
 MAX_CANDIDATES = 12
 PLANNING_SECONDS = 20
+# The surveyed area around the patch seed holds no tile of the resource (uncharted, or the seed is wrong).
+SURVEY_EMPTY = "mining_patch_survey_has_no_resource"
+NO_COMPLIANT_BANK = "no_policy_compliant_paired_bank_with_growth_and_power"
 
 
 def _payload(v):
@@ -384,6 +387,11 @@ def survey_patch(game, obs, catalog, resource, area, *, maximum_tiles=MAX_TILES)
     result = game.query("local x=helpers.json_to_table(" + _payload(args) + ");" + PATCH_SURVEY_LUA)
     if not result.get("ok"):
         return result
+    if result.get("tiles") == {}:
+        # An empty Lua table arrives as a JSON object. Seed 3442106081 (fleet all-1113-2155): the
+        # observed iron seed lay on an uncharted far patch, every survey came back empty and the
+        # bank blocked as a "changed receipt" for good. Empty is an answer about the area.
+        result["tiles"] = []
     if (
         result.get("world_id") != obs["world_id"]
         or not isinstance(result.get("tiles"), list)
@@ -411,6 +419,14 @@ def survey_patch(game, obs, catalog, resource, area, *, maximum_tiles=MAX_TILES)
         return {"ok": False, "reason": "mining_patch_native_rates_invalid"}
     if result.get("truncated"):
         return {"ok": False, "reason": "mining_patch_tile_budget_exceeded", "maximum_tiles": maximum_tiles}
+    if not any(t.get("name") == resource for t in result["tiles"]):
+        return {
+            "ok": False,
+            "reason": SURVEY_EMPTY,
+            "area": deepcopy(area),
+            "charted_chunks": result.get("charted_chunks"),
+            "tiles": len(result["tiles"]),
+        }
     result["catalog_fingerprint"] = catalog.fingerprint
     result["resource"] = resource
     return result
@@ -513,8 +529,11 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
         """On-ore exit cells plus the distance to the corridor start, or None if unreachable."""
         port = core["ports"][0]
         cells = _exit_cells(tiles, port)
-        # The native exit starts on the bank's own ore and must leave it in bounds.
-        if not 1 <= cells <= MAX_EXIT_CELLS:
+        # The native exit starts in the bank's own footprint and must leave the ore in bounds. A port
+        # already off the ore (0: a bank at the patch edge, the best case) needs no exit belt; it used
+        # to be dropped here (seed 4278523554, fleet all-1113-2155: a 217-tile coal patch lost one
+        # of its few sites this way).
+        if not 0 <= cells <= MAX_EXIT_CELLS:
             return None
         x, y = frame.point(port["position"]["x"] + cells, port["position"]["y"])
         tx, ty = site_exit["corridor_start"]
@@ -1104,6 +1123,45 @@ def _adopt_growth_poles(entities, future) -> None:
             e.update({k: slot[k] for k in ("mining_resource", "mining_footprint") if k in slot})
 
 
+def _relaxed_attempts(snapshot, selected, sites, count, reservations, site_exit, policy, grid=None):
+    """``(sites, policy, relaxed)`` to evaluate in order: the planned sites, then relaxed rows.
+
+    A patch is mined whenever a bank fits (fleet all-1113-2155: a 217-tile coal patch between
+    an iron and a copper patch had no site with a full row and a growth pair, the bank blocked
+    and the run died). Relaxations, cheapest loss first, each only reached when nothing before
+    it gave a bank: no reserved growth pair (``minimum_growth_pairs`` 0: growth then comes
+    from a connected bank), then a single pair (fewer drills now, the rate is re-measured and
+    the outpost adds banks). Each is searched on the patch grid's lattice first (its shift was
+    chosen to cover this patch; the grid's own sites start at a row's edge-most column, which on a
+    ragged edge is often too thin for a full pair), then on the planned one. A caller's explicit
+    ``policy`` is never relaxed.
+    """
+    yield sites, selected, None
+    if policy is not None:
+        return
+    pairs = math.ceil(count / 2)
+    steps = []
+    if selected["minimum_growth_pairs"] > 0:
+        steps.append(("no_growth_pair", pairs))
+    if pairs > 1:
+        steps.append(("single_pair_no_growth", 1))
+    origins = [selected["grid_origin"]]
+    if grid is not None and grid.get("origin") and grid["origin"] != selected["grid_origin"]:
+        origins.insert(0, grid["origin"])
+    for label, wanted in steps:
+        for origin in origins:
+            relaxed = make_policy(
+                selected["world_id"],
+                selected["catalog_fingerprint"],
+                selected["resource"],
+                flow=selected["flow"],
+                grid_origin=origin,
+                minimum_growth_pairs=0,
+                site_oriented=selected.get("orientation_source") == "site-plan",
+            )
+            yield candidate_sites(snapshot, relaxed, wanted, reservations, site_exit=site_exit), relaxed, label
+
+
 def prepare_new_bank(
     game,
     builder,
@@ -1213,143 +1271,151 @@ def prepare_new_bank(
         if len(product) != 1 or product[0]["name"] != resource:
             raise ValueError("one deterministic same-item mining product required")
         base = snapshot["native"]["mining_speed"] * 60 / snapshot["native"]["mining_time"] * _yield(product[0])
-        for candidate in sites:
-            core = candidate["plan"]
-            future = candidate["future_plan"]
-            pairs = core["pair_count"]
-            check = preflight(planning, builder, obs, future["entities"])
-            if not check.get("ok"):
-                failures.append(check.get("reason"))
-                continue
-            exit_plan = plan_offore_exit(planning, builder, obs, core, future, reservations)
-            if not exit_plan.get("ok"):
-                failures.append(exit_plan.get("reason"))
-                continue
-            core = dict(
-                core,
-                entities=exit_plan["entities"],
-                ports=[exit_plan["port"]],
-                collector_port=exit_plan["collector_port"],
-                collector_connection=[
-                    e
-                    for e in exit_plan["entities"]
-                    if _signature(e) not in {_signature(v) for v in candidate["plan"]["entities"]}
-                ],
-            )
-            bank = dict(
-                plan=core, reserved_pair_slots=candidate["reserved_pair_slots"], output_resource_free_verified=True
-            )
-            contract = layout_contract(bank, selected)
-            # Attach power on the fixed outlet edge and forbid future drills/belts.
-            reserve = [e for e in future["entities"] if e["name"] != "small-electric-pole"]
-            reserve = merge_entities(reserve, [e for e in core["entities"] if e["name"] == "transport-belt"])
-            facing = exit_plan["port"]["facing"]
-            reserve += [entity("transport-belt", p["x"], p["y"], facing) for p in contract["output_access"]]
-            slots = [dict(x=x, y=y) for x, y in _future_poles(future)]
-            reserve += _reserved_tiles(future["mining_footprint"], contract["fixed_power_port"], slots)
-            bridge = power_connection(planning, builder, obs, contract["fixed_power_port"], reserve)
-            if not bridge.get("ok"):
-                failures.append(bridge.get("reason"))
-                continue
-            _adopt_growth_poles(bridge["entities"], future)
-            es = merge_entities(core["entities"], bridge["entities"])
-            future_with_power = merge_entities(
-                future["entities"], core["entities"], bridge["entities"], exit_plan["output_access"]
-            )
-            full = preflight(planning, builder, obs, future_with_power)
-            if not full.get("ok"):
-                failures.append(full.get("reason"))
-                continue
-            clash = hardware_conflicts(builder, future_with_power, planned) if planned else []
-            if clash:
-                failures.append("bank_meets_planned_hardware_of:" + str(clash[0]["block"]))
-                continue
-            live_resources = resource_survey(planning, core)
-            if not live_resources.get("ok"):
-                failures.append(live_resources.get("reason"))
-                continue
-            extra = {k: v for k, v in core.items() if k not in ("ok", "reason", "entities", "ports", "required_items")}
-            # Clearance belongs to current construction only; reserve future trees without mining them early.
-            actual = preflight(planning, builder, obs, es)
-            if not actual.get("ok"):
-                failures.append(actual.get("reason"))
-                continue
-            profile = capacity_budget(
-                base,
-                pairs,
-                pairs,
-                belt_speed=snapshot["native"]["belt_speed"],
-                force_productivity_bonus=snapshot["native"]["force_productivity_bonus"],
-            )
-            plan = _plan(
-                es,
-                core["ports"],
-                **extra,
-                clear_obstacles=actual["clear_obstacles"],
-                clearance_world_id=obs["world_id"],
-            )
-            area = deepcopy(future["mining_footprint"])
-            outside = set()
-            for p in exit_plan["path"] + [e["position"] for e in exit_plan["output_access"]]:
-                for axis, k in enumerate(("x", "y")):
-                    area[0][axis] = min(area[0][axis], p[k] - 0.5)
-                    area[1][axis] = max(area[1][axis], p[k] + 0.5)
-                if not overlap(
-                    [[p["x"] - 0.49, p["y"] - 0.49], [p["x"] + 0.49, p["y"] + 0.49]], future["mining_footprint"]
-                ):
-                    outside.add((p["x"], p["y"]))
-            # The reservation is the row pair's footprint plus its exit and output access, not their box.
-            rects = [deepcopy(future["mining_footprint"])] + tile_rects(outside)
-            met = [name for name, other in registered if any(overlap(r, other) for r in rects)]
-            if met:
-                failures.append("bank_reserved_area_meets_registered_block:" + str(met[0]))
-                continue
-            plan.update(
-                reserved_rects=deepcopy(rects),
-                mining_reserved_area=deepcopy(future["mining_footprint"]),
-                layout_contract=deepcopy(contract),
-                flow_contract={
-                    "material_flow": selected["flow"],
-                    "column_growth": selected["growth"],
-                    "field_growth": selected["field_growth"],
-                },
-            )
-            if site_exit is not None:
-                plan["site_exit"] = dict(deepcopy(site_exit), exit_position=deepcopy(exit_plan["port"]["position"]))
-            return dict(
-                ok=True,
-                world_id=obs["world_id"],
-                catalog_fingerprint=catalog.fingerprint,
-                plan=plan,
-                ready=False,
-                reserved_pair_slots=candidate["reserved_pair_slots"],
-                reserved_area=area,
-                reserved_rects=rects,
-                **({"patch_frame": deepcopy(grid["frame_rects"])} if grid and grid.get("frame_rects") else {}),
-                mining_reserved_area=future["mining_footprint"],
-                nominal_rate_per_minute=profile["collector_ceiling_per_minute"],
-                remaining_resource_survey=live_resources["unique_remaining_resource"],
-                wire_hops=bridge["wire_hops"],
-                layout_contract=contract,
-                capacity_profile=profile,
-                **({"patch_grid": grid_summary(grid) | {"fallback": grid.get("fallback")}} if grid else {}),
-                patch_diagnostic=dict(
-                    tick=snapshot["tick"],
-                    unique_resource_tiles=candidate["unique_resource_tiles"],
-                    unique_resource_amount=candidate["unique_resource_amount"],
-                    flow=selected["flow"],
-                    growth=selected["growth"],
-                    candidate_count=len(sites),
-                    native_queries=planning.queries,
-                    faces_neighbour=bool(candidate.get("faces_neighbour")),
-                    **({"site_score": list(candidate["score"])} if site_exit is not None else {}),
-                ),
-            )
+        counts = []
+        attempts = _relaxed_attempts(snapshot, selected, sites, count, reservations, site_exit, policy, grid)
+        for sites, selected, relaxed in attempts:
+            counts.append({"relaxed": relaxed, "candidates": len(sites)} if relaxed else {"candidates": len(sites)})
+            for candidate in sites:
+                core = candidate["plan"]
+                future = candidate["future_plan"]
+                pairs = core["pair_count"]
+                check = preflight(planning, builder, obs, future["entities"])
+                if not check.get("ok"):
+                    failures.append(check.get("reason"))
+                    continue
+                exit_plan = plan_offore_exit(planning, builder, obs, core, future, reservations)
+                if not exit_plan.get("ok"):
+                    failures.append(exit_plan.get("reason"))
+                    continue
+                core = dict(
+                    core,
+                    entities=exit_plan["entities"],
+                    ports=[exit_plan["port"]],
+                    collector_port=exit_plan["collector_port"],
+                    collector_connection=[
+                        e
+                        for e in exit_plan["entities"]
+                        if _signature(e) not in {_signature(v) for v in candidate["plan"]["entities"]}
+                    ],
+                )
+                bank = dict(
+                    plan=core, reserved_pair_slots=candidate["reserved_pair_slots"], output_resource_free_verified=True
+                )
+                contract = layout_contract(bank, selected)
+                # Attach power on the fixed outlet edge and forbid future drills/belts.
+                reserve = [e for e in future["entities"] if e["name"] != "small-electric-pole"]
+                reserve = merge_entities(reserve, [e for e in core["entities"] if e["name"] == "transport-belt"])
+                facing = exit_plan["port"]["facing"]
+                reserve += [entity("transport-belt", p["x"], p["y"], facing) for p in contract["output_access"]]
+                slots = [dict(x=x, y=y) for x, y in _future_poles(future)]
+                reserve += _reserved_tiles(future["mining_footprint"], contract["fixed_power_port"], slots)
+                bridge = power_connection(planning, builder, obs, contract["fixed_power_port"], reserve)
+                if not bridge.get("ok"):
+                    failures.append(bridge.get("reason"))
+                    continue
+                _adopt_growth_poles(bridge["entities"], future)
+                es = merge_entities(core["entities"], bridge["entities"])
+                future_with_power = merge_entities(
+                    future["entities"], core["entities"], bridge["entities"], exit_plan["output_access"]
+                )
+                full = preflight(planning, builder, obs, future_with_power)
+                if not full.get("ok"):
+                    failures.append(full.get("reason"))
+                    continue
+                clash = hardware_conflicts(builder, future_with_power, planned) if planned else []
+                if clash:
+                    failures.append("bank_meets_planned_hardware_of:" + str(clash[0]["block"]))
+                    continue
+                live_resources = resource_survey(planning, core)
+                if not live_resources.get("ok"):
+                    failures.append(live_resources.get("reason"))
+                    continue
+                extra = {
+                    k: v for k, v in core.items() if k not in ("ok", "reason", "entities", "ports", "required_items")
+                }
+                # Clearance belongs to current construction only; reserve future trees without mining them early.
+                actual = preflight(planning, builder, obs, es)
+                if not actual.get("ok"):
+                    failures.append(actual.get("reason"))
+                    continue
+                profile = capacity_budget(
+                    base,
+                    pairs,
+                    pairs,
+                    belt_speed=snapshot["native"]["belt_speed"],
+                    force_productivity_bonus=snapshot["native"]["force_productivity_bonus"],
+                )
+                plan = _plan(
+                    es,
+                    core["ports"],
+                    **extra,
+                    clear_obstacles=actual["clear_obstacles"],
+                    clearance_world_id=obs["world_id"],
+                )
+                area = deepcopy(future["mining_footprint"])
+                outside = set()
+                for p in exit_plan["path"] + [e["position"] for e in exit_plan["output_access"]]:
+                    for axis, k in enumerate(("x", "y")):
+                        area[0][axis] = min(area[0][axis], p[k] - 0.5)
+                        area[1][axis] = max(area[1][axis], p[k] + 0.5)
+                    if not overlap(
+                        [[p["x"] - 0.49, p["y"] - 0.49], [p["x"] + 0.49, p["y"] + 0.49]], future["mining_footprint"]
+                    ):
+                        outside.add((p["x"], p["y"]))
+                # The reservation is the row pair's footprint plus its exit and output access, not their box.
+                rects = [deepcopy(future["mining_footprint"])] + tile_rects(outside)
+                met = [name for name, other in registered if any(overlap(r, other) for r in rects)]
+                if met:
+                    failures.append("bank_reserved_area_meets_registered_block:" + str(met[0]))
+                    continue
+                plan.update(
+                    reserved_rects=deepcopy(rects),
+                    mining_reserved_area=deepcopy(future["mining_footprint"]),
+                    layout_contract=deepcopy(contract),
+                    flow_contract={
+                        "material_flow": selected["flow"],
+                        "column_growth": selected["growth"],
+                        "field_growth": selected["field_growth"],
+                    },
+                )
+                if site_exit is not None:
+                    plan["site_exit"] = dict(deepcopy(site_exit), exit_position=deepcopy(exit_plan["port"]["position"]))
+                return dict(
+                    ok=True,
+                    world_id=obs["world_id"],
+                    catalog_fingerprint=catalog.fingerprint,
+                    plan=plan,
+                    ready=False,
+                    reserved_pair_slots=candidate["reserved_pair_slots"],
+                    reserved_area=area,
+                    reserved_rects=rects,
+                    **({"patch_frame": deepcopy(grid["frame_rects"])} if grid and grid.get("frame_rects") else {}),
+                    mining_reserved_area=future["mining_footprint"],
+                    nominal_rate_per_minute=profile["collector_ceiling_per_minute"],
+                    remaining_resource_survey=live_resources["unique_remaining_resource"],
+                    wire_hops=bridge["wire_hops"],
+                    layout_contract=contract,
+                    capacity_profile=profile,
+                    **({"patch_grid": grid_summary(grid) | {"fallback": grid.get("fallback")}} if grid else {}),
+                    patch_diagnostic=dict(
+                        tick=snapshot["tick"],
+                        unique_resource_tiles=candidate["unique_resource_tiles"],
+                        unique_resource_amount=candidate["unique_resource_amount"],
+                        flow=selected["flow"],
+                        growth=selected["growth"],
+                        candidate_count=len(sites),
+                        **({"relaxed": relaxed} if relaxed else {}),
+                        native_queries=planning.queries,
+                        faces_neighbour=bool(candidate.get("faces_neighbour")),
+                        **({"site_score": list(candidate["score"])} if site_exit is not None else {}),
+                    ),
+                )
         return {
             "ok": False,
-            "reason": "no_policy_compliant_paired_bank_with_growth_and_power",
-            "candidate_count": len(sites),
+            "reason": NO_COMPLIANT_BANK,
+            "candidate_count": sum(row["candidates"] for row in counts),
             "candidate_failures": failures[-8:],
+            "attempts": counts,
             **({"mixed_ore_zone": mixed_record} if mixed_record else {}),
         }
     except _BudgetExceeded as exc:

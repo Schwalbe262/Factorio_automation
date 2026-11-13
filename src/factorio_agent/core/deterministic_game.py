@@ -543,11 +543,17 @@ local enabled={}
 for name,r in pairs(f.recipes) do if r.enabled then enabled[name]=true end end
 local resources={}
 for _,name in ipairs({'iron-ore','copper-ore','coal','stone','crude-oil'}) do
- local nearest=s.find_entities_filtered{position={0,0},radius="""
-            + str(float(radius))
-            + """,name=name,limit=2000}
  local best=nil;local dist=math.huge
- for _,e in pairs(nearest) do local ds=e.position.x^2+e.position.y^2;if ds<dist then best=e;dist=ds end end
+ -- Growing rings: a capped search over the whole radius returns an arbitrary 2000 tiles, and with
+ -- more ore than that the "nearest" can lie on a far, uncharted patch (seed 3442106081).
+ for _,r in ipairs({"""
+            + ",".join(str(float(r)) for r in sorted({min(r, float(radius)) for r in (48, 96, 192, float(radius))}))
+            + """}) do
+  for _,e in pairs(s.find_entities_filtered{position={0,0},radius=r,name=name,limit=2000}) do
+   local ds=e.position.x^2+e.position.y^2;if ds<dist then best=e;dist=ds end
+  end
+  if best then break end
+ end
  if best then resources[name]={position=pos(best.position),amount=best.amount} end
 end
 local stats=f.get_item_production_statistics(s)

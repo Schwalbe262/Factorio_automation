@@ -14,7 +14,17 @@ from .power_grid import plan_connection, replan_power_bridge
 from .transport import VECTORS, xy, plan_connection as belt_connection, underground_proof
 from .planning import overlap, preflight
 from .resource_policy import mark_mining_core, mining_reservations
-from .mining_site import alternative_exits, guide_tuple, other_patches, plan_zone_areas, site_exit
+from .mining_site import (
+    alternative_exits,
+    guide_tuple,
+    other_patches,
+    patch_exits,
+    plan_zone_areas,
+    planned_patch,
+    seed_in_zone,
+    site_exit,
+)
+from .mining_layout_policy import SURVEY_EMPTY
 from .mining_border import block_rects, neighbour_reservations
 
 
@@ -59,6 +69,74 @@ def bridge_poles(bank):
         for e in bank["plan"]["entities"]
         if e["name"] == "small-electric-pole" and "mining_resource" not in e and e["position"] != port
     ]
+
+
+def _reseeded(obs, resource, centroid):
+    """``obs`` with the patch seed of ``resource`` moved to ``centroid`` (the survey is centred on it)."""
+    x, y = centroid
+    row = dict((obs.get("resources") or {}).get(resource) or {}, position={"x": x, "y": y})
+    return dict(obs, resources=dict(obs.get("resources") or {}, **{resource: row}))
+
+
+def _survey_reason(result) -> bool:
+    """True when ``result`` failed on the patch survey itself (every side reads the same area)."""
+    return result.get("reason") in (
+        SURVEY_EMPTY,
+        "mining_patch_native_receipt_changed",
+        "mining_patch_tile_budget_exceeded",
+    )
+
+
+def _attempt(patch, side, result) -> dict:
+    """One compact evidence row of a bank planning attempt."""
+    row = {"patch": patch or "seed", "side": side, "reason": result.get("reason") if not result.get("ok") else "ok"}
+    if not result.get("ok"):
+        row["candidates"] = result.get("candidate_count", 0)
+        failures = [f for f in result.get("candidate_failures") or [] if f]
+        if failures:
+            row["failures"] = failures[-3:]
+        if result.get("attempts"):
+            row["relaxations"] = [a.get("relaxed") or "planned" for a in result["attempts"]]
+    return row
+
+
+def _needs(trail) -> str:
+    """What would have to change for a bank to fit, derived from the attempts (a retry condition).
+
+    * ``patch_survey``: no attempt could read the patch (uncharted or empty around the seed);
+    * ``another_patch_or_smaller_row``: no side of any tried patch had a single anchor whose drill
+      areas hold only this ore with an off-ore exit, even relaxed (patch geometry);
+    * ``registered_block_moved:<name>``: candidates met another block's reservation;
+    * ``planned_hardware_moved:<name>``: candidates met another plan's unbuilt hardware;
+    * ``power_bridge``: candidates fit but no pole chain reached them;
+    * ``exit_path``: candidates fit but no bounded exit left the ore;
+    * ``site_preflight``: candidates fit but the live preflight refused them (hardware, water).
+    """
+    rows = [r for r in trail if isinstance(r, dict) and "reason" in r]
+    if rows and all(r["reason"] in (SURVEY_EMPTY, "mining_patch_native_receipt_changed") for r in rows):
+        return "patch_survey"
+    failures = [f for r in rows for f in r.get("failures", [])]
+    for prefix, label in (
+        ("bank_reserved_area_meets_registered_block:", "registered_block_moved:"),
+        ("bank_meets_planned_hardware_of:", "planned_hardware_moved:"),
+    ):
+        hit = next((f for f in failures if f.startswith(prefix)), None)
+        if hit:
+            return label + hit[len(prefix) :]
+    if any("pole" in f or "power" in f for f in failures):
+        return "power_bridge"
+    if any("exit" in f for f in failures):
+        return "exit_path"
+    if failures:
+        return "site_preflight"
+    return "another_patch_or_smaller_row"
+
+
+def _with_evidence(failure, trail):
+    """``failure`` with the attempt trail (last 10) and ``needs``."""
+    if not trail:
+        return failure
+    return dict(failure, attempts=trail[-10:], needs=_needs(trail))
 
 
 def validate_parameters(parameters):
@@ -210,13 +288,14 @@ class MiningOutposts:
           instance; a bank saved but not yet published counts too);
         * ``planned``: ``board.planned_unbuilt_hardware`` tiles of those blocks,
           of every saved bank's plan (bridge poles outside its reserved area
-          included) and of pending starter cells (``board.pending_starter_cells``),
-          within ``PLANNED_TILE_REACH`` of the patch seed;
+          included) and of the plans no board block holds (pending starter
+          cells, the builder's power / coal feed, electric coal's poles:
+          ``board.unboarded_plans``), within ``PLANNED_TILE_REACH`` of the patch seed;
         * ``tile_areas``: those tiles as one-tile areas, so the site search and
           the exit search treat them like reservations (the coal bank's exit
           and output access ran over the reserved feed belt, seed 2005199778).
         """
-        from .board import _Footprints, pending_starter_cells, planned_unbuilt_hardware
+        from .board import _Footprints, planned_unbuilt_hardware, unboarded_plans
 
         blocks = {k: v for k, v in (board.get("blocks") or {}).items() if isinstance(v, dict)}
         registered = [(k, r) for k, v in sorted(blocks.items()) for r in block_rects(v)]
@@ -226,7 +305,7 @@ class MiningOutposts:
             entities += list((bank.get("pending_extension") or {}).get("plan", {}).get("entities", []))
             blocks[name] = {"entities": entities}
             registered += [(name, r) for r in block_rects(bank)]
-        blocks.update(pending_starter_cells(self.path.parent, obs))
+        blocks.update(unboarded_plans(self.path.parent, obs))
         planned = planned_unbuilt_hardware(_Footprints(), obs, blocks)
         known = (obs.get("resources", {}).get(resource) or {}).get("position")
         if isinstance(known, dict) and all(isinstance(known.get(k), (int, float)) for k in ("x", "y")):
@@ -246,6 +325,75 @@ class MiningOutposts:
         board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
         if board and board.get("world_id") != obs["world_id"]:
             return {"ok": False, "reason": "mining_planning_board_world_changed"}
+        site = getattr(self, "site", None)
+        exit_record = site_exit(site, obs.get("world_id"), resource)
+        trail = []  # every planning attempt of this call: the failure evidence
+        seed = ((obs.get("resources") or {}).get(resource) or {}).get("position")
+        if exit_record is not None and isinstance(seed, dict) and not seed_in_zone(exit_record, seed):
+            # The observed nearest ore is not the plan's patch (the observation's nearest tile is the
+            # nearest of a capped search; or the plan dropped a near patch whose zone met another
+            # resource's zone). Seeds 3442106081 and 1541632234, fleet all-1113-2155.
+            planned = planned_patch(site, obs.get("world_id"), resource)
+            if planned is None or planned["distance"] > MAX_OTHER_PATCH_DISTANCE:
+                failure = {
+                    "ok": False,
+                    "reason": NO_COMPLIANT_BANK,
+                    "candidate_count": 0,
+                    "candidate_failures": [],
+                    "planned_patch_skipped": {
+                        "distance": (planned or {}).get("distance"),
+                        "limit": MAX_OTHER_PATCH_DISTANCE,
+                        "seed": [seed["x"], seed["y"]],
+                    },
+                }
+                reservations, options = self._planning_inputs(obs, board, resource, extra_reservations)
+                return self._other_patch(obs, resource, count, reservations, options, failure, exit_record, trail)
+            obs = _reseeded(obs, resource, planned["centroid"])
+            trail.append({"reseeded": [round(c, 1) for c in planned["centroid"]], "from": [seed["x"], seed["y"]]})
+        reservations, options = self._planning_inputs(obs, board, resource, extra_reservations)
+        if exit_record is None:
+            result = prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, **options)
+            trail.append(_attempt(None, None, result))
+            return (
+                result
+                if result.get("ok")
+                else self._other_patch(obs, resource, count, reservations, options, result, None, trail)
+            )
+        result = prepare_new_bank(
+            self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record, **options
+        )
+        trail.append(_attempt(None, exit_record["side"], result))
+        if result.get("ok") and (result.get("patch_diagnostic") or {}).get("faces_neighbour") and exit_record:
+            # The planned edge faces another resource's patch: take another side whose port does not.
+            for alternative in alternative_exits(exit_record):
+                other = prepare_new_bank(
+                    self.game, self.builder, obs, resource, count, reservations, site_exit=alternative, **options
+                )
+                if other.get("ok") and not other["patch_diagnostic"].get("faces_neighbour"):
+                    other["patch_diagnostic"]["edge_turned_from_neighbour"] = exit_record["side"]
+                    return other
+            return result
+        if result.get("ok"):
+            return result
+        # The planned side had no usable site; try the zone's other sides
+        # before giving up, nearest to the consumer first.
+        tried = [exit_record["side"]]
+        for alternative in [] if _survey_reason(result) else alternative_exits(exit_record):
+            tried.append(alternative["side"])
+            other = prepare_new_bank(
+                self.game, self.builder, obs, resource, count, reservations, site_exit=alternative, **options
+            )
+            trail.append(_attempt(None, alternative["side"], other))
+            if other.get("ok"):
+                return other
+            if _survey_reason(other):
+                result = other  # the survey answers for every side: no use asking again
+                break
+        failure = dict(result, exit_sides_tried=tried)
+        return self._other_patch(obs, resource, count, reservations, options, failure, exit_record, trail)
+
+    def _planning_inputs(self, obs, board, resource, extra_reservations=()):
+        """``(reservations, options)`` for :func:`prepare_new_bank` around the obs patch seed."""
         # Reservation rects (not bounding boxes) of every block and bank, plus other resources' patch frames.
         reservations = neighbour_reservations(board.get("blocks", {}).values(), (), resource)
         reservations += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
@@ -261,40 +409,9 @@ class MiningOutposts:
         policy = ((anchor or {}).get("layout_contract") or {}).get("policy") or {}
         if policy.get("grid_origin") and policy.get("flow"):
             options["grid_origin"] = {"origin": policy["grid_origin"], "flow": policy["flow"]}
-        exit_record = site_exit(getattr(self, "site", None), obs.get("world_id"), resource)
-        if exit_record is None:
-            result = prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, **options)
-            return (
-                result if result.get("ok") else self._other_patch(obs, resource, count, reservations, options, result)
-            )
-        result = prepare_new_bank(
-            self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record, **options
-        )
-        if result.get("ok") and (result.get("patch_diagnostic") or {}).get("faces_neighbour") and exit_record:
-            # The planned edge faces another resource's patch: take another side whose port does not.
-            for alternative in alternative_exits(exit_record):
-                other = prepare_new_bank(
-                    self.game, self.builder, obs, resource, count, reservations, site_exit=alternative, **options
-                )
-                if other.get("ok") and not other["patch_diagnostic"].get("faces_neighbour"):
-                    other["patch_diagnostic"]["edge_turned_from_neighbour"] = exit_record["side"]
-                    return other
-            return result
-        if result.get("ok") or not exit_record:
-            return result
-        # The planned side had no usable site; try the zone's other sides
-        # before giving up, nearest to the consumer first.
-        tried = [exit_record["side"]]
-        for alternative in alternative_exits(exit_record):
-            tried.append(alternative["side"])
-            other = prepare_new_bank(
-                self.game, self.builder, obs, resource, count, reservations, site_exit=alternative, **options
-            )
-            if other.get("ok"):
-                return other
-        return self._other_patch(obs, resource, count, reservations, options, dict(result, exit_sides_tried=tried))
+        return reservations, options
 
-    def _other_patch(self, obs, resource, count, reservations, options, failure):
+    def _other_patch(self, obs, resource, count, reservations, options, failure, exit_record=None, trail=None):
         """Plan the bank on the site plan's next patches of ``resource`` when its own patch has no site.
 
         Fleet auto-1113-1758 seed 2072381151: the planned coal patch (215
@@ -303,46 +420,58 @@ class MiningOutposts:
         district followed, while the plan listed a second coal patch 43 tiles
         from the start. The other patch has no plan zone, so its bank must
         also keep clear of every other plan zone; other plans' unbuilt tiles
-        are read again around the new patch seed.
+        are read again around the new patch seed. With the resource's
+        ``exit_record`` every side of the other patch is tried, nearest the
+        consumer first (:func:`mining_site.patch_exits`); before, only the
+        historical east flow was, and on seed 1541632234 (fleet all-1113-2155)
+        it faced the iron patch. The failure keeps ``attempts`` (patch, side,
+        candidates, failures of each try) and ``needs`` (what would have to
+        change for a bank to fit, :func:`_needs`).
         """
         from .paired_mining import prepare_new_bank
 
-        if failure.get("reason") != NO_COMPLIANT_BANK:
-            return failure  # a budget or survey failure is no answer about the patch
+        trail = [] if trail is None else trail
+        if failure.get("reason") not in (NO_COMPLIANT_BANK, SURVEY_EMPTY):
+            return failure  # a budget or policy failure is no answer about the patch
         patches = [
             p
             for p in other_patches(getattr(self, "site", None), obs.get("world_id"), resource)
             if p["distance"] <= MAX_OTHER_PATCH_DISTANCE
         ]
         if not patches:
-            return failure
+            return _with_evidence(failure, trail)
         zones = plan_zone_areas(getattr(self, "site", None), obs.get("world_id"), exclude_prefix="mining:" + resource)
         board_path = self.path.parent / "pcb-board.json"
         board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
         tried = []
         for patch in patches[:MAX_OTHER_PATCHES]:
             x, y = patch["centroid"]
-            row = dict((obs.get("resources") or {}).get(resource) or {}, position={"x": x, "y": y})
-            seeded = dict(obs, resources=dict(obs.get("resources") or {}, **{resource: row}))
+            seeded = _reseeded(obs, resource, (x, y))
             tried.append([round(x, 1), round(y, 1)])
             shared = self.planned_keepouts(seeded, board, resource)
             seeded_options = dict(options, registered=list(shared["registered"]) + zones)
             seeded_options.pop("grid_origin", None)  # another patch is gridded afresh
             if shared["planned"]:
                 seeded_options["planned"] = shared["planned"]
-            other = prepare_new_bank(
-                self.game,
-                self.builder,
-                seeded,
-                resource,
-                count,
-                list(reservations) + shared["tile_areas"],
-                **seeded_options,
-            )
-            if other.get("ok"):
-                other["plan"]["other_patch"] = {"centroid": [x, y], "bbox": patch.get("bbox")}
-                return other
-        return dict(failure, other_patches_tried=tried)
+            exits = patch_exits(exit_record, patch["bbox"]) if exit_record and patch.get("bbox") else []
+            for exit_option in exits or [None]:
+                other = prepare_new_bank(
+                    self.game,
+                    self.builder,
+                    seeded,
+                    resource,
+                    count,
+                    list(reservations) + shared["tile_areas"],
+                    **seeded_options,
+                    **({"site_exit": exit_option} if exit_option else {}),
+                )
+                trail.append(_attempt([round(x, 1), round(y, 1)], (exit_option or {}).get("side"), other))
+                if other.get("ok"):
+                    other["plan"]["other_patch"] = {"centroid": [x, y], "bbox": patch.get("bbox")}
+                    return other
+                if _survey_reason(other):
+                    break  # this patch's survey failed: its other sides would read the same area
+        return _with_evidence(dict(failure, other_patches_tried=tried), trail)
 
     def bank_powered(self, obs, plan) -> bool:
         """Every drill of ``plan`` stands, is connected and has power (no ore evidence needed)."""
@@ -1060,7 +1189,21 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             count = min(8, math.ceil((target - rate) / metadata["rate"]))
             pending = self.prepare(obs, resource, count)
             if not pending.get("ok"):
-                detail = {k: pending[k] for k in ("candidate_failures", "exit_sides_tried") if k in pending}
+                detail = {
+                    k: pending[k]
+                    for k in (
+                        "candidate_count",
+                        "candidate_failures",
+                        "exit_sides_tried",
+                        "other_patches_tried",
+                        "planned_patch_skipped",
+                        "attempts",
+                        "needs",
+                        "charted_chunks",
+                        "area",
+                    )
+                    if k in pending
+                }
                 return {
                     "status": "blocked",
                     "reason": pending.get("reason", "mining_bank_preflight_failed"),
