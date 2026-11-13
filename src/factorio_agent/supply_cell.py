@@ -82,6 +82,7 @@ import json
 import math
 from pathlib import Path
 
+from . import obsolete
 from .blocks.params import pole_radius, pole_reach
 from .blocks.stock_tail import STOCK_STACKS
 from .board import Board, entity, hardware_conflicts, planned_unbuilt_hardware, pole_chain
@@ -126,7 +127,7 @@ DRAIN_TICKS = 3600  # retiring waits at most one game minute for machines to use
 ABANDON_TICKS = 36000  # a build blocked this long (10 game minutes, auto-retry had its chances) is retired
 BELOW_TRIES = 16  # rows tried below the cell for a machine that touches no placed chest
 BUILD_PRIORITY = -52  # just below produce rows (-51)
-RETIRE_PRIORITY = -1000  # demolition is never on the critical path
+RETIRE_PRIORITY = obsolete.RETIRE_PRIORITY  # demolition is never on the critical path
 NODE_ID = "auto_supply_cell"
 RETIRE_NODE_ID = "auto_supply_cell_retire"
 ACTIVE = ("running", "waiting", "pending")
@@ -1125,13 +1126,9 @@ class SupplyCell:
                 state["retiring_tick"] = obs.get("tick")
                 self._save(state)
             products = {r["item"] for r in state["products"]}
-            dependent = [
-                job.get("key")
-                for job in self._jobs(obs)
-                if job.get("capability") != CAPABILITY
-                and job.get("status") in ("running", "waiting", "pending")
-                and any(f"machine-made {p}" in str(job.get("reason", "")) for p in products)
-            ]
+            dependent = obsolete.active_jobs(
+                self._jobs(obs), exclude=(CAPABILITY,), reason_markers=[f"machine-made {p}" for p in products]
+            )
             if dependent:
                 return {
                     "status": "waiting",
@@ -1148,24 +1145,15 @@ class SupplyCell:
                 }
             for e in self._demolition_order(state):
                 live = self._find(obs, e["name"], e["position"])
-                if live is None or type(live.get("unit_number")) is not int:
-                    continue
-                return {
-                    "type": "mine",
-                    "name": e["name"],
-                    "position": dict(e["position"]),
-                    "count": 1,
-                    "expected_entity_unit": live["unit_number"],
-                    "expected_entity_world_id": obs["world_id"],
-                    "reason": "demolish the retired temporary supply cell",
-                }
-            board = Board(self.game, self.builder, self.catalog)
-            board.refresh(force=True)
-            if board.state.get("world_id") == obs["world_id"] and BLOCK in board.state.get("blocks", {}):
-                del board.state["blocks"][BLOCK]
-                _atomic_json(board.path, board.state)
-            state["phase"] = "retired"
-            state["retired_tick"] = obs.get("tick")
+                action = obsolete.guarded_mine(
+                    live and dict(live, position=e["position"]),
+                    obs["world_id"],
+                    "demolish the retired temporary supply cell",
+                )
+                if action is not None:
+                    return action
+            obsolete.release_block(Path(self.game.cfg.runtime_dir) / "pcb-board.json", obs["world_id"], BLOCK)
+            obsolete.mark_retired(state, obs.get("tick"))
             self._save(state)
         evidence = self.retire_proof(obs)
         if evidence is None:
@@ -1258,14 +1246,7 @@ def _abandoned(job, tick):
 
 
 def _retire_node(reason):
-    return {
-        "id": RETIRE_NODE_ID,
-        "capability": CAPABILITY,
-        "parameters": {"retire": True},
-        "priority": RETIRE_PRIORITY,
-        "depends_on": [],
-        "reason": reason,
-    }
+    return obsolete.retire_node(RETIRE_NODE_ID, CAPABILITY, {"retire": True}, reason, RETIRE_PRIORITY)
 
 
 def supply_cell_nodes(jobs, queue_nodes, observation, capabilities):

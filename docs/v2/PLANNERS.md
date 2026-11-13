@@ -182,6 +182,60 @@ haul batch (`max(missing, haul_batch)`, <= 50) in one guarded `take_many`. No ne
 chest tap would need a site, power and an inserter (~50 plates/min) for what a backed-up trunk
 already holds (8 plates a tile; 33 tiles on the live iron lane). Pinned by `tests/test_v2_starter_retirement.py`.
 
+## Obsolete blocks (`obsolete.py`; startup science: `science_retirement.py`, capability `startup_science_retirement`)
+
+Temporary equipment is torn out and reused once a permanent successor is verified. One rule,
+shared helpers in `obsolete.py` (`succeeded`, `active_jobs`, `proposed`, `slots_needed`,
+`room_action`, `guarded_mine`, `release_block`, `mark_retired`, `retire_node`, `RETIRE_PRIORITY`);
+each module keeps its own trigger and evidence. `obsolete.REGISTRY` lists every case.
+
+```
+obsolete(B)  successor(B) verified (succeeded jobs + live/board evidence, per module)
+guards       nothing still depends on B: no active job waits for it (reason marker / capability),
+             no funded unfinished work inside it, inventory room for what mining returns
+             (InventoryStorage deposit, else wait obsolete_block_needs_inventory_room)
+dismantle    one paid guarded mine per entity (unit number + world), contents to the inventory
+release      board block removed (one atomic write); record phase: retired (never rebuilt)
+node         proposed once (a blocked job is auto-retried, never proposed twice), RETIRE_PRIORITY (-1000)
+```
+
+| Block | Successor verified | Module |
+|---|---|---|
+| supply cell | every product has a succeeded `produce` row or demand <= `HANDCRAFT_LIMIT` | `supply_cell.py` |
+| starter cells of r | `PERMANENT_SOURCES[r]` + board source; coal last | `starter_retirement.py` |
+| startup science cell + slot labs + starter lab | see below | `science_retirement.py` |
+| hand-fed boiler fuelling | dedicated coal belt (phase switch, nothing mined) | `power_coal_feed.py` |
+| later (registry only) | legacy power coal belt after `electric_coal`; private plate lines after bus taps; stone furnaces of the first bank after steel furnaces; burner pieces of outposts after electric banks | - |
+
+Startup science cell:
+
+```
+trigger   automation_science succeeded
+          and receipt science_growth.evidence: labs_powered >= 1, machines_observed >= 1, some lab "working"
+          and research is running                                  (what science_growth reads)
+          and no starter_research / bootstrap_research / bootstrap_logistics job open (paused counts)
+          and every roadmap step of those capabilities succeeded or its technology is researched
+node      auto_startup_science_retirement once, priority RETIRE_PRIORITY;
+          SCIENCE_GROWTH_PRIORITY + 1 when science_growth.grow (move before growth crafts)
+job       blocked startup_science_retirement_batch_unfinished while industry.batch_refusal (funded batch,
+            unresolved transfer, prewarm) - never dismantle paid plates
+          record once: startup_science entities without poles, its lab slots, the starter lab
+            (starter-research.json lab_site), batch-bound labs; never an entity of another board block
+          room: slots_needed(entities + contents) empty slots, else InventoryStorage.step(minimum_slots)
+          mine inserters, assemblers, labs, chests (guarded); phase dismantling
+          then release startup_science, phase retired; carried red packs -> insert lab_input of the
+            permanent built lab with the fewest packs (< 200), else they stay carried
+reuse     recovered labs/assemblers are carried stock: ensure_item counts the inventory before
+          crafting, so science_growth places them when its evidence rule grows the row; until then
+          they stay in the inventory (labs are not in inventory_storage.KEEP); while the job is
+          active and dismantling a lab/assembler it recorded, science_growth waits
+          (science_growth_waits_for_moved_startup_hardware); a blocked retirement never holds it
+never     industry refuses to reserve or build the cell once dismantled (bootstrap_research_startup_cell_retired)
+```
+
+Saving: a 2-machine cell with 4 labs returns 4 labs (40 circuits, 40 gears, 16 belts), 3 assemblers,
+6 inserters, 3 chests; growth to 4 labs then needs no lab craft. Pinned by `tests/test_v2_science_retirement.py`.
+
 ## Research capacity (`research_capacity.py`, `ResearchCapacityConfig`)
 
 ```

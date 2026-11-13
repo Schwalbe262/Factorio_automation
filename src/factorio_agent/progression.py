@@ -617,6 +617,9 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     from .starter_retirement import starter_retirement_nodes  # mine starter cells a permanent source replaced
 
     proposed += starter_retirement_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .science_retirement import science_retirement_nodes  # obsolete startup science cell
+
+    proposed += science_retirement_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     return proposed
 
 

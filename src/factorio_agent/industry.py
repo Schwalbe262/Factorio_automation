@@ -71,6 +71,39 @@ def _sampled_rates(root, world_id):
     return rates
 
 
+def batch_refusal(root, obs):
+    """Why the startup science cell must not change now (grow or retire), or None.
+
+    No bootstrap batch state of this world may have an unresolved transfer, a
+    prewarm whose technology is not yet researched, or a bound batch whose
+    technology is not yet natively researched (funded-and-unfinished,
+    including legacy logistics). An unreadable state refuses (fail closed).
+    """
+    root = Path(root)
+    researched = obs.get("technologies", {})
+    paths = sorted(root.glob("bootstrap-research-*.json"))
+    paths.append(root / "bootstrap-logistics.json")
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "science_cell_extension_batch_state_unreadable"
+        if not isinstance(data, dict):
+            return "science_cell_extension_batch_state_unreadable"
+        if not data or data.get("world_id") != obs["world_id"]:
+            continue
+        technology = data.get("technology", "logistics")
+        if data.get("pending_transfer"):
+            return "science_cell_extension_transfer_unresolved"
+        if data.get("prewarm") and not researched.get(technology):
+            return "science_cell_extension_prewarm_in_progress"
+        if not researched.get(technology):
+            return "science_cell_extension_batch_unfinished"
+    return None
+
+
 def validate_bootstrap_research(parameters):
     if (
         not isinstance(parameters, dict)
@@ -1351,29 +1384,7 @@ class BootstrapLogistics:
         researched (funded-and-unfinished, including legacy logistics). An
         unreadable state refuses (fail closed).
         """
-        root = self.path.parent
-        researched = obs.get("technologies", {})
-        paths = sorted(root.glob("bootstrap-research-*.json"))
-        paths.append(root / "bootstrap-logistics.json")
-        for path in paths:
-            if not path.exists():
-                continue
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                return "science_cell_extension_batch_state_unreadable"
-            if not isinstance(data, dict):
-                return "science_cell_extension_batch_state_unreadable"
-            if not data or data.get("world_id") != obs["world_id"]:
-                continue
-            technology = data.get("technology", "logistics")
-            if data.get("pending_transfer"):
-                return "science_cell_extension_transfer_unresolved"
-            if data.get("prewarm") and not researched.get(technology):
-                return "science_cell_extension_prewarm_in_progress"
-            if not researched.get(technology):
-                return "science_cell_extension_batch_unfinished"
-        return None
+        return batch_refusal(self.path.parent, obs)
 
     def _grow_cell(self, obs, plan):
         """Grow a saved one-machine cell to two science machines before a new batch binds.
@@ -1495,6 +1506,10 @@ class BootstrapLogistics:
                 "evidence": {"technology": obs["research"]},
             }
         plan = self._startup_plan(obs)
+        from .science_retirement import dismantled
+
+        if dismantled(self.path.parent, obs["world_id"]):  # an obsolete cell is never rebuilt
+            return {"status": "blocked", "reason": "bootstrap_research_startup_cell_retired"}
         if plan is None:
             if self.state:
                 return {"status": "blocked", "reason": "bootstrap_research_registered_cell_missing"}
