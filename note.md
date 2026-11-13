@@ -252298,3 +252298,12 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: tests/test_v2_rocket_stages.py (lupa one-line bodies, reconcile, no-grant scan) pass; create_space_platform = free player button (hub only from the delivered pack).
 - failure/risk: no repeatable power growth capability; production rows for PU/LDS/RF/concrete/EEU still missing; unproven live.
 - next: merge, then a long fleet past chemical science once fluid_assembly exists.
+
+## 2026-11-14 part pace-20: critical chain and plate ledger to the 20-minute target
+- goal: smelting district + main bus medians <= 20 min; measure first (rounds all-1114-0107, all-1114-0256, 24 seeds).
+- metrics: iron ledger 0 -> bus end (median per run): district 714, bus 296, outposts 242, supply cell hardware 162, power_coal_feed 127, packs 110 (+90 cell funding), starter cells 135, power 90, labs/cell 96; cell feed 882 (WIP at bus end only 37). Starter iron collected cumulative 233@10, 619@15, 1069@20, 1516@25 (6 cells = 90/min, max_plate_cells owner cap reached ~11.5 min); district plates collected ~0 before 27 min; half the iron takes come back short from 15 min on (plates bind). Actor 0-35 min: critical 957 s busy, slack 781 s, idle 292 s (not binding).
+- chain (waste_report critical chain): 0107 research end 22.5 (9/12 one lab), producer 22.9 (7/12 logistics-gated); 0256 research 19.5 (4/12 one lab), producer 25.6 (11/12 last entity underground: build ahead placed the pair's belts on later routes), district +1.1, bus +1.5 after.
+- bound: with 6 iron cells and the current bill, district ~23.4 / bus ~25.4 at best (iron: 1069 + 90(t-20) + 60(t-P) = bill, P = producer ~19); 20 needs ~+500 iron by minute 20 (~4 more iron cells from ~11 min, above the owner cap of 6).
+- actions: build ahead keeps the waiting craft's ingredients (craft_reserve); startup cell start floor 2 labs + the machines they feed (industry.start_floor); power_coal_feed held until district and bus succeeded (rule 3a); fleet report "pace vs target"; waste_report critical chain section.
+- expected: producer ~19 (from 25.6/22.9), district ~22.5-23.5, bus ~25-26 medians; 0/12 under 20 until the plate cap moves.
+- next: fleet 12 x 45 min on this commit; read pace line + critical chain; owner decision on iron cells beyond 6 (payback 9 iron in 36 s, ~250 plates each before retirement).

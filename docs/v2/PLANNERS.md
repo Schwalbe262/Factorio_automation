@@ -86,7 +86,10 @@ feed step        roadmap power_coal_feed (after power, before electric_coal), ga
                  receipt coal_feed_belts (power_coal_feed.feed_belt_receipt): belts carried + in the supply cell's
                  belt chest >= the saved coal_plan's belts (100 without a plan), the cell's job need not have succeeded,
                  or a succeeded supply_cell with transport-belt or a succeeded produce row for it,
-                 or FEED_FALLBACK_TICKS (54000) after power, or an old map's power job (feed evidence, not hand_fed)
+                 or FEED_FALLBACK_TICKS (54000) after power, or an old map's power job (feed evidence, not hand_fed);
+                 held (rule 3a, plate_critical_pending) until smelting_district and planned_main_bus succeeded or one
+                 stalled: fleets 0107/0256 built the feed at 19.2-30.9 min from ~112 iron of cell belts the district
+                 and bus waited for
                  -> ensure_coal_feed builds coal_plan, proves power_flow_ready for 1800 ticks -> power_mode: belt_fed
 after            hand fuelling stops; electric_coal (requires power_coal_feed) replaces the burner drill
 ```
@@ -432,8 +435,17 @@ Used by the observe receipt (`research_capacity_receipt`) and by
 technology plus the upcoming technologies of the roadmap's bootstrap steps
 (`industry.bootstrap_technologies`: what the temporary cell researches back to back),
 never red-only research the permanent science serves; it is decided at the prebuild,
-so the decided machines and labs stand before the first batch binds. Pinned by
-`tests/test_v2_research_capacity.py`, `tests/test_v2_science_cell_extension.py`.
+so the decided machines and labs stand before the first batch binds. Start floor
+(`industry.start_floor`, owner "2 labs first"): the decision is raised to
+`labs = min(science_growth.START_LABS, max_labs, floor(max_assemblers x pack rate / lab_pack_rate(queue, 1)))`
+(only labs the cell's machines keep busy) and `machines = ceil(lab_pack_rate(queue, labs) / pack rate)`,
+taken from the planner's own options when that option is finite; above it the time comparison decides.
+For EMD + logistics (4.9 packs/min per lab) that is 2 labs and 2 machines. Fleets all-1114-0107/0256:
+the planner kept 1 + 1 on 9 and 4 of 12 seeds (the serial fund + build + research model priced the
+second lab above 85% of the wait); those seeds finished logistics at 22.4-23.6 min against 17.6-20.3
+with two labs, and the district's splitters waited for logistics. Pinned by
+`tests/test_v2_research_capacity.py`, `tests/test_v2_science_cell_extension.py`,
+`tests/test_v2_startup_science_floor.py`.
 
 ## Staged red science (`science_growth.py`, capability `science_growth`)
 
@@ -818,7 +830,12 @@ for entity in plan order:
 ```
 
 A job waiting for one item no longer holds back what it can already place.
-Pinned by `tests/test_v2_build_ahead.py`.
+Build ahead never spends the waiting item's own craft (`FactoryBuilder.craft_reserve`): it plans
+against the carried inventory minus the direct ingredients one hand craft of `min(cap, missing)`
+units needs (an underground pair keeps its 5 belts, a splitter its 4). Fleet all-1114-0256: the
+belts collected for the district's first-bank underground pair were placed on later routes, the
+pair was crafted last (prefix done at a median 25.1 min, logistics at 19.5) and no district plate
+was collected before ~27 min. Pinned by `tests/test_v2_build_ahead.py`.
 
 Build batch (assisted backend, `_affordable_builds` / `_carried_batch`): one `build_many`
 (<= `BUILD_BATCH_LIMIT` 32 ordinary paid builds, per-child receipts, an uncertain child ->

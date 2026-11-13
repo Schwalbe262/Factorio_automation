@@ -97,6 +97,7 @@ def job(capability, status="succeeded", parameters=None, evidence=None):
     return {"capability": capability, "status": status, "parameters": parameters or {}, "evidence": evidence or {}}
 
 
+PLATE_BLOCKS = [job("smelting_district"), job("planned_main_bus")]  # rule 3a: both succeeded
 HAND_FED_POWER = job(
     "power",
     evidence={"hand_fed": True, "tick": 20000, "boiler_full_load_coal_per_minute": 27.0, "coal_fuel_value": 4_000_000},
@@ -328,11 +329,25 @@ class FeedStepRuleTests(unittest.TestCase):
 
     def test_ready_once_belts_are_machine_made_or_fallback_or_legacy(self):
         belts = job("supply_cell", parameters={"products": ["iron-gear-wheel", "transport-belt"]})
-        self.assertTrue(pcf.feed_step_ready([HAND_FED_POWER, belts], {"tick": 30000}))
+        self.assertTrue(pcf.feed_step_ready([HAND_FED_POWER, belts, *PLATE_BLOCKS], {"tick": 30000}))
         row = job("produce", parameters={"item": "transport-belt", "rate_per_minute": 20})
-        self.assertTrue(pcf.feed_step_ready([HAND_FED_POWER, row], {"tick": 30000}))
-        self.assertTrue(pcf.feed_step_ready([HAND_FED_POWER], {"tick": 20000 + pcf.FEED_FALLBACK_TICKS}))
+        self.assertTrue(pcf.feed_step_ready([HAND_FED_POWER, row, *PLATE_BLOCKS], {"tick": 30000}))
+        fallback = {"tick": 20000 + pcf.FEED_FALLBACK_TICKS}
+        self.assertTrue(pcf.feed_step_ready([HAND_FED_POWER, *PLATE_BLOCKS], fallback))
         self.assertTrue(pcf.feed_step_ready([LEGACY_POWER], {"tick": 46000}))
+
+    def test_held_while_the_district_or_the_bus_is_still_to_come(self):
+        # Rule 3a (fleets all-1114-0107/0256: the feed took ~112 iron of cell belts during the district build).
+        belts = job("supply_cell", parameters={"products": ["transport-belt"]})
+        fallback = {"tick": 20000 + pcf.FEED_FALLBACK_TICKS}
+        district = job("smelting_district")
+        self.assertFalse(pcf.feed_step_ready([HAND_FED_POWER, belts], {"tick": 30000}))
+        self.assertFalse(pcf.feed_step_ready([HAND_FED_POWER, belts, district], fallback))
+        building = job("planned_main_bus", status="running")
+        self.assertFalse(pcf.feed_step_ready([HAND_FED_POWER, belts, district, building], fallback))
+        stalled = job("planned_main_bus", status="blocked")
+        self.assertTrue(pcf.feed_step_ready([HAND_FED_POWER, belts, district, stalled], {"tick": 30000}))
+        self.assertTrue(pcf.feed_step_ready([LEGACY_POWER, district], {"tick": 46000}))
 
     def test_roadmap_proposes_the_feed_step_low_and_electric_coal_waits_for_it(self):
         order = [s.id for s in pg.ROADMAP]
@@ -353,7 +368,7 @@ class FeedStepRuleTests(unittest.TestCase):
         self.assertIn("auto_starter_research_automation", ids)  # research does not wait for the belt
         self.assertIn("auto_mining_outpost_iron", ids)
         belts = job("supply_cell", parameters={"products": ["transport-belt"]})
-        nodes = pg.autopilot_nodes(base + [belts], [], {"tick": 30000}, CAPABILITIES, limit=10)
+        nodes = pg.autopilot_nodes(base + [belts] + PLATE_BLOCKS, [], {"tick": 30000}, CAPABILITIES, limit=10)
         feed = next(n for n in nodes if n["id"] == "auto_power_coal_feed")
         self.assertEqual(feed["priority"], pg.TOP_PRIORITY - 400)
         self.assertTrue(all(feed["priority"] < n["priority"] for n in nodes if n["id"].startswith("auto_mining")))

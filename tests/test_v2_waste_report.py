@@ -113,5 +113,90 @@ class WasteReportTests(unittest.TestCase):
             self.assertEqual(list(total)[0], max(total, key=lambda k: total[k]["total_seconds"]))
 
 
+M = 3600  # ticks per game minute
+
+
+def end(key, minute):
+    return {
+        "key": key,
+        "event": "terminal",
+        "time": minute * M,
+        "status": "succeeded",
+        "evidence": {"tick": minute * M},
+    }
+
+
+def result(key, tick, **values):
+    return {"key": key, "event": "action_result", "time": tick, "tick": tick, "result": values}
+
+
+class CriticalChainTests(unittest.TestCase):
+    """The critical chain section: segments to the 20-minute target and what bound each."""
+
+    def chain_run(self, root: Path, labs: int, last_minute: float):
+        run = root / f"chain-{labs}"
+        jobs = {
+            "p": {"capability": "power", "parameters": {}},
+            "e": {"capability": "bootstrap_research", "parameters": {"technology": "electric-mining-drill"}},
+            "l": {"capability": "bootstrap_logistics", "parameters": {}},
+            "i": {"capability": "mining_outpost", "parameters": {"resource": "iron-ore", "rate_per_minute": 60}},
+            "d": {"capability": "smelting_district", "parameters": {}},
+            "b": {"capability": "planned_main_bus", "parameters": {}},
+        }
+        furnace = {"name": "stone-furnace", "position": {"x": 0, "y": 0}}
+        splitter = {"name": "splitter", "position": {"x": 1.5, "y": 3}}
+        copper = {"name": "stone-furnace", "position": {"x": 9, "y": 0}}
+        events = [end("p", 7)]
+        events += [
+            act("e", 8 * M + n, type="build", name="lab", position={"x": 20 + 3 * n, "y": 0}) for n in range(labs)
+        ]
+        events += [act("e", 11 * M, type="research", technology="electric-mining-drill"), end("e", 14)]
+        events += [act("l", 15 * M, type="research", technology="logistics"), end("l", 18), end("i", 16)]
+        events += [act("d", 15 * M, type="build", **furnace), act("d", int(last_minute * M), type="build", **splitter)]
+        events += [act("d", 20 * M, type="build", **copper)]
+        for minute in (21, 22, 23):  # starter furnaces empty: every take moves less than asked
+            events += [
+                act("d", minute * M, type="take_many", item="iron-plate", count=30),
+                result("d", minute * M, moved=9),
+            ]
+        events += [end("d", 24), end("b", 26)]
+        write_run(run, jobs, events, [])
+        catalog = {
+            "technologies": {
+                "electric-mining-drill": {"unit_count": 25, "unit_energy": 600},
+                "logistics": {"unit_count": 20, "unit_energy": 900},
+            }
+        }
+        (run / "catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
+        banks = [
+            {"resource": "iron-ore", "entities": [furnace, splitter]},
+            {"resource": "copper-ore", "entities": [copper]},
+        ]
+        district = {"plan": {"entities": [furnace, splitter, copper]}, "banks": banks}
+        (run / "smelting-district.json").write_text(json.dumps(district), encoding="utf-8")
+        return run
+
+    def test_segments_and_binding_constraints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = {r["segment"]: r for r in tool.critical_chain(self.chain_run(Path(directory), 1, 18.5))}
+            self.assertEqual(rows["research"]["binding"], "labs: 1 lab")
+            self.assertEqual((rows["research"]["start"], rows["research"]["end"]), (11.0, 18.0))
+            self.assertEqual(rows["producer"]["binding"], "logistics research")  # splitter 0.5 min after logistics
+            self.assertEqual((rows["producer"]["start"], rows["producer"]["end"]), (15.0, 18.5))
+            self.assertEqual(rows["district"]["binding"], "plates")
+            self.assertEqual(rows["district"]["minutes"], 5.5)
+            self.assertEqual(rows["bus"]["binding"], "not plates")
+
+    def test_a_late_splitter_is_its_own_wait_and_two_labs_are_lab_time_or_funding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.chain_run(Path(directory), 2, 21.0)
+            rows = {r["segment"]: r for r in tool.critical_chain(run)}
+            self.assertEqual(rows["producer"]["binding"], "waits for splitter")
+            self.assertEqual(rows["research"]["binding"], "pack supply / funding")  # 420 s against 275 s of lab time
+            totals = {t["segment"]: t for t in tool.chain_totals([{"critical_chain": tool.critical_chain(run)}])}
+            self.assertEqual(totals["producer"]["binding"], {"waits for splitter": 1})
+            self.assertEqual(totals["bus"]["median_end"], 26.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -178,6 +178,53 @@ class BuildBatchTests(BuildAheadTests):
         self.assertEqual(len(action["actions"]), BUILD_BATCH_LIMIT)
 
 
+class CraftReserveTests(BuildAheadTests):
+    """Fleet all-1114-0256: the district's underground pair waited while build ahead placed its belts."""
+
+    def catalog(self):
+        entities = dict(CATALOG.entities, **{"underground-belt": {"type": "underground-belt"}})
+        recipes = {
+            "underground-belt": {
+                "ingredients": [
+                    {"type": "item", "name": "iron-plate", "amount": 10},
+                    {"type": "item", "name": "transport-belt", "amount": 5},
+                ],
+                "products": [{"name": "underground-belt", "amount": 2}],
+            }
+        }
+        return SimpleNamespace(fingerprint="c", entities=entities, recipes=recipes)
+
+    def plan_with_pair(self, belts):
+        pair = [
+            dict(entity("underground-belt", 0), belt_to_ground_type="input"),
+            dict(entity("underground-belt", 3), belt_to_ground_type="output"),
+        ]
+        return self.plan(*pair, *(entity("transport-belt", 10 + x) for x in range(belts)))
+
+    def test_the_waiting_craft_keeps_its_carried_ingredients(self):
+        builder = self.builder()
+        builder.catalog = self.catalog()
+        self.assertEqual(builder.craft_reserve("underground-belt", 2), {"iron-plate": 10, "transport-belt": 5})
+        self.assertEqual(builder.craft_reserve("underground-belt", 3), {"iron-plate": 20, "transport-belt": 10})
+        # 5 carried belts are the pair's craft: nothing is built ahead, the wait stands
+        result = builder.ensure_plan(self.obs({"transport-belt": 5}), self.plan_with_pair(4))
+        self.assertEqual(result, WAIT)
+        self.assertEqual(self.bootstrap.calls, [("underground-belt", 2)])
+
+    def test_belts_beyond_the_reserve_are_still_built_ahead(self):
+        builder = self.builder()
+        builder.catalog = self.catalog()
+        action = builder.ensure_plan(self.obs({"transport-belt": 8}), self.plan_with_pair(6))
+        self.assertEqual(action["type"], "build_many")
+        self.assertEqual([x for _, x in BuildBatchTests.names(None, action)], [10, 11, 12])
+
+    def test_a_catalog_without_the_recipe_reserves_nothing(self):
+        builder = self.builder()
+        self.assertEqual(builder.craft_reserve("underground-belt", 2), {})
+        action = builder.ensure_plan(self.obs({"transport-belt": 5}), self.plan_with_pair(4))
+        self.assertEqual(action["type"], "build_many")
+
+
 class GroundItemGame(Game):
     """Placement fails (an item stack lies on the tile); the footprint survey finds only that stack."""
 

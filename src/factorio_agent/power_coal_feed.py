@@ -21,6 +21,9 @@ Rules (docs/v2/PLANNERS.md "Starter power in two phases"):
    machine-made (a succeeded supply cell stocking transport belts or a
    succeeded ``produce`` row for them), or ``FEED_FALLBACK_TICKS`` after power,
    or at once on an old map whose power job already built the feed.
+3a. Not before the smelting district and the main bus succeeded (or one of
+   them stalled): until then every machine-made belt and plate goes to them
+   (``plate_critical_pending``).
 4. ``FactoryBuilder.ensure_coal_feed`` builds and proves the feed; success sets
    ``power_mode: belt_fed`` and hand-fuelling stops (rule 2 no longer applies).
 5. ``publish_planned_feed`` keeps the unbuilt feed on the board as block
@@ -257,13 +260,37 @@ def belts_stocked(observation) -> bool:
     return numbers and needed > 0 and stocked >= needed
 
 
+# The plate-critical blocks the feed's belts must not compete with (rule 3a).
+PLATE_CRITICAL = ("smelting_district", "planned_main_bus")
+STALLED = frozenset({"blocked", "failed"})
+
+
+def plate_critical_pending(jobs) -> bool:
+    """Rule 3a: the smelting district or the main bus is still to come (none succeeded, none stalled).
+
+    Fleets all-1114-0107/0256: the feed was proposed at a median 19.0 min, built from 19.2 to 30.9
+    and took a median 112 iron-plate equivalents of supply-cell belts before the bus succeeded,
+    while the district and the bus waited for iron (starter furnaces empty at half the takes).
+    Hand fuelling ends at the latest when both succeed or one of them stalls.
+    """
+    rows = [j for j in jobs if j.get("capability") in PLATE_CRITICAL]
+    if any(j.get("status") in STALLED for j in rows):
+        return False
+    done = {j.get("capability") for j in rows if j.get("status") == "succeeded"}
+    return not set(PLATE_CRITICAL) <= done
+
+
 def feed_step_ready(jobs, observation) -> bool:
-    """Whether the roadmap may propose ``power_coal_feed`` now (rule 3 of the module doc)."""
+    """Whether the roadmap may propose ``power_coal_feed`` now (rules 3 and 3a of the module doc)."""
     jobs = list(jobs)
     power = _power_job(jobs)
     if power is None:
         return False
-    if legacy_power(power) or belts_stocked(observation) or belts_machine_made(jobs):
+    if legacy_power(power):
+        return True
+    if plate_critical_pending(jobs):
+        return False
+    if belts_stocked(observation) or belts_machine_made(jobs):
         return True
     since = (power.get("evidence") or {}).get("tick")
     tick = (observation or {}).get("tick")

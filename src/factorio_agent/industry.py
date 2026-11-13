@@ -101,6 +101,74 @@ def _sampled_rates(root, world_id):
     return rates
 
 
+def start_floor(row, targets, pack_rate_each, config):
+    """The startup cell's decision ``row`` raised to the start size: ``START_LABS`` labs and the machines they consume.
+
+    Owner rule "2 labs first" (``science_growth.START_LABS``, as the permanent red
+    block), limited to the labs the cell's ``max_assemblers`` machines keep busy
+    (``floor(max_assemblers * pack_rate_each / lab_pack_rate(queue, 1))``: a second
+    lab adds nothing to a pack-limited queue). The machines follow the labs:
+    ``ceil(lab_pack_rate(queue, labs) / pack_rate_each)``. The time comparison still decides above
+    the floor. The floor is the planner's own option ``(a, l)`` from ``row`` and is
+    taken only when that option is finite (fundable); else ``row`` is kept.
+
+    Why: the planner priced the second lab and machine as funded and built before
+    any research and kept 1 + 1 on 4 of 12 seeds of fleet all-1114-0256
+    ("+1 assemblers +1 labs takes 486s" against a 560 s wait); those seeds finished
+    logistics at 22.4-23.6 min against 17.6-20.3 with two labs, and the district's
+    splitters waited for logistics.
+    """
+    from .research_capacity import lab_pack_rate
+    from .science_growth import START_LABS
+
+    labs_now = int(row.get("current_labs") or 1)
+    machines_now = int(row.get("current_assemblers") or 1)
+    each = float(pack_rate_each or 0)
+    per_lab = lab_pack_rate(targets, 1) if targets else None
+    if not per_lab or each <= 0:
+        return row
+    # Only labs the cell's machines keep busy: 2 machines (12 packs/min) feed 2 labs on
+    # 10-15 s units (EMD, logistics: 4.9 packs/min per lab) but only 1 on 5 s units.
+    fed = math.floor(config.max_assemblers * each / per_lab + 1e-9)
+    labs = min(START_LABS, int(config.max_labs), max(1, fed))
+    if int(row.get("target_labs") or labs_now) >= labs or labs <= labs_now:
+        return row
+    rate = lab_pack_rate(targets, labs)
+    machines = math.ceil(rate / each - 1e-9)
+    machines = max(
+        machines_now, int(row.get("target_assemblers") or machines_now), min(machines, config.max_assemblers)
+    )
+    wanted = (machines - machines_now, labs - labs_now)
+    option = next(
+        (
+            o
+            for o in row.get("options") or ()
+            if isinstance(o, dict) and (o.get("extra_assemblers"), o.get("extra_labs")) == wanted
+        ),
+        None,
+    )
+    if option is None or option.get("seconds") is None:
+        return row
+    wait = row.get("wait_seconds")
+    out = dict(row)
+    out.update(
+        target_assemblers=machines,
+        target_labs=labs,
+        chosen_seconds=option["seconds"],
+        seconds_saved=round(wait - option["seconds"], 1) if isinstance(wait, (int, float)) else None,
+        bottleneck_after=option.get("bottleneck", row.get("bottleneck_after")),
+        expand=True,
+        start_floor={
+            "labs": labs,
+            "machines": machines,
+            "planner_target": [row.get("target_assemblers"), row.get("target_labs")],
+        },
+        reason=f"start {labs} labs and the {machines} machines they consume (owner: 2 labs first); planner: "
+        + str(row.get("reason") or ""),
+    )
+    return out
+
+
 def batch_refusal(root, obs):
     """Why the startup science cell must not change now (grow or retire), or None.
 
@@ -1568,7 +1636,7 @@ class BootstrapLogistics:
             ),
             config=config,
         )
-        row = decision.as_dict()
+        row = start_floor(decision.as_dict(), targets, costs["pack_rate_per_assembler"], config)
         row["decided_tick"] = obs["tick"]
         return row
 

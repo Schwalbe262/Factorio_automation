@@ -253,5 +253,21 @@ class ReportTests(unittest.TestCase):
             )
 
 
+class PaceTests(unittest.TestCase):
+    def test_pace_line_names_the_gap_to_the_target_and_the_share_under_it(self):
+        rows = [
+            dict(seed=1, milestones={"smelting_district": 19.5, "main_bus": 21.0}),
+            dict(seed=2, milestones={"smelting_district": 24.0, "main_bus": 27.0}),
+            dict(seed=3, milestones={"smelting_district": 28.0}),
+        ]
+        line = fleet.pace_line(rows)
+        self.assertEqual(
+            line, "pace vs target 20 min: smelt median 24.0 (+4.0), 1/3 under; bus median 24.0 (+4.0), 0/3 under"
+        )
+        self.assertIn("bus median - (never), 0/1 under", fleet.pace_line([dict(seed=4, milestones={})]))
+        lines = fleet.format_report(dict(name="f"), rows, fleet.aggregate(rows), window_text="0-30")
+        self.assertIn(line, lines)
+
+
 if __name__ == "__main__":
     unittest.main()
