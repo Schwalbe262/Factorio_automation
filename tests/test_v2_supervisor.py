@@ -870,6 +870,37 @@ class MultiJobTests(Fixture):
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
         self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "site"]])
 
+    def test_a_failed_route_plan_is_retried_on_quiet_intervals_and_past_the_limit_while_the_run_is_idle(self):
+        # all-1113-2107 1834967787 / 3272954496: planned_bus_feed_route_failed, three retries in one
+        # minute, then 17 idle minutes; 978391276 routed its feeds on the 4th attempt.
+        reason = "planned_bus_feed_route_failed"
+        self.s.max_seconds = None  # the quiet intervals below add up past the fixture's run length
+        self.cli.jobs["bus"] = job("bus", "c0", status="blocked", reason=reason, blocked_at_time=self.clock())
+
+        def retries():
+            return [c for c in self.cli.calls if c[0] == "retry"]
+
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(121)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))  # quiet interval, no success needed
+        for _ in range(AUTO_RETRY_LIMIT + 3):
+            self.cli.jobs["bus"].update(status="blocked", reason=reason, blocked_at_time=self.clock())
+            self.clock.advance(121)
+            self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(len(retries()), 1 + AUTO_RETRY_LIMIT + 3)  # past the limit: nothing else is active
+        # Another job active: the limit holds.
+        self.cli.jobs["other"] = job("other", "c1", status="waiting", reason="x")
+        self.cli.jobs["bus"].update(status="blocked", reason=reason, blocked_at_time=self.clock())
+        self.clock.advance(121)
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        # An unrelated blocker past the limit is not retried even when idle.
+        del self.cli.jobs["other"]
+        self.cli.jobs["coal"] = job("coal", "c2", status="blocked", reason="coal_bank_required")
+        self.s.__dict__["_auto_retries"]["coal"] = {"successes": 0, "count": AUTO_RETRY_LIMIT, "first_seen": 0}
+        self.clock.advance(121)
+        self.s._auto_retry(self.s._snapshot())
+        self.assertNotIn(["retry", "--key", "coal"], retries())
+
     def test_a_retry_deferred_for_a_job_slot_is_not_counted(self):
         self.cli.jobs["site"] = job(
             "site", "c0", status="blocked", reason="no_clear_x", blocked_at_time=self.clock() - 500

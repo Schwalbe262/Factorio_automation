@@ -115,6 +115,24 @@ def sourced_items(board: dict, product: str, *, owner: str):
     return sourced
 
 
+def plate_sources(board: dict, items, *, world_id=None) -> dict:
+    """``{item: bool}``: can a new produce row get a belt of ``item`` now (``resolve`` or a bus tap)?
+
+    For the produce autopilot: a row proposed before any source exists only blocks
+    ``production_row_input_source_missing`` (all-1113-2107: 6 rows in 3 runs whose bus
+    never came). A board of another world has no source.
+    """
+    same = isinstance(board, dict) and (world_id is None or board.get("world_id") == world_id)
+    out = {}
+    for item in items:
+        if not same:
+            out[item] = False
+            continue
+        found = resolve(board, "", item, owner="")["ok"]
+        out[item] = bool(found or tap_parameters(board, "", item, 1.0))
+    return out
+
+
 def tap_parameters(board: dict, product: str, item: str, demand_per_minute: float) -> dict | None:
     """First free surplus-tap row on the shared main bus for ``item``; None without a bus line."""
     bus = board.get("shared_main_bus")

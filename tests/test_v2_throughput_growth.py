@@ -364,7 +364,9 @@ class ExpectedGrowthTests(unittest.TestCase):
             {"name": "production_row_gear:iron-plate", "owner": "production_row_gear", "item": "iron-plate",
              "demand_per_minute": 99.0, "built": False},
         ]  # fmt: skip
-        obs = {"technologies": researched, "science_growth": {"grow": True, "machines": 2, "target_machines": 3}}
+        # No staged science block: research_capacity's decided extra machine is expected growth.
+        decision = {"expand": True, "pack": "automation-science-pack", "current_assemblers": 2, "target_assemblers": 3}
+        obs = {"technologies": researched, "research_capacity": {"decision": decision}}
         rows = tg.expected_growth(cat, jobs, obs, stations)
         iron, sources, unknown = rows["iron-plate"]
         # logistic_science at 30/min: (inserter 4 + belt 1.5) iron x 30 = 165; the unbuilt chem tap 10;
@@ -372,14 +374,19 @@ class ExpectedGrowthTests(unittest.TestCase):
         self.assertEqual(
             dict(sources),
             {"roadmap logistic_science": 165.0, "unbuilt tap chem:iron-plate": 10.0,
-             "science_growth: +1 automation-science-pack machines": 12.0},
+             "research_capacity: +1 automation-science-pack machines": 12.0},
         )  # fmt: skip
         self.assertAlmostEqual(iron, 187.0)
         self.assertEqual(unknown, ())
         copper = dict(rows["copper-plate"][1])
         self.assertEqual(
-            copper, {"roadmap logistic_science": 45.0, "science_growth: +1 automation-science-pack machines": 6.0}
+            copper, {"roadmap logistic_science": 45.0, "research_capacity: +1 automation-science-pack machines": 6.0}
         )
+        # A staged block's growth target is already tap rate (growth_taps): never counted twice.
+        staged = dict(obs, science_growth={"grow": True, "machines": 2, "target_machines": 3})
+        iron, sources, _ = tg.expected_growth(cat, jobs, staged, stations)["iron-plate"]
+        self.assertAlmostEqual(iron, 175.0)
+        self.assertNotIn("science", " ".join(name for name, _ in sources if not name.startswith("roadmap")))
 
     def test_unknown_block_is_unquantified_and_neutral_blocks_add_nothing(self):
         cat = self.catalog()
@@ -532,6 +539,32 @@ class NodeTests(unittest.TestCase):
 
 class ReceiptTests(unittest.TestCase):
     def test_saved_state_shapes(self):
+        row = self.receipt()
+        # The stock row's tap is construction stock (in the bill), the science tap is continuous.
+        self.assertEqual(row["demand"]["taps_per_minute"], 30.0)
+        self.assertEqual(row["demand"]["growth_taps_per_minute"], 0.0)
+        self.assertEqual(row["signals"]["drills_backed"], 1)
+        self.assertEqual(row["bottleneck"], "furnaces")
+        self.assertTrue(row["grow"], row["reason"])
+        self.assertEqual(row["parameters"], {"resource": "copper-ore", "rate_per_minute": 60.0})
+
+    def test_science_growth_beyond_its_declared_taps_is_tap_demand(self):
+        science = {
+            "world_id": "w",
+            "stage": {"labs": 2, "machines": 2, "machine_limit": 2, "machine_slots": 6, "lab_slots": 8},
+            "taps": [{"name": "automation_science:copper-plate", "item": "copper-plate", "demand_per_minute": 12.0}],
+        }
+        # The decision to grow to 3 machines declares its extra copper before it is built ...
+        row = self.receipt(science, {"grow": True, "target_machines": 3})
+        self.assertEqual(row["demand"]["growth_taps_per_minute"], 6.0)
+        self.assertEqual(row["demand"]["taps_per_minute"], 36.0)
+        # ... and the built stage keeps it declared afterwards.
+        science["stage"]["machines"] = 4
+        self.assertEqual(self.receipt(science)["demand"]["growth_taps_per_minute"], 12.0)
+        science["world_id"] = "other"  # another world's block declares nothing
+        self.assertEqual(self.receipt(science)["demand"]["growth_taps_per_minute"], 0.0)
+
+    def receipt(self, science=None, growth=None):
         world = "w"
         slot = lambda row, i: {  # noqa: E731
             "row": row,
@@ -604,22 +637,18 @@ class ReceiptTests(unittest.TestCase):
             "roadmap_material_demand": {"copper-plate": 100.0},
             "resource_supply_options": {"iron-plate": {"evidence": {"available": 500, "produced_per_minute": 60}}},
         }
+        if growth is not None:
+            obs["science_growth"] = growth
         catalog = SimpleNamespace(recipe_for_product=lambda name: None)
+        files = [("smelting-district.json", district), ("mining-outposts.json", mining), ("pcb-board.json", board)]
+        if science is not None:
+            files.append(("automation-science.json", science))
         with tempfile.TemporaryDirectory() as root:
-            for name, value in (
-                ("smelting-district.json", district),
-                ("mining-outposts.json", mining),
-                ("pcb-board.json", board),
-            ):
+            for name, value in files:
                 Path(root, name).write_text(json.dumps(value), encoding="utf-8")
             result = tg.growth_receipt(root, catalog, [], obs)
         (row,) = result["plates"]
-        # The stock row's tap is construction stock (in the bill), the science tap is continuous.
-        self.assertEqual(row["demand"]["taps_per_minute"], 30.0)
-        self.assertEqual(row["signals"]["drills_backed"], 1)
-        self.assertEqual(row["bottleneck"], "furnaces")
-        self.assertTrue(row["grow"], row["reason"])
-        self.assertEqual(row["parameters"], {"resource": "copper-ore", "rate_per_minute": 60.0})
+        return row
 
 
 class SummaryCarriesTheReceiptTests(unittest.TestCase):

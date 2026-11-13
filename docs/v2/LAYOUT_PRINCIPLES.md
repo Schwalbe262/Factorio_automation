@@ -287,6 +287,56 @@ footprint is not a board reservation of its own (the ore rule already keeps othe
 it), and the next row pair is placed by `prepare_connected_bank`'s search, not picked from the
 grid record.
 
+Patch frame and neighbouring patches (`mining_border.py`). Cause on eval-4177156614: a stone
+patch touches the iron patch's lower-left side. Every mine record was a rectangle: the bank's
+`reserved_area` was the box of its growth footprint, exit path and output access (iron: a
+7 x 27 box, 7 x 12 of it drills, the rest a 1-tile exit drawn as a 7-wide strip), the site
+plan's mining zones are bbox + margin, and the stone bank's exit faced east into the iron patch.
+Drills were already clean (a grid cell whose 5 x 5 mining area holds another resource is not
+placed; a drill mining two ores puts both on one belt). Rule now:
+
+1. The grid is the set of drill cells whose mining area holds only this patch's ore and whose
+   body, pole and collector tiles stand on no other ore (the native ore rule would refuse them);
+   each row pair's extent is its own valid columns. `patch_grid` records `frame_rects`: the
+   row-wise polygon (`tile_rects`) of every row's drill bodies, poles and collector to the edge.
+2. A new bank reserves `reserved_rects` = its growth footprint + the exit and output-access
+   tiles outside it (`reserved_area` stays the bounding box for every non-mining planner, so
+   nothing else loosens). Mining checks (publish conflicts, `planned_keepouts`, the
+   `registered` test, `MiningOutposts.prepare` keep-outs) compare rects (`block_rects`; a bank
+   without `reserved_rects`, i.e. every older map, keeps its rectangle as a legal reservation).
+   The bank also carries `patch_frame` (the grid's `frame_rects`), published on its board block.
+3. Border, assigned once: an ore tile belongs to the patch whose resource it holds. A patch of
+   another resource is planned with the neighbour's `patch_frame` and rects as keep-outs
+   (`neighbour_reservations`; a patch's own frame is no keep-out, its later rows grow into it),
+   whichever is planned first. Tiles where a drill of either side would mine both ores are the
+   neutral gap: neither side places a drill there (rule 1), and both frames keep off the other's ore.
+4. Edge: a port with another resource's ore within `FACING_REACH` tiles ahead ranks after every
+   port that has none (`candidate_sites`, `faces_neighbour`); when the chosen bank still faces a
+   neighbour, `MiningOutposts.prepare` tries the zone's other sides and takes the first that does
+   not (`edge_turned_from_neighbour`). A trunk never crosses other ore: belts on ore are refused
+   by the native ore rule and the exit stops at `mining_exit_foreign_resource_or_reservation`
+   (so the "cross perpendicular, recorded" case cannot arise today).
+5. Interleaved ore (another resource on both opposite sides of a tile within `MIXED_REACH`, at
+   least `MIXED_ZONE_MIN_TILES`): `mixed_ore_zone` (tiles, bbox, resources, `handled: false`) in
+   the grid record and in a failed plan. No normal drill goes there (rule 1).
+6. Border lanes: a grid row whose border cells (area holds this ore and one foreign ore, body/
+   pole/collector clean) win ore no clean drill reaches records `border_lane`. `decide_border_lane`
+   marks it `mixed: [main, foreign]` only when `logistics` is researched, exactly one foreign
+   resource meets it and the gained ore is at least `MIXED_PAYBACK` x the device's raw ore
+   (`DEVICE_RAW_ORE`); otherwise `exclude` with the reason. The device (`filter_device`, turned
+   with the flow): a splitter one tile past the row port, filter = the foreign item on the right
+   (priority) output to an inserter + wooden chest (or onward to the neighbour's trunk), the main
+   item on the left output. `configure_action` sets priorities and filter with the paid guarded
+   `configure_splitter` (`filter` field, read back in the receipt; observations carry
+   `splitter_filter`). `device_proof`: the main output carries only the main item; when the chest
+   has no more room than the lane can still bring plus `SINK_MARGIN_ITEMS`, `retire_border` lists
+   the border drills to stop, so the foreign item never backs up into the splitter.
+
+Not yet: building border lanes (the bank still places only clean cells; mixed drills need the
+native ore rule and `resource_survey` to accept a declared mixed area and a bank build that adds
+the device), a sorted-lane device for a whole `mixed_ore_zone`, and site-plan mining zones that
+follow the patch (still bbox + margin).
+
 Lanes and merge at the patch edge (principle 4, `mine_trunk.lane_plan`, capability
 `mine_trunk_lane`, `trunk_lane.py`): when the receipt says `second_lane_required` (demand
 needs two belts and one stands), `mine_trunk_nodes` proposes the lane once. The second belt
@@ -305,3 +355,33 @@ builds them.
 Not yet: `steam_expansion`'s own paired coal bank, retiring an old independent material group
 through `obsolete.py`, consumers tapping the second lane (it needs a tap that dives under the
 first lane from the far side), an N-to-N balancer generator.
+
+## Return feed (`return_feed.py`; uses: `wood_burner_feed.py`, `trunk_return_feed.py`)
+
+Owner, 2026-11-13: a large carried surplus is easier dumped into a chest at the start of a
+belt than walked to consumers a few items at a time. One shared block puts items back onto
+any line:
+
+```
+chest -> inserter -> side belt (v) -> splitter (v) replacing one straight line belt T
+splitter: INPUT priority on the side (returned items first), OUTPUT priority on T's side
+          (the line continues; the side output S + v stays free, never built on)
+shapes:   column  chest S-3v, inserter S-2v, belt S-v    (the wood feed; reaches back along the line)
+          elbow   chest S-v+2s, inserter S-v+s, belt S-v  (beside a trunk head: rows T-1..T+1 only)
+inserter: direction = pickup side; burner arm seeded with 2 fuel once (fuels itself from what it moves)
+splice:   owner's plan republished / released first, the one belt mined by unit, splitter built and
+          configured (return_feed.splice); proof: every entity as planned, priorities live, T gone
+```
+
+Wood (`wood_burner_feed`): the column on the belt-fed coal feed, nearest the boilers.
+
+Patch trunk (`trunk_return_feed`, one per trunk, coal / iron-ore / copper-ore): row `r >= 1` of
+the trunk's first run, below every recorded tap and lane row, nearest the head first; the elbow
+first, the side without taps first. Electric inserter when a standing pole of the patch bank
+covers its tile, else a burner arm for coal; ore without a pole has no site. Recorded on the
+trunk ledger as a `return` station (`mine_trunk.record_return`; its window keeps later taps and
+lanes at rows `>= r + 3`, it is not a tap side for `lane_plan` and adds no demand) and as board
+block `trunk_return_feed:<item>`; trunk traces pass its splitter (`trunk_segments`,
+`tap_passthrough`). When the head has no free row before the first tap (a tap at row 1, or bank
+poles and drills beside rows 1..first tap) the job blocks with
+`no_return_feed_site_at_the_trunk_head`; moving the tap is not done yet.

@@ -173,6 +173,14 @@ class StarterExecutors:
 
         # Boiler coal from the coal patch trunk; the starter feed retires (mine_trunk rule).
         self.power_coal_tap = PowerCoalTap(game, self.builder, catalog, outposts=self.outposts, smelting=self.smelting)
+        from .trunk_return_feed import TrunkReturnFeed
+
+        # Surplus coal/ore back onto its patch trunk; its chest is the item's first surplus sink.
+        self.trunk_return_feed = TrunkReturnFeed(
+            game, self.builder, catalog, outposts=self.outposts, smelting=self.smelting, surplus=self.carried_surplus
+        )
+        self.carried_surplus.return_feeds = self.trunk_return_feed
+        self.carried_surplus.root = Path(game.cfg.runtime_dir)
         from .trunk_lane import TrunkLane
 
         self.trunk_lane = TrunkLane(game, self.builder, catalog, outposts=self.outposts, smelting=self.smelting)

@@ -1,11 +1,16 @@
 """Staged build of the permanent red science block: reserve every slot, build a small start, grow by evidence.
 
 ``science.science_block`` reserves a full row (``science_row`` machine slots
-and eight ``lab_row`` lab slots, belts sized for the full row). The first
+and eight ``lab_row`` lab slots, belts sized for the full row). The machine
+slots are the growth frame sized at plan time (``frame_size``: research_capacity
+on the research bill ahead, bounded by ``SITE_MACHINE_SLOTS``). The first
 build installs only ``START_LABS`` labs and the science machines those labs
 and the connected plate supply justify; the other slots stay in the board
 blocks (occupied for every other planner) and are listed as
-``stage["growth_entities"]`` in ``automation-science.json``.
+``stage["growth_entities"]`` in ``automation-science.json``. A block reserved
+with fewer slots than its frame (``frame_slot_groups``) widens its reservation
+when growth needs it (``extended_state``, republished before it is built);
+the machine limit is read live (frame and plate supply), never frozen.
 
 Slot geometry is the template's entity order, which a site transform keeps:
 ``science_row`` emits four entities per machine slot (assembler, two
@@ -23,7 +28,9 @@ decided by ``research_capacity.plan_research_capacity`` (the receipt's time
 comparison) with those permissions as its limits; once that growth is justified,
 ``build_ahead`` may take a larger option of the same room when it covers the
 longer-horizon science rate (``recommended_rates``) and its time now plus the
-revisit cost (``throughput_growth.revisit_seconds``) is lower. Pure functions, no IO.
+revisit cost (``throughput_growth.revisit_seconds``) is lower. A full frame turns
+to ``beyond_frame`` (second block or partial rebuild, same time comparison).
+Pure functions, no IO except ``growth_receipt``.
 """
 
 from __future__ import annotations
@@ -31,14 +38,17 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 
+from .capacity_planning import finite_number, stock_on_hand
 from .research_capacity import (
     RED_PACK,
     ResearchCapacityConfig,
     ResearchHardware,
     ResearchMaterials,
     expansion_costs,
+    hardware_option,
     lab_pack_rate,
     plan_research_capacity,
+    research_queue_seconds,
 )
 
 # Two labs: the cheapest pair that already doubles research over the startup
@@ -47,6 +57,16 @@ START_LABS = 2
 # At most two red machines at first: two assembling-machine-1 make 12 packs/min,
 # what two labs consume on 10 s units; slower units justify fewer.
 START_SCIENCE_MACHINES = 2
+# Machine slots one science row holds: its input/output belts and reserved
+# square (``science.science_row``) are drawn for six slots whatever ``count`` is.
+SITE_MACHINE_SLOTS = 6
+# Technologies ahead that size the reserved frame at plan time (``frame_size``).
+FRAME_HORIZON = 12
+# Seconds to place one non-machine entity of another block (belt, pole), as throughput_growth.
+ENTITY_BUILD_SECONDS = 3.0
+# A machine swapped in place is mined and placed: two machine placements.
+REBUILD_PLACEMENTS = 2
+FAST_MACHINE = "assembling-machine-2"
 # A working lab holding this many packs has packs waiting for it.
 LAB_BACKUP_PACKS = 2
 # Red packs on the lab row belt that no lab takes: the feed is backing up.
@@ -90,6 +110,222 @@ def machine_slots(science_plan):
     return _slots(science_plan, MACHINE_SLOT)
 
 
+def _shift(e, dx, dy):
+    return dict(e, position={"x": e["position"]["x"] + dx, "y": e["position"]["y"] + dy})
+
+
+def _tiles(entities):
+    from .site.geometry import plan_rect
+
+    return {tile for e in entities for tile in plan_rect(e).tiles()}
+
+
+def _inside(area, entities):
+    from .site.geometry import plan_rect
+
+    (x0, y0), (x1, y1) = area
+    for e in entities:
+        r = plan_rect(e)
+        if r.x0 < x0 - 1e-9 or r.y0 < y0 - 1e-9 or r.x1 > x1 + 1e-9 or r.y1 > y1 + 1e-9:
+            return False
+    return True
+
+
+def _served(group, belts):
+    """Every inserter of a slot reaches a planned belt on its outer side (input and output lines of the row)."""
+    machine = group[0]["position"]
+    for e in group:
+        if e["name"] != "inserter":
+            continue
+        dx, dy = e["position"]["x"] - machine["x"], e["position"]["y"] - machine["y"]
+        ux, uy = (dx > 0) - (dx < 0), (dy > 0) - (dy < 0)
+        if (e["position"]["x"] + ux, e["position"]["y"] + uy) not in belts:
+            return False
+    return True
+
+
+def frame_slot_groups(science_plan, others=()):
+    """Machine slots the science row's frame holds: the planned slots, then the next ones along the slot pitch.
+
+    A further slot is the last slot shifted by the pitch (slot 1 minus slot 0)
+    while every entity lies inside the row's ``reserved_area``, its inserters
+    reach the row's planned input and output belts (``_served``), it overlaps
+    no planned entity (the row's, or ``others``: the block's routes and power
+    links), and at most ``SITE_MACHINE_SLOTS``. A block planned with
+    fewer slots (eval-4177156614: 2) therefore still has a frame of six: the
+    belts and the reserved square were always sized for the full row.
+    """
+    slots = machine_slots(science_plan)
+    if not slots:
+        return []
+    groups = [list(group) for group in slots]
+    if len(groups) < 2 or not science_plan.get("reserved_area"):
+        return groups
+    a, b = groups[0][0]["position"], groups[1][0]["position"]
+    dx, dy = b["x"] - a["x"], b["y"] - a["y"]
+    if not dx and not dy:
+        return groups
+    belts = {
+        (e["position"]["x"], e["position"]["y"]) for e in science_plan["entities"] if e["name"] == "transport-belt"
+    }
+    taken = _tiles(list(science_plan["entities"]) + list(others))
+    while len(groups) < SITE_MACHINE_SLOTS:
+        nxt = [_shift(e, dx, dy) for e in groups[-1]]
+        if not _inside(science_plan["reserved_area"], nxt) or not _served(nxt, belts) or _tiles(nxt) & taken:
+            break
+        taken |= _tiles(nxt)
+        groups.append(nxt)
+    return groups
+
+
+def frame_capacity(state):
+    """Machine slots growth may use: the frame (``frame_slot_groups``), or the reserved slots once an extension failed."""
+    stage = state.get("stage") or {}
+    reserved = stage.get("machine_slots", 0)
+    if (state.get("frame") or {}).get("extension_blocked"):
+        return reserved
+    others = (state.get("plan") or {}).get("entities") or ()
+    return max(reserved, len(frame_slot_groups(state.get("science"), others)))
+
+
+def _fingerprint(plan):
+    import hashlib
+    import json
+
+    return hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def extended_state(state, slots):
+    """``state`` with the science row reserving ``slots`` machine slots (pure; the built stage is unchanged).
+
+    New slots are inserted after the planned ones (entity order stays slot
+    prefixes, then the belts) in the science plan and in the merged plan, the
+    stage's ``machine_slots`` and growth entities follow, and ``frame``
+    records what was replaced (``replaces``: fingerprint of the old science
+    plan, so a board still holding it is republished, never refused).
+    """
+    from .core.deterministic_builder import _plan
+
+    science = state["science"]
+    old = machine_slots(science) or []
+    groups = frame_slot_groups(science, state["plan"]["entities"])[:slots]
+    if len(groups) <= len(old):
+        return state
+    added = [dict(e) for group in groups[len(old) :] for e in group]
+    cut = len(old) * len(MACHINE_SLOT)
+    keep = ("ok", "reason", "entities", "ports", "required_items")
+    grown = _plan(
+        science["entities"][:cut] + added + science["entities"][cut:],
+        science["ports"],
+        **{k: v for k, v in science.items() if k not in keep},
+    )
+    grown["count"] = len(groups)
+    plan = state["plan"]
+    merged = _plan(plan["entities"] + added, plan["ports"], **{k: v for k, v in plan.items() if k not in keep})
+    out = dict(state, science=grown, plan=merged)
+    out["stage"] = dict(state["stage"], machine_slots=len(groups))
+    out["stage"]["growth_entities"] = growth_entities(out)
+    previous = (state.get("frame") or {}).get("replaces") or []
+    out["frame"] = {
+        "extended_from": (state.get("frame") or {}).get("extended_from", len(old)),
+        "replaces": previous + [_fingerprint(science)],
+    }
+    return out
+
+
+def frame_size(catalog, targets, *, requested, start=START_SCIENCE_MACHINES, lab_slots=8):
+    """Machine slots to reserve at plan time: ``research_capacity`` on the research bill ahead, bounded by the site.
+
+    The planner runs on ``targets`` (the technologies ahead) from the staged
+    start with funding assumed free (a reservation costs no items, only a
+    built unit does), ``max_step`` and ``max_assemblers`` at the site's
+    ``SITE_MACHINE_SLOTS`` and ``max_labs`` at ``lab_slots``: its target is
+    the largest row whose last machine still pays off in research time.
+    Never below ``requested`` slots; ``requested`` when nothing is queued.
+    """
+    if not targets:
+        return min(SITE_MACHINE_SLOTS, requested)
+    costs = expansion_costs(catalog, RED_PACK, current_assemblers=start)
+    ample = {"available": 1e9, "produced_per_minute": 1e9, "net_per_minute": 1e9}
+    items = set(costs["assembler"]) | set(costs["lab"]) | set(costs["pack"])
+    decision = plan_research_capacity(
+        targets,
+        ResearchHardware({RED_PACK: start}, {RED_PACK: costs["pack_rate_per_assembler"]}, START_LABS),
+        ResearchMaterials(
+            evidence={item: dict(ample) for item in items},
+            assembler_cost={RED_PACK: costs["assembler"]},
+            lab_cost=costs["lab"],
+            pack_cost={RED_PACK: costs["pack"]},
+            machines_per_assembler={RED_PACK: costs["machines_per_assembler"]},
+        ),
+        config=ResearchCapacityConfig(
+            max_step=SITE_MACHINE_SLOTS, max_assemblers=SITE_MACHINE_SLOTS, max_labs=max(START_LABS, lab_slots)
+        ),
+    )
+    target = decision.target_assemblers if decision.pack == RED_PACK else start
+    return max(1, min(SITE_MACHINE_SLOTS, max(requested, target)))
+
+
+def plate_draw(state, machines):
+    """Plates/minute ``machines`` red machines of ``state`` draw, per plate, from the declared taps.
+
+    The taps were declared for ``stage["tap_machines"]`` machines (older
+    states: ``machine_limit``, the plate-supported count they were sized
+    for), so one machine draws ``declared / tap_machines`` of each plate.
+    Empty without bus taps.
+    """
+    stage = state.get("stage") or {}
+    basis = stage.get("tap_machines", stage.get("machine_limit"))
+    taps = [t for t in state.get("taps") or () if isinstance(t, Mapping)]
+    if not taps or type(basis) is not int or basis < 1:
+        return {}
+    declared = {}
+    for tap in taps:
+        item = tap.get("item")
+        if isinstance(item, str):
+            declared[item] = declared.get(item, 0.0) + float(tap.get("demand_per_minute") or 0.0)
+    return {item: round(rate / basis * machines, 3) for item, rate in declared.items()}
+
+
+def undeclared_plate_draw(state, receipt=None):
+    """Plates/minute the science block draws (or is about to draw) beyond its declared taps, per plate.
+
+    The draw follows the built stage and, while the receipt grows the
+    machines, the growth target: ``throughput_growth`` adds it to the tap
+    rate so plate growth sees the science growth before it is built.
+    """
+    stage = state.get("stage") if isinstance(state, Mapping) else None
+    if not stage:
+        return {}
+    machines = stage.get("machines", 0)
+    if isinstance(receipt, Mapping) and receipt.get("grow") and type(receipt.get("target_machines")) is int:
+        machines = max(machines, receipt["target_machines"])
+    declared = plate_draw(state, stage.get("tap_machines", stage.get("machine_limit")) or 0)
+    wanted = plate_draw(state, machines)
+    return {item: round(max(0.0, rate - declared.get(item, 0.0)), 3) for item, rate in wanted.items()}
+
+
+def plate_machine_limit(machines, per_machine, evidence, seconds):
+    """Science machines the current plate supply carries: built plus what the headroom feeds, per plate the least.
+
+    Headroom of a plate = ``max(0, net_per_minute) + 60 * stock / seconds``
+    (stock spread over the remaining research ``seconds``, as the planner's
+    materials cap); a plate without evidence adds no machine.
+    """
+    extra = math.inf
+    for item, rate in per_machine.items():
+        if rate <= 0:
+            continue
+        row = (evidence or {}).get(item)
+        if not isinstance(row, Mapping):
+            return machines
+        net = max(0.0, finite_number(row.get("net_per_minute")) or 0.0)
+        stock = stock_on_hand(row)
+        headroom = net + (60.0 * stock / seconds if math.isfinite(seconds) and seconds > 0 else 0.0)
+        extra = min(extra, math.floor(headroom / rate + 1e-9))
+    return machines + (0 if not math.isfinite(extra) else max(0, int(extra)))
+
+
 def start_machines(targets, nominal_each, plate_machines, labs=START_LABS):
     """Science machines the first build installs: what ``labs`` consume, within plates and ``START_SCIENCE_MACHINES``.
 
@@ -104,16 +340,23 @@ def start_machines(targets, nominal_each, plate_machines, labs=START_LABS):
 
 
 def new_stage(state, *, labs, machines, machine_limit):
-    """The ``stage`` record for ``state`` (labs/machines built, slot counts, growth entities), or None when unstaged."""
+    """The ``stage`` record for ``state`` (labs/machines built, slot counts, growth entities), or None when unstaged.
+
+    ``machine_limit`` is the plate-supported count at plan time, kept as
+    ``tap_machines`` (what the bus taps were declared for); growth reads the
+    limit live (``growth_decision``), never from here.
+    """
     lab_rows, machine_rows = lab_slots(state.get("labs")), machine_slots(state.get("science"))
     if lab_rows is None or machine_rows is None:
         return None
+    limit = max(1, min(machine_limit, len(machine_rows)))
     stage = {
         "labs": max(1, min(labs, len(lab_rows))),
         "machines": max(1, min(machines, len(machine_rows))),
         "lab_slots": len(lab_rows),
         "machine_slots": len(machine_rows),
-        "machine_limit": max(1, min(machine_limit, len(machine_rows))),
+        "machine_limit": limit,
+        "tap_machines": limit,
     }
     stage["growth_entities"] = growth_entities(state, stage)
     return stage
@@ -319,29 +562,6 @@ def growth_decision(catalog, state, observation, targets, evidence, *, expected=
     short = any(s in MACHINE_INGREDIENT_SHORT for s in activity["machine_status"])
     machines_busy = all(s == "working" for s in activity["machine_status"])
     labs_busy = all(s == "working" for s in status)
-    free_labs = stage["lab_slots"] - labs
-    free_machines = max(0, stage.get("machine_limit", stage["machine_slots"]) - machines)
-    # Labs only while every lab works: with packs piling up, or when research_capacity finds labs the limit.
-    may_labs = labs_busy and free_labs > 0
-    may_machines = starving and not short and machines_busy and free_machines > 0
-    row["chain"] = "demand" if idle_for_demand else "plates" if starving and short else "packs" if starving else "labs"
-    if not may_labs and not may_machines:
-        if idle_for_demand:
-            why = f"built labs are idle without a pack shortage ({', '.join(sorted(set(idle_for_demand)))})"
-        elif starving and short:
-            why = (
-                "labs starve for packs and the pack machines lack plates: the plate supply is the limit "
-                "(throughput_growth grows it)"
-            )
-        elif starving and not machines_busy:
-            why = "labs starve for packs but a pack machine is not working"
-        elif starving:
-            why = "labs starve for packs and every machine slot is built"
-        elif not labs_busy:
-            why = "a lab misses packs while packs back up: the lab feed, not a stage"
-        else:
-            why = "every lab slot is built"
-        return dict(row, reason=why)
     costs = expansion_costs(catalog, RED_PACK, current_assemblers=machines)
     stock = sum(activity["lab_packs"]) + activity["belt_packs"]
     hardware = ResearchHardware(
@@ -354,6 +574,46 @@ def growth_decision(catalog, state, observation, targets, evidence, *, expected=
         pack_cost={RED_PACK: costs["pack"]},
         machines_per_assembler={RED_PACK: costs["machines_per_assembler"]},
     )
+    # Machine limit, live: the frame's slots and what the plate supply carries now.
+    per_machine = {item: amount * costs["pack_rate_per_assembler"] for item, amount in costs["pack"].items()}
+    frame = frame_capacity(state)
+    plates = plate_machine_limit(machines, per_machine, evidence, research_queue_seconds(targets, hardware))
+    limit = min(frame, plates)
+    row["frame"] = {
+        "machine_slots": stage["machine_slots"],
+        "frame_slots": frame,
+        "plate_limit": plates,
+        "machine_limit": limit,
+        "lab_slots": stage["lab_slots"],
+    }
+    free_labs = stage["lab_slots"] - labs
+    free_machines = max(0, limit - machines)
+    # Labs only while every lab works: with packs piling up, or when research_capacity finds labs the limit.
+    may_labs = labs_busy and free_labs > 0
+    wants_machines = starving and not short and machines_busy
+    may_machines = wants_machines and free_machines > 0
+    row["chain"] = "demand" if idle_for_demand else "plates" if starving and short else "packs" if starving else "labs"
+    if not may_labs and not may_machines:
+        if idle_for_demand:
+            why = f"built labs are idle without a pack shortage ({', '.join(sorted(set(idle_for_demand)))})"
+        elif starving and short:
+            why = (
+                "labs starve for packs and the pack machines lack plates: the plate supply is the limit "
+                "(throughput_growth grows it)"
+            )
+        elif starving and not machines_busy:
+            why = "labs starve for packs but a pack machine is not working"
+        elif wants_machines and machines >= frame:
+            beyond = beyond_frame(catalog, targets, hardware, materials, observation, machines)
+            row["next_step"] = beyond
+            why = "labs starve for packs and every slot of the frame is built: " + beyond["reason"]
+        elif wants_machines:
+            why = f"labs starve for packs and the plate supply carries no further machine (limit {plates})"
+        elif not labs_busy:
+            why = "a lab misses packs while packs back up: the lab feed, not a stage"
+        else:
+            why = "every lab slot is built"
+        return dict(row, reason=why[:300])
 
     def plan(lab_room):
         config = ResearchCapacityConfig(
@@ -386,4 +646,114 @@ def growth_decision(catalog, state, observation, targets, evidence, *, expected=
         permitted={"labs": may_labs, "machines": may_machines},
     )
     row["grow"] = row["target_labs"] > labs or row["target_machines"] > machines
+    if row["target_machines"] > stage["machine_slots"]:
+        row["frame"]["extend_to"] = frame  # science.grow republishes the wider frame before it builds
+    # Declared with the decision: throughput_growth adds what exceeds the taps (undeclared_plate_draw).
+    row["plate_draw_per_minute"] = plate_draw(state, row["target_machines"])
     return row
+
+
+def _second_block_bill(slots):
+    """Entities of a second science row of ``slots`` machines (the row template; taps and routes are not known)."""
+    from collections import Counter
+
+    from .science import science_row
+
+    return Counter(e["name"] for e in science_row(0.5, 0.5, slots)["entities"])
+
+
+def _json_value(value):
+    if isinstance(value, float):
+        return round(value, 1) if math.isfinite(value) else None
+    return value
+
+
+def beyond_frame(catalog, targets, hardware, materials, observation, machines, config=ResearchCapacityConfig()):
+    """What follows a full frame: a second science block or a partial rebuild, by the planner's wait-vs-spend rule.
+
+    Options (each ``fund + build + research`` by ``research_capacity.hardware_option``):
+
+    - ``second_block_<k>``: k = 1..max_step more machines in a new row; cost
+      and build time of the row template (machines ``build_seconds_per_machine``,
+      other entities ``ENTITY_BUILD_SECONDS``); its taps and routes are not
+      priced (unknown until sited), so this is a lower bound.
+    - ``rebuild``: every machine replaced in place by ``FAST_MACHINE`` once
+      its recipe is enabled; cost = the new machines (the old ones return to
+      the inventory, not credited), ``REBUILD_PLACEMENTS`` placements each;
+      research is not credited during the swap (the row's output is lost).
+
+    The fastest option is chosen when it saves ``min_saving_seconds`` and is
+    at most ``max_ratio`` of the wait (any finite option for an infinite
+    wait), else ``wait``. Neither build is a capability yet: ``implemented``
+    is False and the receipt names the next step.
+    """
+    from .progression import raw_cost
+
+    wait = research_queue_seconds(targets, hardware)
+    options = []
+    for k in range(1, config.max_step + 1):
+        bill = _second_block_bill(k)
+        new = ResearchHardware(
+            {RED_PACK: machines + k},
+            hardware.pack_rate_per_assembler,
+            hardware.labs,
+            hardware.lab_speed,
+            hardware.pack_stock,
+        )
+        made = sum(n for name, n in bill.items() if name.startswith("assembling-machine"))
+        build = made * config.build_seconds_per_machine + (sum(bill.values()) - made) * ENTITY_BUILD_SECONDS
+        option = hardware_option(
+            targets, hardware, new, materials, cost=raw_cost(catalog, bill), build_seconds=build, pack=RED_PACK
+        )
+        options.append(dict(option, option=f"second_block_{k}", machines=machines + k))
+    entities = getattr(catalog, "entities", None) or {}
+    enabled = (observation.get("enabled_recipes") or {}).get(FAST_MACHINE)
+    slow = finite_number((entities.get("assembling-machine-1") or {}).get("crafting_speed"))
+    fast = finite_number((entities.get(FAST_MACHINE) or {}).get("crafting_speed"))
+    if enabled and slow and fast and fast > slow:
+        rate = hardware.pack_rate_per_assembler.get(RED_PACK, 0.0)
+        new = ResearchHardware(
+            {RED_PACK: machines}, {RED_PACK: rate * fast / slow}, hardware.labs, hardware.lab_speed, hardware.pack_stock
+        )
+        option = hardware_option(
+            targets,
+            hardware,
+            new,
+            materials,
+            cost=raw_cost(catalog, {FAST_MACHINE: machines}),
+            build_seconds=machines * REBUILD_PLACEMENTS * config.build_seconds_per_machine,
+            pack=RED_PACK,
+        )
+        options.append(dict(option, option="rebuild", machines=machines, machine=FAST_MACHINE))
+    feasible = [o for o in options if math.isfinite(o["seconds"])]
+    best = min(feasible, key=lambda o: o["seconds"]) if feasible else None
+    choice = "wait"
+    if best is not None:
+        if not math.isfinite(wait):
+            choice = best["option"]
+        elif (
+            wait >= config.min_remaining_seconds
+            and wait - best["seconds"] >= config.min_saving_seconds
+            and best["seconds"] <= wait * config.max_ratio
+        ):
+            choice = best["option"]
+
+    def fmt(seconds):
+        return "inf" if not math.isfinite(seconds) else f"{seconds:.0f}s"
+
+    if choice == "wait":
+        reason = f"wait {fmt(wait)}" + (f"; best {best['option']} takes {fmt(best['seconds'])}" if best else "")
+        reason += ", no option saves enough"
+    else:
+        reason = (
+            f"next step {choice}: {fmt(best['seconds'])} (fund {fmt(best['fund_seconds'])} + build "
+            f"{fmt(best['build_seconds'])} + research {fmt(best['research_seconds'])}) vs wait {fmt(wait)}; "
+            "not a capability yet"
+        )
+    return {
+        "choice": choice,
+        "wait_seconds": _json_value(wait),
+        "options": [{k: _json_value(v) for k, v in o.items()} for o in options],
+        "implemented": False,
+        "reason": reason[:240],
+    }

@@ -21,8 +21,8 @@ import uuid
 from factorio_agent.core.deterministic_character import _identity
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from factorio_agent.errors import CLIError
-from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane
-from factorio_agent.early_start import admission_requires, parked
+from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane, slot_group, slots_added, slots_used
+from factorio_agent.early_start import admission_requires
 from factorio_agent import incidents as incident_rules
 from factorio_agent import actor_client
 
@@ -46,6 +46,17 @@ RETRY_CLEARED_BY = {
         {"planned_main_bus", "main_bus", "automation_science", "smelting_capacity", "produce"}
     ),
 }
+# Re-planning blockers (a route, a whole-plan preflight or a site search that found nothing):
+# the world, neighbours and the planning budget change the answer without any job success.
+REPLAN_SUFFIXES = ("_route_failed", "_preflight_failed")
+# Extra quiet-interval retries of such a blocker while no job at all is active.
+IDLE_RETRY_LIMIT = 10
+
+
+def _replannable(reason: str) -> bool:
+    return reason.startswith("no_clear_") or reason.endswith(REPLAN_SUFFIXES)
+
+
 QUEUED = ("pending", "ready")
 # Existing nodes in these states absorb a new node with the same capability and parameters.
 DEDUPE_STATUSES = {"pending", "ready", "running", "completed"}
@@ -1502,21 +1513,26 @@ class Supervisor:
         jobs = list(status.get("jobs", {}).values())
         active = _active_keys(jobs)
         busy = {admission_lane(j["capability"], j.get("parameters")) for j in jobs if j["status"] in ACTIVE}
-        # A job parked for research (early_start.parked) keeps its lane but holds no slot.
-        slots = sum(1 for j in jobs if j["status"] in ACTIVE and not parked(j))
-        candidates = [q for q in self.work.ready_nodes() if _lane(q) not in busy]
-        if slots >= MAX_ACTIVE_JOBS or not candidates or self._stop_requested():
+        # A job parked for research (early_start.parked) keeps its lane but holds no slot;
+        # the per-resource outposts share one slot (jobs.slots_used).
+        used = slots_used([j for j in jobs if j["status"] in ACTIVE])
+
+        def fits(node):
+            return len(used) + slots_added(used, node["capability"]) <= MAX_ACTIVE_JOBS
+
+        candidates = [q for q in self.work.ready_nodes() if _lane(q) not in busy and fits(q)]
+        if not candidates or self._stop_requested():
             return active
         tick = self._fresh_tick(actor)
         for node in candidates:
-            if slots >= MAX_ACTIVE_JOBS or self._stop_requested():
+            if self._stop_requested():
                 break
-            if _lane(node) in busy:
+            if _lane(node) in busy or not fits(node):
                 continue
             if self._submit(node, tick):
                 active.append(node["job_key"])
                 busy.add(_lane(node))
-                slots += 1
+                used.add(slot_group(node["capability"], node["job_key"]))
         return active
 
     def _submit(self, node, tick):
@@ -1685,7 +1701,26 @@ class Supervisor:
                 # The baseline counts other successes for the new reason: start it afresh.
                 seen["successes"] = succeeded
             seen["cleared_by"] = cleared_by and sorted(cleared_by)
+            quiet = self.clock() - float(seen.get("first_seen", self.clock())) >= AUTO_RETRY_STALL_SECONDS
             if seen["count"] >= AUTO_RETRY_LIMIT:
+                # Nothing else can run (every job terminal): a re-planning blocker is tried again
+                # after each quiet interval, a bounded number of times (all-1113-2107 1834967787,
+                # 3272954496: the bus blocked planned_bus_feed_route_failed, its 3 retries spent in
+                # one minute, and the run did nothing for the last 17 minutes; 978391276 routed its
+                # feeds on the 4th attempt).
+                idle_run = not any(other["status"] in ACTIVE for other in jobs)
+                if not (idle_run and _replannable(reason) and quiet and seen.get("idle", 0) < IDLE_RETRY_LIMIT):
+                    continue
+                if self._control_command("retry", key):
+                    seen.update(idle=seen.get("idle", 0) + 1, first_seen=self.clock())
+                    self._event(
+                        "auto_retry",
+                        key=key,
+                        capability=job.get("capability"),
+                        blocked_reason=reason[:200],
+                        idle_run=True,
+                    )
+                    retried = True
                 continue
             # A stalled job waited on something (fuel, plates) that upkeep may
             # since have fixed; with every job blocked no success can ever
@@ -1695,7 +1730,7 @@ class Supervisor:
             # the answer without a job success (pace1 seed 2692229611: the district blocked at
             # 19.8 min, found its site on the first retry at 25.0, after the next success).
             stalled_long_enough = (
-                (reason == "objective_progress_stalled" or reason.startswith("no_clear_"))
+                (reason == "objective_progress_stalled" or reason.startswith("no_clear_") or _replannable(reason))
                 # The stall path does not stamp blocked_at_time on the job, so
                 # fall back to when this supervisor first saw it blocked.
                 and self.clock() - float(job.get("blocked_at_time") or seen.get("first_seen", self.clock()))

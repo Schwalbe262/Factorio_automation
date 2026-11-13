@@ -192,10 +192,15 @@ class AutomaticScience:
         speed = self.catalog.entities["assembling-machine-1"]["crafting_speed"]
         nominal_each = speed * 60 / self.catalog.recipes["automation-science-pack"]["energy"]
         count = math.ceil(parameters["rate_per_minute"] * 1.15 / nominal_each)
-        if count > 6:
+        if count > science_growth.SITE_MACHINE_SLOTS:
             return {"ok": False, "reason": "red_science_row_exceeds_six_slots"}
-        # Every requested slot is reserved; plates and labs decide how many are built first.
-        slots = count
+        # The full growth frame is reserved (research_capacity on the research bill ahead,
+        # bounded by the row's six slots); plates and labs decide how many are built first.
+        try:
+            frame_targets = self._queue_targets(obs, horizon=science_growth.FRAME_HORIZON)
+            slots = science_growth.frame_size(self.catalog, frame_targets, requested=count)
+        except (KeyError, TypeError, ValueError, AttributeError, ZeroDivisionError):
+            slots = count
         mining = json.loads((root / "mining-outposts.json").read_text(encoding="utf-8"))
         smelting = json.loads((root / "smelting-district.json").read_text(encoding="utf-8"))
         if mining.get("world_id") != obs["world_id"] or smelting.get("world_id") != obs["world_id"]:
@@ -391,13 +396,9 @@ class AutomaticScience:
         board = json.loads(path.read_text(encoding="utf-8"))
         if board.get("world_id") != obs["world_id"] or board.get("catalog_fingerprint") != self.catalog.fingerprint:
             return {"status": "blocked", "reason": "science_board_identity_changed"}
-        changed = False
-        for key, plan in (("automation_science", self.state["science"]), ("laboratories", self.state["labs"])):
-            if board["blocks"].get(key) != plan:
-                if key in board["blocks"]:
-                    return {"status": "blocked", "reason": "science_reserved_block_changed"}
-                board["blocks"][key] = plan
-                changed = True
+        changed = self._republish_blocks(board)
+        if changed is None:
+            return {"status": "blocked", "reason": "science_reserved_block_changed"}
         # Routes and power links are published with the blocks, before anything
         # is built, so every other planner sees them (``routes_block``).
         routes = routes_block(self.state)
@@ -462,7 +463,7 @@ class AutomaticScience:
             "scope": "normal continuous raw-belt supply and machine science into labs; rated capacity is not sustained measured science consumption",
         }
 
-    def _queue_targets(self, obs):
+    def _queue_targets(self, obs, horizon=4):
         """Research queue for sizing (running research and next roadmap technologies of this world's ledger)."""
         from .research_capacity import queue_targets
 
@@ -475,7 +476,7 @@ class AutomaticScience:
         if isinstance(data, dict) and data.get("world_id") == obs.get("world_id"):
             jobs = list((data.get("jobs") or {}).values())
         try:
-            return queue_targets(self.catalog, jobs, obs)
+            return queue_targets(self.catalog, jobs, obs, horizon=horizon)
         except (KeyError, TypeError, ValueError, AttributeError):
             return []
 
@@ -494,8 +495,10 @@ class AutomaticScience:
         """Build reserved slots up to ``parameters`` ``labs``/``machines`` (capability ``science_growth``).
 
         Only slots of the saved block are built (``science_growth.build_plan``);
-        the built stage is committed once every new entity is observed and
-        powered. Never shrinks, never exceeds the slot counts or the plate limit.
+        machines beyond the reserved slots first widen the reservation to the
+        frame (``_extend_frame``). The built stage is committed once every new
+        entity is observed and powered. Never shrinks, never exceeds the frame
+        or the lab slots (the plate limit is the receipt's, read live).
         """
         validate_growth(parameters)
         stage = (self.state or {}).get("stage")
@@ -504,8 +507,15 @@ class AutomaticScience:
         if self.state["world_id"] != obs["world_id"] or self.state["catalog_fingerprint"] != self.catalog.fingerprint:
             return {"status": "blocked", "reason": "science_world_or_catalog_changed"}
         labs, machines = parameters["labs"], parameters["machines"]
-        if labs > stage["lab_slots"] or machines > stage.get("machine_limit", stage["machine_slots"]):
+        if labs > stage["lab_slots"] or machines > science_growth.frame_capacity(self.state):
             return {"status": "blocked", "reason": "science_growth_exceeds_reserved_slots"}
+        if machines > stage["machine_slots"]:
+            # A block reserved with fewer slots than its frame (eval-4177156614: 2): widen the
+            # reservation first (plan republished), then build into it.
+            blocked = self._extend_frame(obs, machines)
+            if blocked is not None:
+                return blocked
+            stage = self.state["stage"]
         labs, machines = max(labs, stage["labs"]), max(machines, stage["machines"])
         result = self.builder.ensure_plan(obs, science_growth.build_plan(self.state, labs=labs, machines=machines))
         if result.get("status") != "succeeded":
@@ -519,6 +529,72 @@ class AutomaticScience:
             self.state = grown
             _atomic_json(self.path, self.state)
         return {"status": "succeeded", "reason": "reserved science slots built", "evidence": self.growth_proof(obs)}
+
+    def _republish_blocks(self, board):
+        """Put the state's science and lab blocks on ``board`` (in memory): True changed, False same, None refused.
+
+        A board block another state wrote is refused; one this block's frame
+        extension replaced (``frame.replaces`` fingerprint) is republished.
+        """
+        replaced = set((self.state.get("frame") or {}).get("replaces") or ())
+        changed = False
+        for key, plan in (("automation_science", self.state["science"]), ("laboratories", self.state["labs"])):
+            old = board["blocks"].get(key)
+            if old == plan:
+                continue
+            if old is not None and science_growth._fingerprint(old) not in replaced:
+                return None
+            board["blocks"][key] = plan
+            changed = True
+        return changed
+
+    def _extend_frame(self, obs, machines):
+        """Reserve the frame's further machine slots (``science_growth.extended_state``); None when reserved.
+
+        Tries the whole frame first, then fewer slots down to ``machines``:
+        the new slot entities must pass ``preflight`` on the live map (trees
+        are cleared as the block's obstacles). The extended state is saved and
+        the board republished before any slot is built. When no width holds
+        ``machines`` the frame is recorded as blocked (``frame.extension_blocked``),
+        so the growth receipt turns to the second-block decision instead.
+        """
+        old = self.state
+        path = self.path.parent / "pcb-board.json"
+        board = json.loads(path.read_text(encoding="utf-8"))
+        if board.get("world_id") != obs["world_id"] or board.get("catalog_fingerprint") != self.catalog.fingerprint:
+            return {"status": "blocked", "reason": "science_board_identity_changed"}
+        reserved = {(e["name"], *xy(e)) for e in old["plan"]["entities"]}
+        failure = None
+        for slots in range(science_growth.frame_capacity(old), machines - 1, -1):
+            grown = science_growth.extended_state(old, slots)
+            added = [e for e in grown["plan"]["entities"] if (e["name"], *xy(e)) not in reserved]
+            if not added:
+                continue
+            clearance = preflight(self.game, self.builder, obs, added)
+            if not clearance.get("ok"):
+                failure = clearance
+                continue
+            plan = dict(grown["plan"])
+            obstacles = {(e["name"], *xy(e)): e for e in plan.get("clear_obstacles", [])}
+            obstacles.update({(e["name"], *xy(e)): e for e in clearance.get("clear_obstacles", [])})
+            plan["clear_obstacles"] = list(obstacles.values())
+            self.state = dict(grown, plan=plan)
+            # The extended state is saved first: a board still holding the old block is then
+            # republished by fingerprint (``_republish_blocks``), never refused.
+            _atomic_json(self.path, self.state)
+            if self._republish_blocks(board) is None:
+                return {"status": "blocked", "reason": "science_reserved_block_changed"}
+            _atomic_json(path, board)
+            return None
+        self.state = dict(old, frame=dict(old.get("frame") or {}, extension_blocked=(failure or {}).get("reason")))
+        self.state["frame"]["extension_blocked"] = self.state["frame"]["extension_blocked"] or "no_free_frame_slot"
+        _atomic_json(self.path, self.state)
+        return {
+            "status": "blocked",
+            "reason": "science_frame_extension_blocked",
+            "failure": failure,
+            "next_step": "second science block or partial rebuild (science_growth receipt next_step)",
+        }
 
     def growth_proof(self, obs, parameters=None):
         """Every entity of the built stage is observed and powered, and the stage reaches ``parameters``."""

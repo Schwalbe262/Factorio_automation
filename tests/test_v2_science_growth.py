@@ -239,12 +239,12 @@ class GrowthRuleTests(unittest.TestCase):
         self.assertEqual(rising["build_ahead"]["quickest"], "+1 machines +0 labs")
         self.assertGreater(rising["build_ahead"]["quickest_revisit_seconds"], 0)
         self.assertIn("build ahead", rising["reason"])
-        # Bounded by the reserved frame: machine_limit 3 leaves one free slot whatever is expected.
-        framed = state(machines=2, machine_limit=3)
-        obs = self.live(framed, ["missing_science_packs", "working"], [0, 2], 2)
-        capped = sg.growth_decision(
-            catalog(), framed, obs, FAST_QUEUE, deepcopy(AMPLE), expected={"rate_per_minute": 30, "labs": 4}
-        )
+        # Bounded by the live limit (frame and plates): a 3-slot frame leaves one free slot whatever is expected.
+        from unittest.mock import patch
+
+        with patch.object(sg, "frame_capacity", return_value=3):
+            capped = decide({"rate_per_minute": 30, "labs": 4})
+        self.assertEqual(capped["frame"]["machine_limit"], 3)
         self.assertEqual(capped["target_machines"], 3)
         json.dumps(rising, allow_nan=False)
 
@@ -274,8 +274,143 @@ class GrowthRuleTests(unittest.TestCase):
 
     def test_machine_growth_stops_at_the_plate_limit(self):
         row = state(machines=2, machine_limit=2)
-        decision = self.decide(row, observed(row, lab_status="missing_science_packs", lab_packs=0))
+        obs = self.live(row, ["missing_science_packs", "working"], [0, 2], 2)
+        # No net plates and no stock: the live plate limit is the built count.
+        thin = {item: {"available": 0, "produced_per_minute": 30, "net_per_minute": 0} for item in AMPLE}
+        decision = sg.growth_decision(catalog(), row, obs, FAST_QUEUE, thin)
         self.assertFalse(decision["grow"])
+        self.assertEqual(decision["frame"]["plate_limit"], 2)
+        self.assertIn("plate supply carries no further machine", decision["reason"])
+
+
+class FrameTests(unittest.TestCase):
+    """The reserved frame: sized from the research bill, extended for legacy blocks, limit read live."""
+
+    def test_plan_reserves_the_frame_from_the_research_bill_and_builds_the_start(self):
+        cat = catalog()
+        bill = [rc.research_target(cat, name) for name in ("fast-inserter", "logistics", "military")] + FAST_QUEUE
+        slots = sg.frame_size(cat, bill, requested=2)
+        self.assertGreater(slots, 2)
+        self.assertLessEqual(slots, sg.SITE_MACHINE_SLOTS)
+        self.assertEqual(sg.frame_size(cat, [], requested=2), 2)  # nothing queued: the requested row
+        self.assertEqual(sg.frame_size(cat, bill, requested=6), 6)
+        row = state(count=slots)
+        built = sg.build_plan(row)
+        self.assertEqual(sum(e.get("recipe") == RED for e in built["entities"]), 2)
+        self.assertEqual(sum(e["name"] == "lab" for e in built["entities"]), sg.START_LABS)
+        self.assertEqual(row["stage"]["machine_slots"], slots)
+
+    def test_a_legacy_two_slot_block_has_a_six_slot_frame_in_its_reserved_square(self):
+        for transform in TRANSFORMS:
+            with self.subTest(transform=transform):
+                row = state(count=2, transform=transform, machines=2, machine_limit=2)
+                self.assertEqual(sg.frame_capacity(row), sg.SITE_MACHINE_SLOTS)
+                grown = sg.extended_state(row, sg.SITE_MACHINE_SLOTS)
+                full = state(count=sg.SITE_MACHINE_SLOTS, transform=transform)
+                # The extension is exactly the six-slot row of the same square.
+                self.assertEqual(
+                    {key(e) for e in grown["science"]["entities"]}, {key(e) for e in full["science"]["entities"]}
+                )
+                self.assertEqual(grown["science"]["count"], 6)
+                self.assertEqual(grown["stage"]["machine_slots"], 6)
+                self.assertEqual(grown["stage"]["machines"], 2)  # nothing new is built by the reservation
+                self.assertEqual(
+                    {key(e) for e in sg.build_plan(grown)["entities"]}, {key(e) for e in sg.build_plan(row)["entities"]}
+                )
+                self.assertEqual(len(grown["frame"]["replaces"]), 1)
+                for machines in range(1, 7):
+                    plan = sg.build_plan(grown, machines=machines)
+                    keys = {key(e) for e in grown["science"]["entities"]}
+                    self.assertEqual(len(pole_groups([e for e in plan["entities"] if key(e) in keys])), 1)
+
+    def test_a_blocked_extension_falls_back_to_the_reserved_slots(self):
+        row = state(count=2, machines=2, machine_limit=2)
+        row["frame"] = {"extension_blocked": "ore_under_slot"}
+        self.assertEqual(sg.frame_capacity(row), 2)
+
+    def test_limit_follows_the_plate_supply_now(self):
+        per = {"iron-plate": 12.0, "copper-plate": 6.0}
+        none = {
+            "iron-plate": {"available": 0, "net_per_minute": 0},
+            "copper-plate": {"available": 0, "net_per_minute": 0},
+        }
+        self.assertEqual(sg.plate_machine_limit(2, per, none, 600), 2)
+        some = {
+            "iron-plate": {"available": 0, "net_per_minute": 25},
+            "copper-plate": {"available": 0, "net_per_minute": 40},
+        }
+        self.assertEqual(sg.plate_machine_limit(2, per, some, 600), 4)
+        # Stock spread over the remaining research: 120 iron over 600 s = 12/min, one more machine.
+        stock = {
+            "iron-plate": {"available": 120, "net_per_minute": 0},
+            "copper-plate": {"available": 60, "net_per_minute": 0},
+        }
+        self.assertEqual(sg.plate_machine_limit(2, per, stock, 600), 3)
+        self.assertEqual(sg.plate_machine_limit(2, per, {}, 600), 2)  # unknown supply adds nothing
+
+    def live_82(self, row):
+        """eval-4177156614 at 82 min: lab_status [missing_science_packs, working], lab_packs [0, 2], belt 2."""
+        obs = observed(row, belt_packs=2)
+        for lab, status, n in zip([e for e in obs["entities"] if e["name"] == "lab"], PACK_STATUSES, (0, 2)):
+            lab.update(status_name=status, inventory={RED: n} if n else {})
+        return obs
+
+    def test_the_82_minute_receipt_grows_a_third_machine_into_the_legacy_frame(self):
+        row = state(count=2, machines=2, machine_limit=2)  # the live block: 2 slots, limit 2
+        decision = sg.growth_decision(catalog(), row, self.live_82(row), FAST_QUEUE, deepcopy(AMPLE))
+        self.assertTrue(decision["grow"], decision["reason"])
+        self.assertEqual(decision["target_machines"], 3)
+        self.assertEqual(decision["target_labs"], 2)
+        self.assertEqual(decision["frame"]["extend_to"], 6)
+        json.dumps(decision, allow_nan=False)
+
+    def test_frame_full_turns_to_the_second_block_or_rebuild_decision(self):
+        row = state(count=6, machines=6, machine_limit=6)
+        decision = sg.growth_decision(catalog(), row, self.live_82(row), [FAST_QUEUE[0]] * 4, deepcopy(AMPLE))
+        self.assertFalse(decision["grow"])
+        step = decision["next_step"]
+        self.assertIn(step["choice"], ("wait", "second_block_1", "second_block_2"))
+        self.assertFalse(step["implemented"])
+        self.assertEqual([o["option"] for o in step["options"]], ["second_block_1", "second_block_2"])
+        self.assertIn("frame is built", decision["reason"])
+        json.dumps(decision, allow_nan=False)
+        # A long packs-limited bill pays for the second row.
+        long = [rc.ResearchTarget("long", 3000, 1.0, {RED: 1})]  # two labs eat 120/min, six machines make 36
+        step = sg.growth_decision(catalog(), row, self.live_82(row), long, deepcopy(AMPLE))["next_step"]
+        self.assertEqual(step["choice"], "second_block_2", step["reason"])
+
+    def test_rebuild_is_an_option_once_faster_machines_are_unlocked(self):
+        cat = catalog()
+        cat.entities["assembling-machine-2"] = {"crafting_speed": 0.75}
+        cat.recipes["assembling-machine-2"] = {
+            "name": "assembling-machine-2",
+            "energy": 0.5,
+            "ingredients": [{"name": "iron-plate", "amount": 20}],
+            "products": [{"name": "assembling-machine-2", "amount": 1}],
+        }
+        row = state(count=6, machines=6, machine_limit=6)
+        obs = dict(self.live_82(row), enabled_recipes={"assembling-machine-2": True})
+        long = [rc.ResearchTarget("long", 3000, 1.0, {RED: 1})]
+        step = sg.growth_decision(cat, row, obs, long, deepcopy(AMPLE))["next_step"]
+        rebuild = next(o for o in step["options"] if o["option"] == "rebuild")
+        self.assertEqual(rebuild["pack_rate_per_minute"], 54.0)  # 6 machines x 6/min x 0.75/0.5
+        self.assertEqual(step["choice"], "rebuild", step["reason"])
+
+    def test_declared_draw_rises_with_the_growth(self):
+        row = state(count=2, machines=2, machine_limit=2)
+        row["taps"] = [
+            {"name": "automation_science:iron-plate", "item": "iron-plate", "demand_per_minute": 24.0},
+            {"name": "automation_science:copper-plate", "item": "copper-plate", "demand_per_minute": 12.0},
+        ]
+        self.assertEqual(sg.undeclared_plate_draw(row), {"iron-plate": 0.0, "copper-plate": 0.0})
+        receipt = {"grow": True, "target_machines": 3}
+        self.assertEqual(sg.undeclared_plate_draw(row, receipt), {"iron-plate": 12.0, "copper-plate": 6.0})
+        grown = dict(row, stage=dict(row["stage"], machines=4))
+        self.assertEqual(sg.undeclared_plate_draw(grown), {"iron-plate": 24.0, "copper-plate": 12.0})
+        self.assertEqual(sg.undeclared_plate_draw(dict(row, taps=[]), receipt), {})
+
+
+PACK_STATUSES = ("missing_science_packs", "working")
 
 
 class ControllerTests(unittest.TestCase):
@@ -344,6 +479,22 @@ class ControllerTests(unittest.TestCase):
         blocks = json.loads((self.root / "pcb-board.json").read_text(encoding="utf-8"))["blocks"]
         self.assertNotIn(ROUTES_BLOCK, blocks)
 
+    def test_startup_cell_stops_growing_once_the_bus_science_block_takes_over(self):
+        from factorio_agent.industry import permanent_science_due
+
+        obs = {"world_id": "w"}
+        self.assertIsNone(permanent_science_due(self.root, obs))
+        ledger = {"world_id": "w", "jobs": {"a": {"capability": "planned_main_bus", "status": "running"}}}
+        (self.root / "jobs.json").write_text(json.dumps(ledger), encoding="utf-8")
+        self.assertIsNone(permanent_science_due(self.root, obs))
+        ledger["jobs"]["a"]["status"] = "succeeded"
+        (self.root / "jobs.json").write_text(json.dumps(ledger), encoding="utf-8")
+        self.assertEqual(permanent_science_due(self.root, obs), "bus_science_fundable")
+        (self.root / "jobs.json").unlink()
+        (self.root / "automation-science.json").write_text(json.dumps({"world_id": "w"}), encoding="utf-8")
+        self.assertEqual(permanent_science_due(self.root, obs), "permanent_science_block_planned")
+        self.assertIsNone(permanent_science_due(self.root, {"world_id": "other"}))
+
     def test_startup_cell_adds_no_lab_while_a_built_lab_is_idle(self):
         from factorio_agent.industry import _idle_powered_labs
 
@@ -354,11 +505,86 @@ class ControllerTests(unittest.TestCase):
         obs["entities"][0]["status_name"] = "working"
         self.assertFalse(_idle_powered_labs(obs))
 
+    def board(self, row):
+        board = {
+            "world_id": "w",
+            "catalog_fingerprint": "catalog",
+            "blocks": {"automation_science": row["science"], "laboratories": row["labs"]},
+        }
+        (self.root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+
+    def test_a_legacy_block_republishes_its_frame_then_grows_to_three_machines_and_four_labs(self):
+        from unittest.mock import patch
+
+        row = state(count=2, machines=2, machine_limit=2)
+        self.science.state = row
+        self.board(row)
+        clear = {"ok": True, "clear_obstacles": [{"name": "tree-01", "position": {"x": 30.5, "y": 20.5}}]}
+        with patch("factorio_agent.science.preflight", return_value=clear) as checked:
+            result = self.science.grow(observed(row), {"labs": 2, "machines": 3})
+        self.assertEqual(result["status"], "waiting")
+        added = checked.call_args[0][3]
+        self.assertEqual(sum(e["name"] == "assembling-machine-1" for e in added), 4)  # the whole frame reserved
+        saved = json.loads((self.root / "automation-science.json").read_text(encoding="utf-8"))
+        board = json.loads((self.root / "pcb-board.json").read_text(encoding="utf-8"))
+        self.assertEqual(board["blocks"]["automation_science"], saved["science"])
+        self.assertEqual(saved["stage"]["machine_slots"], 6)
+        self.assertEqual(saved["stage"]["machines"], 2)  # not committed before it is observed
+        self.assertIn("tree-01", [e["name"] for e in saved["plan"]["clear_obstacles"]])
+        plan = self.builder.ensure_plan.call_args[0][1]
+        self.assertEqual(sum(e.get("recipe") == RED for e in plan["entities"]), 3)
+        grown = dict(self.science.state, stage=dict(self.science.state["stage"], machines=3))
+        self.assertEqual(self.science.grow(observed(grown), {"labs": 2, "machines": 3})["status"], "succeeded")
+        self.assertEqual(self.science.state["stage"]["machines"], 3)
+        # Labs follow once every lab works with packs backing up: 2 -> 4 lab slots.
+        busy = observed(self.science.state, lab_packs=3, belt_packs=12)
+        decision = sg.growth_decision(catalog(), self.science.state, busy, queue(), deepcopy(AMPLE))
+        self.assertEqual(decision["target_labs"], 4, decision["reason"])
+        self.assertEqual(self.science.grow(busy, {"labs": 4, "machines": 3})["status"], "waiting")
+        four = dict(self.science.state, stage=dict(self.science.state["stage"], labs=4))
+        self.assertEqual(self.science.grow(observed(four), {"labs": 4, "machines": 3})["status"], "succeeded")
+        self.assertEqual((self.science.state["stage"]["labs"], self.science.state["stage"]["machines"]), (4, 3))
+        # step() accepts the republished block (the board holds the extended plan).
+        self.builder.ensure_plan.return_value = {"type": "build", "name": "lab"}
+        self.assertEqual(
+            self.science.step({"world_id": "w", "tick": 2, "entities": []}, {"rate_per_minute": 10})["type"], "build"
+        )
+
+    def test_a_board_still_holding_the_replaced_block_is_republished(self):
+        row = state(count=2, machines=2, machine_limit=2)
+        self.board(row)
+        self.science.state = sg.extended_state(row, 6)
+        self.builder.ensure_plan.return_value = {"type": "build", "name": "lab"}
+        self.assertEqual(
+            self.science.step({"world_id": "w", "tick": 2, "entities": []}, {"rate_per_minute": 10})["type"], "build"
+        )
+        board = json.loads((self.root / "pcb-board.json").read_text(encoding="utf-8"))
+        self.assertEqual(board["blocks"]["automation_science"]["count"], 6)
+        # A block another state wrote is still refused.
+        board["blocks"]["automation_science"] = state(count=3)["science"]
+        (self.root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+        self.assertEqual(
+            self.science.step({"world_id": "w", "tick": 3, "entities": []}, {"rate_per_minute": 10})["reason"],
+            "science_reserved_block_changed",
+        )
+
+    def test_a_frame_that_cannot_be_placed_turns_to_the_second_block_path(self):
+        from unittest.mock import patch
+
+        row = state(count=2, machines=2, machine_limit=2)
+        self.science.state = row
+        self.board(row)
+        with patch("factorio_agent.science.preflight", return_value={"ok": False, "reason": "ore_under_slot"}):
+            result = self.science.grow(observed(row), {"labs": 2, "machines": 3})
+        self.assertEqual(result["reason"], "science_frame_extension_blocked")
+        self.assertEqual(sg.frame_capacity(self.science.state), 2)
+        self.builder.ensure_plan.assert_not_called()
+
     def test_growth_never_exceeds_slots_and_validates(self):
         self.science.state = state(machines=2, machine_limit=2)
         obs = observed(self.science.state)
         self.assertEqual(
-            self.science.grow(obs, {"labs": 2, "machines": 3})["reason"], "science_growth_exceeds_reserved_slots"
+            self.science.grow(obs, {"labs": 2, "machines": 7})["reason"], "science_growth_exceeds_reserved_slots"
         )
         for bad in ({"labs": 0, "machines": 1}, {"labs": 2}, {"labs": 2, "machines": 1.0}):
             with self.assertRaises(ValueError):

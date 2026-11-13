@@ -413,7 +413,7 @@ def lane_plan(bank, obs, *, stations=(), accept=None) -> dict:
     lane by lane (merge by saturation). More than two lanes stay reserved and
     recorded (``balancer_plan``). Returns ``{"ok": True, "lane": ...}`` or a failure.
     """
-    tapped = {s.get("side") for s in stations if s.get("kind") != "lane" and s.get("segment", 0) == 0}
+    tapped = {s.get("side") for s in stations if s.get("kind") not in ("lane", "return") and s.get("segment", 0) == 0}
     if len(tapped) > 1:
         return {"ok": False, "reason": "mine_trunk_lane_both_sides_tapped"}
     side = next(iter(tapped)) if tapped else "right"
@@ -588,10 +588,21 @@ def record_tap(root, world_id: str, tap: dict, *, block=None) -> dict | None:
     return None
 
 
+def record_return(root, world_id: str, feed: dict) -> None:
+    """Record a return feed (``trunk_return_feed``) on its trunk, idempotent; one per trunk."""
+    root = Path(root)
+    state = ledger(root, world_id)
+    trunk = state["trunks"].setdefault(feed["trunk"], {"taps": {}})
+    if trunk.get("returns", {}).get(feed["name"]) != feed:
+        trunk["returns"] = {feed["name"]: deepcopy(feed)}
+        _atomic_json(root / STATE_FILE, state)
+
+
 def stations(root, world_id: str, key: str, *, exclude=None) -> list[dict]:
-    """Taps and lanes already recorded on trunk ``key`` (with their entities), other than ``exclude``."""
+    """Taps, lanes and the return feed recorded on trunk ``key`` (with their entities), other than ``exclude``."""
     trunk = ledger(root, world_id)["trunks"].get(key, {})
     rows = [dict(t) for name, t in sorted(trunk.get("taps", {}).items()) if name != exclude]
+    rows += [dict(r) for name, r in sorted((trunk.get("returns") or {}).items()) if name != exclude]
     return rows + [dict(lane) for _, lane in sorted((trunk.get("lanes") or {}).items()) if lane.get("name") != exclude]
 
 
@@ -606,7 +617,8 @@ def tap_passthrough(root, world_id: str, bank: dict) -> dict:
         return {}
     trunk = ledger(root, world_id)["trunks"].get(trunk_key(bank), {})
     tiles = {}
-    for tap in list(trunk.get("taps", {}).values()) + list((trunk.get("lanes") or {}).values()):
+    recorded = [*trunk.get("taps", {}).values(), *(trunk.get("lanes") or {}).values()]
+    for tap in recorded + list((trunk.get("returns") or {}).values()):
         splitter = tap.get("splitter")
         if not isinstance(splitter, dict):
             continue

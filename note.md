@@ -252194,8 +252194,31 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: offline only; nothing proven live.
 - failure reason / open: live science block reserved only 2 machine slots (machine_limit 2): no slot to grow; lookahead ignores steps without builds; taps of grown science not demand.
 - next action: fleet round; check auto_throughput_* chains (mining then smelting) and science_growth chain field.
+## 2026-11-13 Part 48 - return feed (shared block) and trunk surplus return
+- goal: owner idea: large carried surplus dumped into a chest + input-priority splitter at the mine trunk head instead of walked to consumers.
+- actions: return_feed.py shared geometry/splice/seed/register/stock/standing (column + elbow shapes); wood_burner_feed refactored onto it (behaviour and tests unchanged); trunk_return_feed.py capability (receipt trunk_return_feeds, wait-vs-spend trigger, prepare at trunk row r below every tap, electric arm under a bank pole else burner for coal, ledger `returns` station, board block, release before mine, proof with trunk trace); carried_surplus: feed chest first for coal/ore, trip log carried-surplus.json, opportunistic depot drain, feed chest never a depot; mine_trunk stations/passthrough/lane side know `return`.
+- metrics: tests test_v2_trunk_return_feed (14); wood, carried surplus, mine trunk, power tap, starter retirement unchanged.
+- result: offline only; nothing proven live.
+- open: no site when a tap already sits at trunk row 1-2 beside bank poles/drills (blocks with no_return_feed_site_at_the_trunk_head); TRIP_SECONDS/BUILD_SECONDS are estimates; stone excluded (no carry allowance).
+- next: fleet: check trunk-return-feeds.json phase done, chest stock falls, coal carried near allowance, recent trips drop.
+## 2026-11-13 mine frame follows the patch (neighbouring ores)
+- part: mining_layout_policy / mining_border / outposts; goal: owner screenshot eval-4177156614 (stone touching iron).
+- found: bank reserved_area = box of footprint+exit+apron (iron 7x27, 7x12 drills); stone exit faced east into iron; drills already clean.
+- actions: grid cells also refuse pole/collector on other ore; patch_grid frame_rects, mixed_ore_zone, border_lane decision (filter splitter device, payback rule, logistics-gated); bank reserved_rects + patch_frame; mining checks compare rects; ports facing another patch rank last and outposts try other sides; configure_splitter takes a filter (paid, read back); observation carries splitter_filter.
+- result: tests/test_v2_mining_border.py 14 pass; mining/outpost lupa set 176 pass.
+- not yet: building border lanes (native ore rule + resource_survey must accept a declared mixed area), whole mixed-zone sorter, site-plan zones still bbox.
+- next: live check of reserved_rects publish and the edge turn on a map with touching patches.
 
-## 2026-11-13 23:30 Part 49 - build ahead in staged growth (worktree agent-a3f9b2c5)
+## 2026-11-13 23:30 Part 49 - science growth frame, live machine limit, declared growth draw (worktree agent-aab90b78)
+- goal: live research slow; eval-4177156614 block could not grow (machine_slots 2, machine_limit 2 frozen at plan time).
+- hypothesis: the reservation was sized from the requested rate and the limit from plan-time plates; the row's square and belts already hold six slots.
+- actions: science.prepare reserves the frame (research_capacity on 12 technologies ahead, funding free, bounded by 6); growth_decision limit = min(frame_capacity, live plate_limit); science.grow widens a legacy reservation (extended_state, preflight, state then board republished by fingerprint) before building; frame full -> beyond_frame (second_block_k / AM2 rebuild / wait, receipt only); undeclared_plate_draw feeds the throughput_growth tap rate; step_bill adds green cluster and steam pair bills to the lookahead; startup cell stops growing once the bus science takes over.
+- metrics: live state read-only: frame 6, extension adds 16 entities, no plan overlap; growth to 3 declares +12 iron +6 copper/min.
+- result: offline only; nothing proven live.
+- failure reason / open: second block and AM2 rebuild are decisions only (no capability); green science is one cluster (no slot frame).
+- next action: live map: science_growth {labs 2, machines 3} widens the frame and builds; then labs 2 -> 4.
+
+## 2026-11-13 23:30 Part 50 - build ahead in staged growth (worktree agent-a3f9b2c5)
 - goal: owner rule 2026-11-13: over-building can win (new blocks raise demand again; a second expansion trip stalls the work); replace "smallest package unless 60 s faster".
 - hypothesis: expected growth from the lookahead (unbuilt taps, running rates of the next 8 roadmap blocks, science growth targets, 0.25 x demand allowance for unknown blocks) plus an explicit revisit cost picks the margin by time, bounded by the reserved frame.
 - actions: throughput_growth: expected_growth/upcoming_rates/PLATE_NEUTRAL, revisit_seconds, build_ahead (min T1 + R between the quickest and the full package; T1 < T0; claim rule), grow judged on the quickest; receipt expected + build_ahead. science_growth.build_ahead over plan_research_capacity options vs recommended_rates. mine_trunk.ahead_target (allowance within reserved pairs). starter capacity untouched.
@@ -252203,3 +252226,4 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: offline only; gate PASS.
 - failure reason / open: mine trunk has no time comparison; upcoming_rates knows 5 block kinds (others neutral or allowance); expected growth is assumed to come (no probability).
 - next action: fleet round; read build_ahead in throughput_growth receipts and count second-trip growth jobs per plate.
+- merge with v2 (science frame/live limit, growth_taps): a staged science block's growth counts once (growth_taps); build ahead adds research_capacity machines only without a staged block.

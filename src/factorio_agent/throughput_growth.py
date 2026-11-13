@@ -61,8 +61,9 @@ Build ahead (owner, 2026-11-13: every new block raises demand again; a margin bu
 beats coming back to expand while the work stalls; surplus nothing will use still wastes)::
 
     growth     G = unbuilt declared bus taps + running rates of the next LOOKAHEAD_STEPS
-                   roadmap blocks without a tap yet (UPCOMING_RATES) + science growth targets
-                   (science_growth / research_capacity: extra pack machines x plates per pack);
+                   roadmap blocks without a tap yet (upcoming_rates) + research_capacity's extra
+                   pack machines x plates per pack only without a staged science block (a staged
+                   block's growth target is already tap rate: growth_taps, counted once);
                    an upcoming step whose plate draw is unknown -> G >= DEFAULT_GROWTH_SHARE x demand
     expected   E = demand + G;  full F = smallest package >= E x COVER_MARGIN within the frame
                    (reserved pairs and slots, no connected module beyond the quickest's), else the
@@ -204,6 +205,8 @@ class PlateFacts:
     off_bus_measured: float | None = None
     starter_phase: str = ""
     patch_rows: int = 0
+    # part of tap_rate a consumer grows into beyond its declared taps (science growth)
+    growth_tap_rate: float = 0.0
     # build ahead: plates/min the next blocks will draw after the horizon, its sources
     # ((source, per_minute), ...) and the upcoming steps whose draw is unknown (-> allowance)
     expected_growth: float = 0.0
@@ -562,6 +565,7 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
         "grow": False,
         "demand": {
             "taps_per_minute": round(taps, 2),
+            "growth_taps_per_minute": round(facts.growth_tap_rate, 2),
             "bill_plates": round(bill, 1),
             "horizon_minutes": horizon,
             "per_minute": round(demand, 2),
@@ -857,19 +861,22 @@ def upcoming_rates(catalog, step) -> dict[str, float] | None:
 
 
 def _science_growth_rates(catalog, observation) -> tuple[str, dict[str, float]] | None:
-    """``(source, plates/min)`` of the extra pack machines science growth (or research_capacity) targets."""
-    from .progression import raw_cost
-    from .research_capacity import RED_PACK, pack_rate_per_assembler
+    """``(source, plates/min)`` of the extra pack machines research_capacity targets without a staged block.
 
-    row = observation.get("science_growth")
-    pack, extra, source = RED_PACK, 0, "science_growth"
-    if isinstance(row, Mapping) and row.get("grow"):
-        extra = int(row.get("target_machines") or 0) - int(row.get("machines") or 0)
-    else:
-        decision = (observation.get("research_capacity") or {}).get("decision")
-        if isinstance(decision, Mapping) and decision.get("expand") and decision.get("pack"):
-            pack, source = decision["pack"], "research_capacity"
-            extra = int(decision.get("target_assemblers") or 0) - int(decision.get("current_assemblers") or 0)
+    A staged science block (an ``observation["science_growth"]`` receipt) is never counted
+    here: its growth target is already tap rate (declared taps, or ``growth_taps`` from
+    ``science_growth.undeclared_plate_draw``).
+    """
+    from .progression import raw_cost
+    from .research_capacity import pack_rate_per_assembler
+
+    if isinstance(observation.get("science_growth"), Mapping):
+        return None
+    extra, pack = 0, None
+    decision = (observation.get("research_capacity") or {}).get("decision")
+    if isinstance(decision, Mapping) and decision.get("expand") and decision.get("pack"):
+        pack, source = decision["pack"], "research_capacity"
+        extra = int(decision.get("target_assemblers") or 0) - int(decision.get("current_assemblers") or 0)
     if extra <= 0:
         return None
     rate = extra * pack_rate_per_assembler(catalog, pack)
@@ -882,7 +889,8 @@ def expected_growth(catalog, jobs, observation, stations) -> dict[str, tuple[flo
 
     Unbuilt declared bus taps (not stock rows), the running rates of the next LOOKAHEAD_STEPS
     roadmap steps without a station of their own yet (``upcoming_rates``), and the extra pack
-    machines science growth targets. A step whose draw is unknown is listed (allowance).
+    machines research_capacity targets when no staged science block exists (a staged block's
+    growth is ``growth_taps``). A step whose draw is unknown is listed (allowance).
     """
     from .progression import LOOKAHEAD_STEPS, _names, _upcoming
 
@@ -934,9 +942,14 @@ def plate_facts(
     *,
     claimed=0.0,
     starter_phase="",
+    growth_taps=0.0,
     expected=(0.0, (), ()),
 ) -> PlateFacts:
-    """``PlateFacts`` of one district bank from saved state rows and the observe receipt."""
+    """``PlateFacts`` of one district bank from saved state rows and the observe receipt.
+
+    ``growth_taps`` is plate draw a consumer grows into beyond its declared
+    taps (``science_growth.undeclared_plate_draw``); it counts as tap rate.
+    """
     from .progression import MINING_OUTPOST_BUILDS, raw_cost
 
     resource = PLATES[plate]
@@ -988,7 +1001,9 @@ def plate_facts(
             and s.get("item") == plate
             and s.get("built", True)
             and not str(s.get("owner") or "").startswith("production_row")
-        ),
+        )
+        + max(0.0, finite_number(growth_taps) or 0.0),
+        growth_tap_rate=max(0.0, finite_number(growth_taps) or 0.0),
         bill=bill,
         furnace_nominal=nominal,
         furnace_each=each,
@@ -1082,7 +1097,12 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
         claims = critical_plate_claims(catalog, jobs, observation)
     except Exception:  # a claim estimate never breaks the receipt: no claim known
         claims = {}
+    # Science growth beyond its declared taps (built stage, or the growth it decided now) is tap demand.
+    from .science_growth import undeclared_plate_draw
+
+    growth_taps = undeclared_plate_draw(read("automation-science.json"), observation.get("science_growth"))
     try:
+        # Build ahead: what the next blocks add after the horizon (science growth is in growth_taps).
         growth = expected_growth(catalog, jobs, observation, stations)
     except Exception:  # an expectation never breaks the receipt: flat demand
         growth = {}
@@ -1110,6 +1130,7 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
             observation,
             claimed=claims.get(plate, 0.0),
             starter_phase=_starter_phase(retirement, resource, jobs),
+            growth_taps=growth_taps.get(plate, 0.0),
             expected=growth.get(plate, (0.0, (), ())),
         )
         order.append(plate)

@@ -22,6 +22,7 @@ Rules:
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -669,6 +670,9 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     from .wood_burner_feed import wood_burner_feed_nodes  # wood into the belt-fed boilers, once
 
     proposed += wood_burner_feed_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .trunk_return_feed import trunk_return_feed_nodes  # surplus back onto its patch trunk, once per trunk
+
+    proposed += trunk_return_feed_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     from .science_retirement import science_retirement_nodes  # obsolete startup science cell
 
     proposed += science_retirement_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
@@ -853,9 +857,10 @@ def lookahead_demand(catalog, jobs, observation, *, horizon=LOOKAHEAD_STEPS) -> 
     """Raw items the next ``horizon`` unsatisfied roadmap steps will need.
 
     Research steps add ``unit_count`` x pack raw cost; steps with ``builds``
-    add the raw cost of that hardware. Stock is not subtracted (the supply
-    ``shortfall`` covers the current bill). Steps without ``builds`` add
-    nothing, so stages past the early game are under-estimated. Steps already
+    add the raw cost of that hardware, steps without them the bill their
+    capability's plan fixes (``step_bill``, ``PLAN_BILLS``). Stock is not
+    subtracted (the supply ``shortfall`` covers the current bill). Other steps
+    add nothing, so stages past the early game are under-estimated. Steps already
     in flight are included and may overlap their saved construction bill.
     """
     researched = _names((observation or {}).get("technologies"))
@@ -863,9 +868,45 @@ def lookahead_demand(catalog, jobs, observation, *, horizon=LOOKAHEAD_STEPS) -> 
     for step in _upcoming(jobs, researched, horizon):
         for name, count in _research_items(catalog, step).items():
             items[name] = items.get(name, 0.0) + count
-        for name, count in (step.builds or {}).items():
+        for name, count in step_bill(catalog, step).items():
             items[name] = items.get(name, 0.0) + count
     return {name: round(amount, 3) for name, amount in raw_cost(catalog, items).items()}
+
+
+def _green_cluster_bill(catalog) -> dict[str, float]:
+    """The logistic science unit ``green_science.green_cluster`` places (its taps and lab route are map-dependent)."""
+    from .green_science import green_cluster
+
+    return dict(Counter(e["name"] for e in green_cluster(catalog, (0.5, 0.5))["entities"]))
+
+
+def _steam_pair_bill(catalog) -> dict[str, float]:
+    """The next ``steam_bank`` pair (boiler, two engines, stub, poles) plus its own paired coal bank."""
+    from .core.factory_templates import build_template
+
+    bill = Counter(e["name"] for e in build_template("steam_bank")["entities"])
+    bill.update(MINING_OUTPOST_BUILDS)
+    return dict(bill)
+
+
+# Steps without ``builds`` whose main hardware is fixed by the capability's own plan
+# template (computed from the catalog, so it follows the template). Not derived (the
+# plan depends on the map or the threat): defense_perimeter, dedicated_materials,
+# steel/brick blocks, oil, chemical and later steps.
+PLAN_BILLS = {"logistic_science": _green_cluster_bill, "steam_expansion": _steam_pair_bill}
+
+
+def step_bill(catalog, step: Step) -> Mapping[str, float]:
+    """``step.builds``, else the bill ``PLAN_BILLS`` derives from the capability's plan, else nothing."""
+    if step.builds:
+        return step.builds
+    derive = PLAN_BILLS.get(step.capability)
+    if derive is None:
+        return {}
+    try:
+        return derive(catalog)
+    except Exception:  # a demand estimate never breaks the lookahead (a test catalog lacks the recipe tree)
+        return {}
 
 
 def roadmap_wanted_recipes(jobs, capabilities, *, horizon=6) -> list[str]:
@@ -1106,6 +1147,12 @@ def produce_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
         if isinstance(count, bool) or not isinstance(count, (int, float)) or count <= BULK_THRESHOLD:
             continue
         if not isinstance(raw, Mapping) or not raw or _produce_taken(item, jobs, queue_nodes):
+            continue
+        # A row whose plate has no belt source yet (no published bus lane, no free board
+        # port) would only block production_row_input_source_missing; it is proposed once a
+        # source exists (all-1113-2107: 6 rows in 3 runs blocked for the rest of the run).
+        sources = observation.get("produce_plate_sources")
+        if isinstance(sources, Mapping) and any(sources.get(plate) is False for plate in raw):
             continue
         rate = count / COVER_MINUTES
         caps = []
