@@ -252150,3 +252150,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: gate run; unmeasured live.
 - failure reason / open: power feed not a tap yet and not retired; second lane not built; fallback to an independent pair when no tap site (recorded second_group_reason).
 - next action: fleet run with bricks; check material-supply.json mode trunk_tap, mine-trunks.json, no new coal bank.
+
+## 2026-11-13 mine trunk: power tap, patch grid, second lane (worker)
+- part: steps 1-3 of the mine-trunk follow-up (power's coal on a trunk tap, whole-patch grid, second lane + 2-2 splitter).
+- actions: power_coal_tap.py (capability power_coal_tap: serve-first tap + branch side-loading onto the old feed, 30 s proof, coal_plan adopted (drill = bank drill), old drill/arm/upstream belts mined guarded while the boiler holds fuel); mine_trunk trunk_segments (taps past turns), EXTENDED_ATTEMPTS, receipt independent_groups + power_tap, lane_plan/record_lane/lane_head/tap_passthrough, real lanes_built, lane node; trunk_lane.py (capability mine_trunk_lane); mining_layout_policy.patch_grid (4x8 shift search, water/cliff survey, score covered/drills/unreachable) used by prepare_new_bank (policy grid = grid lattice, candidate_sites(grid=) edge columns, row growth to MAX_PAIRS); outposts: grid_origin reuse, lane head before side-loads, trace through tap splitters, material banks excluded from the rate check.
+- metrics: tests test_v2_power_coal_tap (9), test_v2_patch_grid (6), test_v2_trunk_lane (6); full gate passed.
+- result: offline only; nothing proven live.
+- failure reason / open: second lane has no consumers yet (far-side taps need a dive); steam_expansion keeps its own coal bank; grid footprint not a board reservation.
+- next action: fleet run to a coal bank: check power-coal-tap.json phase done, boiler fuel during retirement, patch_grid on new banks.

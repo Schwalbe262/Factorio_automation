@@ -248,6 +248,13 @@ class MiningOutposts:
         shared = self.planned_keepouts(obs, board, resource)
         reservations += shared["tile_areas"]
         options = {k: shared[k] for k in ("registered", "planned") if shared[k]}
+        from .mine_trunk import patch_bank, patch_seed
+
+        # A later bank on the patch is another row pair of the same grid (mining_layout_policy.patch_grid).
+        anchor = patch_bank(self.state.get("banks"), resource, patch_seed(obs, resource))
+        policy = ((anchor or {}).get("layout_contract") or {}).get("policy") or {}
+        if policy.get("grid_origin") and policy.get("flow"):
+            options["grid_origin"] = {"origin": policy["grid_origin"], "flow": policy["flow"]}
         exit_record = site_exit(getattr(self, "site", None), obs.get("world_id"), resource)
         if exit_record is None:
             result = prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, **options)
@@ -304,6 +311,7 @@ class MiningOutposts:
             tried.append([round(x, 1), round(y, 1)])
             shared = self.planned_keepouts(seeded, board, resource)
             seeded_options = dict(options, registered=list(shared["registered"]) + zones)
+            seeded_options.pop("grid_origin", None)  # another patch is gridded afresh
             if shared["planned"]:
                 seeded_options["planned"] = shared["planned"]
             other = prepare_new_bank(
@@ -485,7 +493,15 @@ class MiningOutposts:
         if destination:
             from .bus_factory import trace_corridor
 
-            traced = trace_corridor(consumer["plan"], primary["plan"]["ports"][0], destination)
+            from .mine_trunk import tap_passthrough
+
+            # A splitter tap replaced (and released) a trunk belt: the trace passes it.
+            traced = trace_corridor(
+                consumer["plan"],
+                primary["plan"]["ports"][0],
+                destination,
+                passthrough=tap_passthrough(self.path.parent, obs["world_id"], primary),
+            )
             if not traced.get("ok"):
                 return {"ok": False, "reason": "owned_ore_trunk_trace_failed", "trace": traced}
             if not underground_proof(obs, consumer["plan"]):
@@ -559,6 +575,11 @@ end;return {ok=true,indices=indices}"""
         if not legal.get("ok"):
             return legal
         targets = [targets[i - 1] for i in legal.get("indices", [])]
+        from .mine_trunk import lane_head
+
+        # A built second trunk lane takes the extra module at its head (2-2 balanced, lane-preserving)
+        # before any side-load onto the first lane (mine_trunk.lane_plan).
+        head = lane_head(self.path.parent, obs, primary)
         failures = []
         rejected = []
         attempts = 0
@@ -576,6 +597,7 @@ end;return {ok=true,indices=indices}"""
                 targets, key=lambda row: sum(abs(a - b) for a, b in zip(xy(source), xy(row["destination"])))
             )
             probes = [ranked[i] for i in sorted({0, len(ranked) // 2, len(ranked) - 1})] if ranked else []
+            probes = ([head] if head else []) + probes
             # A plan-oriented module routes inside its reserved feeder corridor.
             guide = guide_tuple(extra["plan"].get("site_exit"))
             routing = {} if guide is None else {"guide": guide}
@@ -623,7 +645,9 @@ end;return {ok=true,indices=indices}"""
                 plan.update(clear_obstacles=check["clear_obstacles"], clearance_world_id=obs["world_id"])
                 extra["plan"] = plan
                 extra["consumer_connection"] = {
-                    "kind": "same-item perpendicular side-load",
+                    "kind": "second trunk lane head"
+                    if row.get("kind") == "lane"
+                    else "same-item perpendicular side-load",
                     "item": primary["plan"]["resource"],
                     "target": target,
                     "entry_port": destination,
@@ -936,7 +960,11 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
         reservation = self.publish_reservations(obs, resource)
         if reservation:
             return self._replan_conflicting_bank(obs, resource, reservation) or reservation
-        banks = [b for b in self.state["banks"] if b["plan"]["resource"] == resource]
+        # A dedicated-material bank (material_supply.py) belongs to its supply: its output is not
+        # this target's, it is not extended or built here, and its rate is not counted twice.
+        banks = [
+            b for b in self.state["banks"] if b["plan"]["resource"] == resource and not b.get("material_supply_id")
+        ]
         for bank in banks:
             from .depleted_drill_retirement import effective_mining_plan
 
@@ -1047,7 +1075,7 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
         proofs = [
             self.bank_proof(obs, b)
             for b in self.state.get("banks", [])
-            if b.get("ready") and b["plan"]["resource"] == parameters["resource"]
+            if b.get("ready") and b["plan"]["resource"] == parameters["resource"] and not b.get("material_supply_id")
         ]
         proofs = [p for p in proofs if p]
         total = sum(p["nominal_rate_per_minute"] for p in proofs)

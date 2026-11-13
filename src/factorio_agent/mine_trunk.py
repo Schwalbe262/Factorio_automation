@@ -68,6 +68,7 @@ DEFAULT_SPAN = 4  # underground span when the game is not asked (a tap needs non
 FACING_LETTER = {0: "N", 4: "E", 8: "S", 12: "W"}
 SERVES = ("first", "after")
 NODE_PREFIX = "auto_mine_trunk_"
+LANE_CAPABILITY = "mine_trunk_lane"
 NODE_PRIORITY = -53  # right after critical plate growth (throughput_growth.CRITICAL_PRIORITY -52)
 OPEN_NODE_STATUSES = frozenset({"pending", "ready", "running", "waiting"})
 
@@ -277,7 +278,12 @@ def trunk_bus(
 
 # ----- taps -------------------------------------------------------------------------
 def tap_priorities(tap: dict) -> dict:
-    """Native priorities: ``first`` -> branch output first; ``after`` -> trunk continuation first."""
+    """Native priorities: ``first`` -> branch output first; ``after`` -> trunk continuation first.
+
+    A trunk lane's 2-2 splitter (:func:`lane_plan`) has none on either side: it balances.
+    """
+    if tap.get("kind") == "lane":
+        return {"splitter_input_priority": "none", "splitter_output_priority": "none"}
     wanted = branch_priorities(tap["splitter"], tap["port"]["position"])
     if tap.get("serve", "after") == "first":
         return wanted
@@ -306,10 +312,14 @@ def plan_tap(bank, obs, *, owner, name, demand, serve="after", sides=("right", "
     found, rejected, tried = [], {}, set()
     live = {(e["name"], *_tile(e["position"])): e for e in obs.get("entities", [])}
     item = bank["plan"]["resource"]
+    # A built second lane lies on the far side of the first run: taps there come from the near side.
+    lane_sides = {s.get("tap_side") for s in stations if s.get("kind") == "lane"}
     for limit in (ATTEMPTS, ATTEMPTS + EXTENDED_ATTEMPTS):
         for index, segment in enumerate(segments):
             own = [s for s in stations if s.get("segment", 0) == index]
             for side in sides:
+                if index == 0 and lane_sides and side not in lane_sides:
+                    continue
                 bus = trunk_bus(bank, obs, side, stations=own, segment=segment)
                 if not bus.get("ok"):
                     continue
@@ -385,6 +395,149 @@ def hub(tap: dict, keys: tuple[str, str]) -> dict:
     return {"splitter": splitter, "entities": entities, "ports": ports, "output_access": access}
 
 
+LANE_NAME = "trunk_lane:1"
+
+
+def lane_plan(bank, obs, *, stations=(), accept=None) -> dict:
+    """The second trunk lane beside the built one, with its 2-2 input-balanced splitter at the head.
+
+    Rule (principle 4, docs/v2/BALANCERS.md): when the planned demand needs two
+    belts, the second lane runs beside the first on the side away from the taps
+    (the lane ``trunk_bus`` reserves), over the first straight run of the trunk.
+    At row ``a`` (the first row whose tap window is free) one splitter spans both
+    lanes: the first lane's belt there is replaced, both inputs are drained
+    evenly and both outputs filled evenly (no priority). The lane's head port
+    (row ``a - 1``) is where a second row lane of the patch (the next row pair or
+    a connected module, ``MiningOutposts.prepare_connected_bank``) joins; until
+    lane two has its own consumers the splitter merges both into lane one,
+    lane by lane (merge by saturation). More than two lanes stay reserved and
+    recorded (``balancer_plan``). Returns ``{"ok": True, "lane": ...}`` or a failure.
+    """
+    tapped = {s.get("side") for s in stations if s.get("kind") != "lane" and s.get("segment", 0) == 0}
+    if len(tapped) > 1:
+        return {"ok": False, "reason": "mine_trunk_lane_both_sides_tapped"}
+    side = next(iter(tapped)) if tapped else "right"
+    bus = trunk_bus(bank, obs, side, stations=[s for s in stations if s.get("segment", 0) == 0])
+    if not bus.get("ok"):
+        return bus
+    view = BusView(bus)
+    lanes = {lane.index: lane for lane in view.bus.lanes}
+    first, second = lanes[0].offset, lanes[1].offset
+    facing = view.facing
+    item = bank["plan"]["resource"]
+    live = {(e["name"], *_tile(e["position"])): e for e in obs.get("entities", [])}
+    taken = set()
+    for e in obs.get("entities", []):
+        taken.add(_tile(e["position"]))
+    length = view.bus.length
+    rejected = {}
+    for a in range(FIRST_ROW + 1, length - 1):
+        if not view.window_free(a):
+            rejected["mine_trunk_lane_window_taken"] = rejected.get("mine_trunk_lane_window_taken", 0) + 1
+            continue
+        lane0 = view.world(a, first)
+        belt = live.get(("transport-belt", *_tile(lane0)))
+        if belt is None or type(belt.get("unit_number")) is not int or belt.get("direction", 0) != facing:
+            rejected["mine_trunk_lane_belt_not_observed"] = rejected.get("mine_trunk_lane_belt_not_observed", 0) + 1
+            continue
+        tiles = [view.world(r, second) for r in range(a - 1, length)]
+        if any(_tile(p) in taken for p in tiles):
+            rejected["mine_trunk_lane_tiles_taken"] = rejected.get("mine_trunk_lane_tiles_taken", 0) + 1
+            continue
+        centre = view.world(a, (first + second) / 2)
+        splitter = dict(
+            entity("splitter", centre["x"], centre["y"], facing),
+            _width=2,
+            _height=1,
+            splitter_input_priority="none",
+            splitter_output_priority="none",
+        )
+        belts = [entity("transport-belt", p["x"], p["y"], facing) for p in tiles[2:]]
+        head = tiles[0]
+        lane = {
+            "kind": "lane",
+            "name": LANE_NAME,
+            "lane": 1,
+            "tap_side": side,
+            "along": a,
+            "segment": 0,
+            "item": item,
+            "splitter": splitter,
+            "entities": [splitter] + belts,
+            "remove": [lane0],
+            "remove_units": [belt["unit_number"]],
+            "port": {"kind": "item", "item": item, "position": head, "facing": facing, "direction": "input"},
+            "trunk": trunk_key(bank),
+            "balancer": balancer_plan(2),
+            "built": False,
+        }
+        if accept is None or accept(lane):
+            return {"ok": True, "lane": lane}
+        rejected["mine_trunk_lane_not_accepted"] = rejected.get("mine_trunk_lane_not_accepted", 0) + 1
+    return {"ok": False, "reason": "mine_trunk_lane_unavailable", "rows_rejected": rejected}
+
+
+def lane_head(root, obs, bank: dict) -> dict | None:
+    """The free head port of ``bank``'s built second lane as a connection target, or None.
+
+    ``{"kind": "lane", "destination": port, "target": first lane belt (bound to its unit)}``;
+    None when no lane is built or something already stands on the head tile (joined).
+    """
+    if not bank.get("plan", {}).get("ports"):
+        return None
+    trunk = ledger(root, obs.get("world_id"))["trunks"].get(trunk_key(bank), {})
+    lane = (trunk.get("lanes") or {}).get("1")
+    if not lane or not lane.get("built"):
+        return None
+    head = _tile(lane["port"]["position"])
+    if any(_tile(e["position"]) == head for e in obs.get("entities", [])):
+        return None
+    first = next((e for e in lane["entities"] if e["name"] == "transport-belt"), None)
+    live = next(
+        (
+            e
+            for e in obs.get("entities", [])
+            if first and e.get("name") == "transport-belt" and _tile(e["position"]) == _tile(first["position"])
+        ),
+        None,
+    )
+    if live is None or type(live.get("unit_number")) is not int:
+        return None
+    return {
+        "kind": "lane",
+        "destination": deepcopy(lane["port"]),
+        "target": {k: deepcopy(live[k]) for k in ("name", "position", "direction", "unit_number")},
+    }
+
+
+def lanes_built(trunk: dict) -> int:
+    """Trunk belts standing: the bank's own plus every built lane of the ledger."""
+    return 1 + sum(1 for lane in (trunk.get("lanes") or {}).values() if lane.get("built"))
+
+
+def record_lane(root, world_id: str, lane: dict, *, block=None) -> dict | None:
+    """Record ``lane`` on its trunk (idempotent) and publish its hardware as a board block."""
+    root = Path(root)
+    state = ledger(root, world_id)
+    trunk = state["trunks"].setdefault(lane["trunk"], {"taps": {}})
+    lanes = trunk.setdefault("lanes", {})
+    if lanes.get(str(lane["lane"])) != lane:
+        lanes[str(lane["lane"])] = deepcopy(lane)
+        _atomic_json(root / STATE_FILE, state)
+    if block is None:
+        return None
+    board_path = root / "pcb-board.json"
+    board = _read(board_path)
+    if board.get("world_id") != world_id:
+        return {"status": "blocked", "reason": "mine_trunk_board_world_changed"}
+    name, value = block
+    blocks = board.setdefault("blocks", {})
+    if blocks.get(name) != value:
+        blocks[name] = value
+        _atomic_json(board_path, board)
+    return None
+
+
 def tap_area(entities) -> list:
     """Bounding box of ``entities`` (one-tile entities and 2x1 splitters)."""
     xs, ys = [], []
@@ -436,9 +589,30 @@ def record_tap(root, world_id: str, tap: dict, *, block=None) -> dict | None:
 
 
 def stations(root, world_id: str, key: str, *, exclude=None) -> list[dict]:
-    """Taps already recorded on trunk ``key`` (with their entities), other than ``exclude``."""
-    taps = ledger(root, world_id)["trunks"].get(key, {}).get("taps", {})
-    return [dict(t) for name, t in sorted(taps.items()) if name != exclude]
+    """Taps and lanes already recorded on trunk ``key`` (with their entities), other than ``exclude``."""
+    trunk = ledger(root, world_id)["trunks"].get(key, {})
+    rows = [dict(t) for name, t in sorted(trunk.get("taps", {}).items()) if name != exclude]
+    return rows + [dict(lane) for _, lane in sorted((trunk.get("lanes") or {}).items()) if lane.get("name") != exclude]
+
+
+def tap_passthrough(root, world_id: str, bank: dict) -> dict:
+    """Tile -> tap splitter for every recorded tap on ``bank``'s trunk (for ``bus_factory.trace_corridor``).
+
+    A tap's trunk belt is released from its owner's plan before it is mined
+    (:func:`release_trunk_belts`), so a trace of that plan meets a gap there;
+    the splitter is the trunk's hardware on that tile.
+    """
+    if not bank.get("plan", {}).get("ports"):
+        return {}
+    trunk = ledger(root, world_id)["trunks"].get(trunk_key(bank), {})
+    tiles = {}
+    for tap in list(trunk.get("taps", {}).values()) + list((trunk.get("lanes") or {}).values()):
+        splitter = tap.get("splitter")
+        if not isinstance(splitter, dict):
+            continue
+        for p in tap.get("remove", []):
+            tiles[(p["x"], p["y"])] = {k: splitter[k] for k in ("name", "position", "direction")}
+    return tiles
 
 
 def _drop_belts(entities, positions) -> tuple[list, bool]:
@@ -651,6 +825,7 @@ def _trunk_rows(state, mining, obs, belt) -> list[dict]:
         demand = primary_demand(trunk) + taps
         rate = belt_rate(belt)
         lanes = lane_count(demand, rate)
+        built = lanes_built(trunk)
         rows.append(
             {
                 "trunk": key,
@@ -659,10 +834,12 @@ def _trunk_rows(state, mining, obs, belt) -> list[dict]:
                 "supply_per_minute": round(supply, 3),
                 "taps": sorted(trunk.get("taps", {})),
                 "lanes_needed": lanes,
-                "lanes_built": 1,
+                "lanes_built": built,
                 "balancer": balancer_plan(lanes),
                 "grow": demand > supply + 1e-9,
-                "second_lane_required": lanes > 1,
+                "second_lane_required": lanes > 1 and built < 2,
+                # More than two lanes: reserved and recorded only (docs/v2/BALANCERS.md).
+                **({"lanes_reserved": lanes - 2} if lanes > 2 else {}),
             }
         )
     return rows
@@ -677,6 +854,27 @@ def mine_trunk_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]
     jobs = list(jobs)
     queued = {node.get("id") for node in queue_nodes}
     nodes = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("second_lane_required") or LANE_CAPABILITY not in capabilities:
+            continue
+        resource = row.get("resource")
+        node_id = f"{NODE_PREFIX}lane_{resource}"
+        if node_id in queued or any(
+            r.get("capability") == LANE_CAPABILITY and (r.get("parameters") or {}).get("resource") == resource
+            for r in jobs + list(queue_nodes)
+        ):
+            continue  # proposed once per resource; a stalled lane is not proposed again
+        nodes.append(
+            {
+                "id": node_id,
+                "capability": LANE_CAPABILITY,
+                "parameters": {"resource": resource},
+                "priority": NODE_PRIORITY,
+                "depends_on": [],
+                "reason": f"mine trunk {row.get('trunk')}: demand {row.get('demand_per_minute')}/min needs "
+                f"{row.get('lanes_needed')} belts; build the second lane and its 2-2 splitter"[:300],
+            }
+        )
     for row in rows:
         if not isinstance(row, dict) or not row.get("grow"):
             continue

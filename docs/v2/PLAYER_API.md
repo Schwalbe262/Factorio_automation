@@ -88,6 +88,7 @@ Current capabilities:
 | bootstrap_logistics | none | power and naturally unlocked Automation |
 | bootstrap_research | `--technology gun-turret`, stone-wall or electric-mining-drill | power; current native Automation, red-science recipe, target prerequisites and powered startup machines/lab; logistics research is unnecessary |
 | electric_coal | none | power and naturally unlocked electric-mining-drill |
+| mine_trunk_lane | `--resource coal` (or iron-ore/copper-ore/stone) | mining_outpost; a patch trunk whose receipt says `second_lane_required` |
 | power_coal_tap | none | power, power_coal_feed, electric_coal; a proven coal patch bank with an observed trunk (`mine_trunks.power_tap`) |
 | mining_outpost | `--resource iron-ore` (or copper-ore/coal/stone), `--rate-per-minute 1..960` absolute nominal target | power and electric-mining-drill |
 | smelting_district | none; initial district has iron60/copper30 nominal inputs | power, bootstrap_logistics, mining_outpost; one ready bank each iron60/copper30/coal30 |

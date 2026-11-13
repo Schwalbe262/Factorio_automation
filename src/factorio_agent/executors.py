@@ -165,6 +165,9 @@ class StarterExecutors:
 
         # Boiler coal from the coal patch trunk; the starter feed retires (mine_trunk rule).
         self.power_coal_tap = PowerCoalTap(game, self.builder, catalog, outposts=self.outposts, smelting=self.smelting)
+        from .trunk_lane import TrunkLane
+
+        self.trunk_lane = TrunkLane(game, self.builder, catalog, outposts=self.outposts, smelting=self.smelting)
         self.chemical_coal = DedicatedMaterials(
             game,
             self.builder,
