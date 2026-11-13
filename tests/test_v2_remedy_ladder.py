@@ -778,5 +778,29 @@ class WasteReportTests(unittest.TestCase):
         )
 
 
+class CoverageTests(unittest.TestCase):
+    """Sweep 2026-11-14: rungs without a pure prepare never reach the ladder."""
+
+    def test_every_capability_with_rungs_has_a_dry_run(self):
+        from factorio_agent import postmortem
+
+        self.assertEqual(sorted(set(remedy.RELAXATIONS) - set(postmortem.DRY_RUN)), [])
+        for capability in ("steel_supply", "engine_production", "ammo_production"):
+            self.assertIn(capability, postmortem.DRY_RUN)
+
+    def test_later_site_searches_are_replanned_and_have_needs(self):
+        from factorio_agent.supervisor import _replannable
+
+        for reason in (
+            "no_engine_site_with_complete_native_material_connections",
+            "no_permanent_chemical_site_with_complete_typed_inputs",
+            "no_chemical_science_site_with_complete_owned_lab_connection",
+            "no_advanced_circuit_site_clear_of_reserved_and_unbuilt_external_plans",
+            "no_isolated_two_outlet_gas_manifold",
+        ):
+            self.assertTrue(_replannable(reason), reason)
+        self.assertTrue(plan_needs.is_planning_failure("industrial_planning_budget_exhausted"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -385,7 +385,8 @@ class StepTests(unittest.TestCase):
             steel.game = SimpleNamespace(cfg=world.game.cfg, query=lambda body: lanes)
             obs = self.built_obs(world, steel)
             self.assertEqual(steel.supply_step(obs)["status"], "succeeded")
-            self.assertEqual(steel.coal_supply_step(obs)["reason"], "planned_furnace_production_not_verified")
+            early = steel.coal_supply_step(obs)  # before steel_production's proof: a wait, never a block
+            self.assertEqual((early["status"], early["reason"]), ("waiting", "planned_furnace_production_not_verified"))
             done = steel.production_step(obs)
             self.assertEqual(done["status"], "succeeded", (done, steel.last_proof_failure))
             self.assertEqual(done["evidence"]["product_on_port_belt"], 4)

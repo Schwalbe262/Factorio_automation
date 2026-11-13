@@ -69,6 +69,13 @@ IDLE_RETRY_LIMIT = 10
 # brick_production was retried once, then stayed blocked 20+ minutes).
 SITE_RETRY_MARKERS = (
     "_with_complete_connections",
+    # The final site-search reasons of the later planners (native/typed/material connections, owned
+    # lab connection): planning failures that are re-planned once facts change, not dead after 3 retries.
+    "_with_complete_",
+    "_clear_of_reserved_and_unbuilt_external_plans",
+    "no_isolated_two_outlet_gas_manifold",
+    "no_independent_resource_free_defended_water_intake",
+    "no_crude_field_within_survey_radius",
     "no_clean_trunk_corridor",
     "route_port_escape_reserved_by_unbuilt_plan",
     "site_allocation_failed",

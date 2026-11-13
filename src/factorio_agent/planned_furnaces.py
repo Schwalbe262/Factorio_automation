@@ -766,7 +766,13 @@ class PlannedFurnaces:
     def coal_supply_step(self, obs) -> dict:
         """``steel_coal_supply``: the block's coal comes straight from the registered coal outlet."""
         if not self._current(obs) or self.state.get("phase") != "verified":
-            return {"status": "blocked", "reason": "planned_furnace_production_not_verified", "kind": self.kind.name}
+            # A wait for steel_production's proof (the roadmap step may be proposed before it), not a block.
+            return {
+                "status": "waiting",
+                "reason": "planned_furnace_production_not_verified",
+                "kind": self.kind.name,
+                "evidence": {"wait_for": f"{self.kind.name}_production verified"},
+            }
         evidence = self.coal_proof(obs)
         if evidence is None:
             return {"status": "waiting", "reason": "waiting for registered coal on the block's coal port"}

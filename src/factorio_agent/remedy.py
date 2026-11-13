@@ -112,6 +112,17 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
         ROUTE_RELAX_1,
         ROUTE_RELAX_2,
     ),
+    # planned_products: engines and magazines are produce rows on a planned world.
+    "engine_production": (
+        Rung("layout:next_variant", "layout", {"layout_rotate": 1}, note="the next ranked row layout first"),
+        ROUTE_RELAX_1,
+        ROUTE_RELAX_2,
+    ),
+    "ammo_production": (
+        Rung("layout:next_variant", "layout", {"layout_rotate": 1}, note="the next ranked row layout first"),
+        ROUTE_RELAX_1,
+        ROUTE_RELAX_2,
+    ),
     "steam_expansion": (
         Rung(
             "site:wider_steam_search",
