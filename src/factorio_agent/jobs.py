@@ -104,6 +104,13 @@ CAPABILITIES = {
         "requires": ["mining_outpost"],
         "effect": "second belt beside the patch trunk with a 2-2 input-balanced splitter at its head; the trunk belt it replaces is released and mined by unit",
     },
+    # Return feed (trunk_return_feed.py): proposed when carried surplus trips cost more than the feed.
+    "trunk_return_feed": {
+        "parameters": {"resource": "coal|iron-ore|copper-ore"},
+        "requires": ["mining_outpost"],
+        "native_recipes": ["splitter"],
+        "effect": "chest, inserter and side belt with an input-priority splitter replacing one patch trunk belt just downstream of the trunk head and upstream of every tap; the chest is the item's carried surplus sink, so returned items reach every trunk consumer first",
+    },
     "smelting_district": {
         "parameters": {},
         "requires": ["power", "bootstrap_logistics", "mining_outpost"],
@@ -501,6 +508,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "early_start_inputs": obs.get("early_start_inputs"),
         "coal_feed_belts": obs.get("coal_feed_belts"),
         "wood_burner_feed": obs.get("wood_burner_feed"),
+        "trunk_return_feeds": obs.get("trunk_return_feeds"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {k: v for k, v in job.items() if k in {"key", "capability", "status", "reason", "actions", "last_tick"}}

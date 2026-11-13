@@ -252194,3 +252194,10 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: offline only; nothing proven live.
 - failure reason / open: live science block reserved only 2 machine slots (machine_limit 2): no slot to grow; lookahead ignores steps without builds; taps of grown science not demand.
 - next action: fleet round; check auto_throughput_* chains (mining then smelting) and science_growth chain field.
+## 2026-11-13 Part 48 - return feed (shared block) and trunk surplus return
+- goal: owner idea: large carried surplus dumped into a chest + input-priority splitter at the mine trunk head instead of walked to consumers.
+- actions: return_feed.py shared geometry/splice/seed/register/stock/standing (column + elbow shapes); wood_burner_feed refactored onto it (behaviour and tests unchanged); trunk_return_feed.py capability (receipt trunk_return_feeds, wait-vs-spend trigger, prepare at trunk row r below every tap, electric arm under a bank pole else burner for coal, ledger `returns` station, board block, release before mine, proof with trunk trace); carried_surplus: feed chest first for coal/ore, trip log carried-surplus.json, opportunistic depot drain, feed chest never a depot; mine_trunk stations/passthrough/lane side know `return`.
+- metrics: tests test_v2_trunk_return_feed (14); wood, carried surplus, mine trunk, power tap, starter retirement unchanged.
+- result: offline only; nothing proven live.
+- open: no site when a tap already sits at trunk row 1-2 beside bank poles/drills (blocks with no_return_feed_site_at_the_trunk_head); TRIP_SECONDS/BUILD_SECONDS are estimates; stone excluded (no carry allowance).
+- next: fleet: check trunk-return-feeds.json phase done, chest stock falls, coal carried near allowance, recent trips drop.

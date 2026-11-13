@@ -669,6 +669,9 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     from .wood_burner_feed import wood_burner_feed_nodes  # wood into the belt-fed boilers, once
 
     proposed += wood_burner_feed_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .trunk_return_feed import trunk_return_feed_nodes  # surplus back onto its patch trunk, once per trunk
+
+    proposed += trunk_return_feed_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     from .science_retirement import science_retirement_nodes  # obsolete startup science cell
 
     proposed += science_retirement_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
