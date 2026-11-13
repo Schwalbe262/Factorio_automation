@@ -25,8 +25,11 @@ supply is the limit when they lack ingredients); labs grow only when packs pile
 up, or every lab works and ``research_capacity`` finds labs the limit. Only units
 idle for lack of demand (no research, low power) hold growth back. How many is
 decided by ``research_capacity.plan_research_capacity`` (the receipt's time
-comparison) with those permissions as its limits. A full frame turns to
-``beyond_frame`` (second block or partial rebuild, same time comparison).
+comparison) with those permissions as its limits; once that growth is justified,
+``build_ahead`` may take a larger option of the same room when it covers the
+longer-horizon science rate (``recommended_rates``) and its time now plus the
+revisit cost (``throughput_growth.revisit_seconds``) is lower. A full frame turns
+to ``beyond_frame`` (second block or partial rebuild, same time comparison).
 Pure functions, no IO except ``growth_receipt``.
 """
 
@@ -46,6 +49,7 @@ from .research_capacity import (
     lab_pack_rate,
     plan_research_capacity,
     research_queue_seconds,
+    split_producible,
 )
 
 # Two labs: the cheapest pair that already doubles research over the startup
@@ -302,12 +306,15 @@ def undeclared_plate_draw(state, receipt=None):
     return {item: round(max(0.0, rate - declared.get(item, 0.0)), 3) for item, rate in wanted.items()}
 
 
-def plate_machine_limit(machines, per_machine, evidence, seconds):
+def plate_machine_limit(machines, per_machine, evidence, seconds, spare=None):
     """Science machines the current plate supply carries: built plus what the headroom feeds, per plate the least.
 
-    Headroom of a plate = ``max(0, net_per_minute) + 60 * stock / seconds``
+    Headroom of a plate = ``max(0, net_per_minute, spare) + 60 * stock / seconds``
     (stock spread over the remaining research ``seconds``, as the planner's
-    materials cap); a plate without evidence adds no machine.
+    materials cap); a plate without evidence adds no machine. ``spare`` (plate ->
+    per minute, ``district_spare``) is the district's unclaimed capacity while its
+    furnaces hold full output: measured net = produced - consumed is then capped by
+    consumption and says nothing about headroom.
     """
     extra = math.inf
     for item, rate in per_machine.items():
@@ -316,7 +323,7 @@ def plate_machine_limit(machines, per_machine, evidence, seconds):
         row = (evidence or {}).get(item)
         if not isinstance(row, Mapping):
             return machines
-        net = max(0.0, finite_number(row.get("net_per_minute")) or 0.0)
+        net = max(0.0, finite_number(row.get("net_per_minute")) or 0.0, (spare or {}).get(item, 0.0))
         stock = stock_on_hand(row)
         headroom = net + (60.0 * stock / seconds if math.isfinite(seconds) and seconds > 0 else 0.0)
         extra = min(extra, math.floor(headroom / rate + 1e-9))
@@ -442,14 +449,134 @@ def growth_receipt(root, catalog, jobs, observation):
     if not isinstance(state, dict) or not state.get("stage") or state.get("world_id") != observation.get("world_id"):
         return None
     targets = queue_targets(catalog, jobs, observation)
-    return growth_decision(catalog, state, observation, targets, _evidence_from_supply(observation))
+    recommended = ((observation.get("research_capacity") or {}).get("recommended_rates") or {}).get(RED_PACK)
+    district = path.with_name("smelting-district.json")
+    district = json.loads(district.read_text(encoding="utf-8")) if district.exists() else {}
+    return growth_decision(
+        catalog,
+        state,
+        observation,
+        targets,
+        _evidence_from_supply(observation),
+        expected=recommended,
+        plate_spare=district_spare(district, observation),
+    )
 
 
-def growth_decision(catalog, state, observation, targets, evidence):
+def district_spare(district, observation):
+    """Plate -> unclaimed district capacity per minute, only for banks whose built furnaces hold full output.
+
+    ``smelting_throughput_bounds``: partial upper bound (ore, furnaces, belt) minus the
+    declared bus demand of that plate. A bank without a full-output furnace gives nothing
+    (its measured net is the evidence).
+    """
+    if not isinstance(district, Mapping) or district.get("world_id") != observation.get("world_id"):
+        return {}
+    statuses = {
+        _key(e): e.get("status_name")
+        for e in observation.get("entities") or ()
+        if isinstance(e, Mapping) and isinstance(e.get("position"), Mapping) and "name" in e
+    }
+    bounds = {
+        r.get("product"): r
+        for r in (observation.get("smelting_throughput_bounds") or {}).get("banks", [])
+        if isinstance(r, Mapping)
+    }
+    spare = {}
+    for bank in district.get("banks") or ():
+        bound = bounds.get(bank.get("product"))
+        furnaces = [e for e in bank.get("entities", []) if "furnace" in str(e.get("name"))]
+        if not bound or not any(statuses.get(_key(e)) == "full_output" for e in furnaces):
+            continue
+        upper = finite_number(bound.get("partial_upper_bound_per_minute")) or 0.0
+        claimed = finite_number(bound.get("claimed_bus_demand_per_minute")) or 0.0
+        spare[bank["product"]] = max(0.0, upper - claimed)
+    return spare
+
+
+def build_ahead(decision, expected, *, machines, labs):
+    """``(extra_machines, extra_labs, receipt)``: the option minimising T + revisit cost (build ahead).
+
+    A justified growth (``decision.expand``) may take a larger option of the same
+    ``plan_research_capacity`` call (its room = the permitted reserved slots) when its
+    time now plus the revisit cost (``throughput_growth.revisit_seconds``) is lower:
+    ``expected`` is the longer-horizon red rate and lab count (``recommended_science_rate``,
+    research_capacity receipt ``recommended_rates``); coverage of an option =
+    min(pack rate / expected rate, labs / expected labs), the full option is the best
+    coverage in the room (capped at 1); never slower than waiting. Without ``expected``
+    the decision stands (flat demand).
+    """
+    from .throughput_growth import revisit_seconds
+
+    base = next(
+        (
+            o
+            for o in decision.options
+            if o["extra_assemblers"] == decision.target_assemblers - decision.current_assemblers
+            and o["extra_labs"] == decision.target_labs - decision.current_labs
+        ),
+        None,
+    )
+    rate = expected.get("rate_per_minute") if isinstance(expected, Mapping) else None
+    want_labs = expected.get("labs") if isinstance(expected, Mapping) else None
+    if base is None or not decision.expand or not rate or rate <= 0 or not want_labs or want_labs <= 0:
+        return None
+
+    # Coverage counts only what this decision may grow (a kind without room is not its gap).
+    grow_machines = any(o["extra_assemblers"] for o in decision.options)
+    grow_labs = any(o["extra_labs"] for o in decision.options)
+
+    def cover(o):
+        shares = [1.0]
+        if grow_machines:
+            shares.append(o["pack_rate_per_minute"] / rate)
+        if grow_labs:
+            shares.append((labs + o["extra_labs"]) / want_labs)
+        return min(shares)
+
+    wait = decision.wait_seconds
+    larger = [
+        o
+        for o in decision.options
+        if o["extra_assemblers"] >= base["extra_assemblers"]
+        and o["extra_labs"] >= base["extra_labs"]
+        and o is not base
+        and math.isfinite(o["seconds"])
+        and (not math.isfinite(wait) or o["seconds"] < wait)
+    ]
+    pool = [base] + larger
+    full = max(pool, key=lambda o: (cover(o), -(o["extra_assemblers"] + o["extra_labs"])))
+
+    def revisit(o):
+        machines_left = max(0, full["extra_assemblers"] - o["extra_assemblers"])
+        labs_left = max(0, full["extra_labs"] - o["extra_labs"])
+        entities = machines_left * len(MACHINE_SLOT) + labs_left * len(LAB_SLOT)
+        return revisit_seconds(cover(o), cover(full), 1.0, (machines_left > 0) + (labs_left > 0), entities)
+
+    chosen = min(pool, key=lambda o: (round(o["seconds"] + revisit(o), 6), o["extra_assemblers"] + o["extra_labs"]))
+    return (
+        chosen["extra_assemblers"],
+        chosen["extra_labs"],
+        {
+            "expected_rate_per_minute": rate,
+            "expected_labs": want_labs,
+            "quickest": f"+{base['extra_assemblers']} machines +{base['extra_labs']} labs",
+            "quickest_seconds": round(base["seconds"]),
+            "quickest_revisit_seconds": round(revisit(base)),
+            "chosen": f"+{chosen['extra_assemblers']} machines +{chosen['extra_labs']} labs",
+            "chosen_seconds": round(chosen["seconds"]),
+            "chosen_revisit_seconds": round(revisit(chosen)),
+            "coverage": round(cover(chosen), 2),
+        },
+    )
+
+
+def growth_decision(catalog, state, observation, targets, evidence, *, expected=None, plate_spare=None):
     """Labs and science machines to add into reserved slots now (module rule), as a JSON-safe dict.
 
     ``targets`` is the research queue (``research_capacity.queue_targets``),
-    ``evidence`` raw item rows as ``resource_supply_options[item]["evidence"]``.
+    ``evidence`` raw item rows as ``resource_supply_options[item]["evidence"]``,
+    ``expected`` the longer-horizon red rate and labs (build ahead, ``build_ahead``).
     ``grow`` is True only when ``target_labs``/``target_machines`` exceed the
     built stage; ``reason`` names the rule that held growth back.
     """
@@ -463,8 +590,16 @@ def growth_decision(catalog, state, observation, targets, evidence):
     if activity["labs_powered"] < labs or activity["machines_observed"] < machines:
         return dict(row, reason="built stage not fully observed and powered")
     research = observation.get("research")
+    # Size only what can be researched: a technology whose pack no block makes is reported
+    # (the roadmap proposes that producer) and never turns the queue infinite.
+    produced = {RED_PACK} | {
+        e.get("recipe") for e in observation.get("entities") or () if isinstance(e, Mapping) and e.get("recipe")
+    }
+    targets, blocked = split_producible(targets or (), produced)
+    if blocked:
+        row["blocked_by_missing_pack"] = blocked
     if not isinstance(research, str) or not research or not targets:
-        return dict(row, reason="no research in progress")
+        return dict(row, reason="no research in progress" if not blocked else "no researchable technology queued")
     # Bottleneck chain plates -> pack machines -> labs. A lab idle for packs is a pack
     # shortage, not a lack of demand: the staged guard only holds units idle for demand.
     status = activity["lab_status"]
@@ -493,12 +628,15 @@ def growth_decision(catalog, state, observation, targets, evidence):
     # Machine limit, live: the frame's slots and what the plate supply carries now.
     per_machine = {item: amount * costs["pack_rate_per_assembler"] for item, amount in costs["pack"].items()}
     frame = frame_capacity(state)
-    plates = plate_machine_limit(machines, per_machine, evidence, research_queue_seconds(targets, hardware))
+    plates = plate_machine_limit(
+        machines, per_machine, evidence, research_queue_seconds(targets, hardware), spare=plate_spare
+    )
     limit = min(frame, plates)
     row["frame"] = {
         "machine_slots": stage["machine_slots"],
         "frame_slots": frame,
         "plate_limit": plates,
+        "plate_spare_per_minute": {k: round(v, 2) for k, v in (plate_spare or {}).items()},
         "machine_limit": limit,
         "lab_slots": stage["lab_slots"],
     }
@@ -542,10 +680,23 @@ def growth_decision(catalog, state, observation, targets, evidence):
         # Busy labs without a pack backlog: labs grow only when research_capacity finds them the limit.
         decision = plan(0)
     target_machines = decision.target_assemblers if decision.pack == RED_PACK else machines
+    target_labs = decision.target_labs
+    reason = decision.reason
+    ahead = build_ahead(decision, expected, machines=machines, labs=labs) if decision.pack == RED_PACK else None
+    if ahead is not None:
+        extra_machines, extra_labs, row["build_ahead"] = ahead
+        if (extra_machines, extra_labs) != (target_machines - machines, target_labs - labs):
+            target_machines, target_labs = machines + extra_machines, labs + extra_labs
+            b = row["build_ahead"]
+            reason = (
+                f"build ahead for {b['expected_rate_per_minute']}/min, {b['expected_labs']} labs: {b['chosen']} "
+                f"{b['chosen_seconds']}s + revisit {b['chosen_revisit_seconds']}s < {b['quickest']} "
+                f"{b['quickest_seconds']}s + revisit {b['quickest_revisit_seconds']}s; " + reason
+            )
     row.update(
-        target_labs=max(labs, decision.target_labs),
+        target_labs=max(labs, target_labs),
         target_machines=max(machines, target_machines),
-        reason=decision.reason[:300],
+        reason=reason[:300],
         permitted={"labs": may_labs, "machines": may_machines},
     )
     row["grow"] = row["target_labs"] > labs or row["target_machines"] > machines

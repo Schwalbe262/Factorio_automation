@@ -820,6 +820,28 @@ def fallback_groups(root, world_id) -> list[dict]:
     return rows
 
 
+def ahead_target(demand: float, supply: float, bank: dict) -> float:
+    """Growth target of a short trunk: build ahead within the bank's reserved pair slots.
+
+    The trunk knows no lookahead, so the expected demand is ``demand x (1 +
+    throughput_growth.DEFAULT_GROWTH_SHARE)`` (the unquantified allowance), bounded by the
+    supply once every reserved pair of the bank is built (the frame); never below the
+    demand (a connected module beyond the frame grows only for the known demand).
+    """
+    from .throughput_growth import DEFAULT_GROWTH_SHARE
+
+    if demand <= supply + 1e-9:
+        return demand
+    plan = bank.get("plan") or {}
+    per_drill = float((bank.get("capacity_profile") or {}).get("planned_per_drill_per_minute") or 0)
+    drills = sum(e.get("name") == "electric-mining-drill" for e in plan.get("entities", []))
+    if per_drill <= 0 and drills:
+        per_drill = float(bank.get("nominal_rate_per_minute", 0)) / drills
+    pairs = int(bank.get("reserved_pair_slots") or plan.get("pair_count") or 0)
+    frame = supply - float(bank.get("nominal_rate_per_minute", 0)) + 2 * pairs * per_drill
+    return max(demand, min(demand * (1 + DEFAULT_GROWTH_SHARE), frame))
+
+
 def _trunk_rows(state, mining, obs, belt) -> list[dict]:
     rows = []
     for key, trunk in sorted(state["trunks"].items()):
@@ -844,6 +866,7 @@ def _trunk_rows(state, mining, obs, belt) -> list[dict]:
                 "resource": resource,
                 "demand_per_minute": round(demand, 3),
                 "supply_per_minute": round(supply, 3),
+                "target_per_minute": round(ahead_target(demand, supply, bank), 3),
                 "taps": sorted(trunk.get("taps", {})),
                 "lanes_needed": lanes,
                 "lanes_built": built,
@@ -891,7 +914,7 @@ def mine_trunk_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]
         if not isinstance(row, dict) or not row.get("grow"):
             continue
         resource = row.get("resource")
-        rate = min(960, math.ceil(float(row.get("demand_per_minute", 0))))
+        rate = min(960, math.ceil(float(row.get("target_per_minute") or row.get("demand_per_minute", 0))))
         parameters = {"resource": resource, "rate_per_minute": rate}
 
         def mining(r):

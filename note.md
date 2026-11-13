@@ -252217,3 +252217,20 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: offline only; nothing proven live.
 - failure reason / open: second block and AM2 rebuild are decisions only (no capability); green science is one cluster (no slot frame).
 - next action: live map: science_growth {labs 2, machines 3} widens the frame and builds; then labs 2 -> 4.
+
+## 2026-11-13 23:30 Part 50 - build ahead in staged growth (worktree agent-a3f9b2c5)
+- goal: owner rule 2026-11-13: over-building can win (new blocks raise demand again; a second expansion trip stalls the work); replace "smallest package unless 60 s faster".
+- hypothesis: expected growth from the lookahead (unbuilt taps, running rates of the next 8 roadmap blocks, science growth targets, 0.25 x demand allowance for unknown blocks) plus an explicit revisit cost picks the margin by time, bounded by the reserved frame.
+- actions: throughput_growth: expected_growth/upcoming_rates/PLATE_NEUTRAL, revisit_seconds, build_ahead (min T1 + R between the quickest and the full package; T1 < T0; claim rule), grow judged on the quickest; receipt expected + build_ahead. science_growth.build_ahead over plan_research_capacity options vs recommended_rates. mine_trunk.ahead_target (allowance within reserved pairs). starter capacity untouched.
+- metrics: live iron ~67 min (cap 112.5, ore 120, bill 937.7, taps 24, 6/24 furnaces, pairs 2/3): flat -> 150/min (T1 533 s, unchanged); lookahead logistic_science 30/min = +165 iron/min -> 180/min (+1 pair +2 slots/row, T1 496 s) vs 150/min T1 533 s + revisit 92 s.
+- result: offline only; gate PASS.
+- failure reason / open: mine trunk has no time comparison; upcoming_rates knows 5 block kinds (others neutral or allowance); expected growth is assumed to come (no probability).
+- next action: fleet round; read build_ahead in throughput_growth receipts and count second-trip growth jobs per plate.
+- merge with v2 (science frame/live limit, growth_taps): a staged science block's growth counts once (growth_taps); build ahead adds research_capacity machines only without a staged block.
+
+## 2026-11-13 Part 51 - science sizing ignores technologies without a pack producer; full-output plate headroom
+- goal: eval-4177156614 126.7 min: labs 2/2 working, 128 red packs on the belt, nothing grew ("wait inf": advanced-material-processing needs green packs nobody makes); plate_limit held at 2.
+- actions: research_capacity.split_producible (pack producer = assembler with the recipe, red always, or stock) used by research_capacity_receipt and science_growth.growth_decision; blocked_by_missing_pack reported. science_growth.district_spare: unclaimed district capacity counts as plate headroom while a district furnace holds full_output (net = produced - consumed is capped by consumption).
+- metrics: the receipt shape now grows labs 2 -> 4; plate limit 2 -> 7 with 60/30 spare in the unit test.
+- result: offline only.
+- next action: live map: science_growth grows labs, blocked_by_missing_pack names logistic-science-pack.

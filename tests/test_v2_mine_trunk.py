@@ -120,13 +120,24 @@ class MineTrunkGrowth(unittest.TestCase):
         self.assertEqual((row["demand_per_minute"], row["supply_per_minute"], row["grow"]), (120.0, 60.0, True))
         self.assertEqual(row["lanes_needed"], 1)
         nodes = mine_trunk.mine_trunk_nodes([], [], {"mine_trunks": receipt}, {"mining_outpost": {}})
+        # Build ahead: 120 x (1 + DEFAULT_GROWTH_SHARE 0.25) = 150/min, inside the frame of 3 reserved
+        # pairs x 2 drills x 30/min = 180/min (the trunk knows no lookahead: the allowance applies).
+        self.assertEqual(row["target_per_minute"], 150.0)
         self.assertEqual(
             [(n["capability"], n["parameters"]) for n in nodes],
-            [("mining_outpost", {"resource": "coal", "rate_per_minute": 120})],
+            [("mining_outpost", {"resource": "coal", "rate_per_minute": 150})],
         )
         running = [{"capability": "mining_outpost", "parameters": {"resource": "coal", "rate_per_minute": 30}}]
         running[0]["status"] = "running"
         self.assertEqual(mine_trunk.mine_trunk_nodes(running, [], {"mine_trunks": receipt}, {"mining_outpost": {}}), [])
+
+    def test_build_ahead_stays_inside_the_reserved_pairs(self):
+        # 170 x 1.25 = 212.5 is above the 180/min frame (3 reserved pairs): the target stops at the frame.
+        self.assertEqual(mine_trunk.ahead_target(170.0, 60.0, self.bank), 180.0)
+        # Beyond the frame (a connected module) only the known demand grows.
+        self.assertEqual(mine_trunk.ahead_target(200.0, 60.0, self.bank), 200.0)
+        # A covered trunk has no growth to size.
+        self.assertEqual(mine_trunk.ahead_target(50.0, 60.0, self.bank), 50.0)
 
     def test_growth_does_not_loop_and_a_later_tap_adds_only_its_demand(self):
         self.record("bricks:coal", 60)

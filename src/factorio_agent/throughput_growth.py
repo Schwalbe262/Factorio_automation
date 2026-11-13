@@ -50,11 +50,33 @@ Rule (``decide``)::
                       (the plant keeps producing while the package is funded and built)
     usable     gain x (T1 - prep) / 60 >= own plates: the known demand uses the package
                long enough to repay its plates (no capacity the known demand cannot use)
-    choose     smallest package first; a larger one replaces it only when its T1 is
-               MIN_SAVING_SECONDS lower (ties go to the smaller package)
-    grow when  T0 - T1 >= MIN_SAVING_SECONDS and T1 <= MAX_RATIO T0, or
+    quickest   among packages up to the smallest capacity >= demand x COVER_MARGIN: smallest
+               first; a larger one replaces it only when its T1 is MIN_SAVING_SECONDS lower
+    grow when  (judged on the quickest package, so build ahead never justifies a growth)
+               T0 - T1 >= MIN_SAVING_SECONDS and T1 <= MAX_RATIO T0, or
                T0 > payback = prep + 60 own / gain and T1 < T0 (a wait longer than the
                package needs to repay itself is never accepted on a thin margin)
+
+Build ahead (owner, 2026-11-13: every new block raises demand again; a margin built in one go
+beats coming back to expand while the work stalls; surplus nothing will use still wastes)::
+
+    growth     G = unbuilt declared bus taps + running rates of the next LOOKAHEAD_STEPS
+                   roadmap blocks without a tap yet (upcoming_rates) + research_capacity's extra
+                   pack machines x plates per pack only without a staged science block (a staged
+                   block's growth target is already tap rate: growth_taps, counted once);
+                   an upcoming step whose plate draw is unknown -> G >= DEFAULT_GROWTH_SHARE x demand
+    expected   E = demand + G;  full F = smallest package >= E x COVER_MARGIN within the frame
+                   (reserved pairs and slots, no connected module beyond the quickest's), else the
+                   largest in the frame
+    revisit    R(p) = 0 when capacity_after(p) >= capacity_after(F), else
+                   trip + short x (SETTLE_SECONDS + trip + (entities F - entities p) x SECONDS_PER_ENTITY)
+                   trip = TRIP_SECONDS x stages F needs beyond p; short = max(0, 1 - capacity_after(p) / E)
+                   (another trip for the next package, and the consumers' stall while it lands)
+    choose     min T1(p) + R(p) over the quickest and every frame package between it and F with
+               T1 < T0 (never slower than waiting for the known demand); ties -> smaller; while
+               critical jobs claim plates a larger package may not fund longer than the quickest
+               (its extra plates would wait behind the critical bill)
+               flat demand (G = 0): F = the quickest's cap, so the minimal package stands
     stages     the package runs as its existing jobs in order (mining_outpost into the
                reserved pairs, mining_outpost beyond them = connected module,
                smelting_capacity), chained by ``depends_on``; nothing granted
@@ -89,6 +111,9 @@ CRITICAL_PRIORITY = -52
 DEMAND_HORIZON_MINUTES = 10.0
 # Supply covers demand with this margin: no growth (surplus output wastes materials and build time).
 COVER_MARGIN = 1.1
+# Build ahead (module docstring): an upcoming roadmap step whose plate draw the lookahead cannot
+# quantify adds at least this share of the current demand as expected growth.
+DEFAULT_GROWTH_SHARE = 0.25
 # Expansion must clearly beat waiting (same thresholds as capacity_planning).
 MIN_SAVING_SECONDS = 60.0
 MAX_RATIO = 0.85
@@ -97,6 +122,7 @@ STARVED_SHARE = 0.5
 BACKED_SHARE = 0.5
 # After a growth step finished, evidence settles (belt transit, first crafts) before the next decision.
 SETTLE_TICKS = 3600
+SETTLE_SECONDS = SETTLE_TICKS / 60.0
 # Actor time of one step: a round trip to the site plus placing each entity.
 TRIP_SECONDS = 30.0
 SECONDS_PER_ENTITY = 3.0
@@ -181,6 +207,11 @@ class PlateFacts:
     patch_rows: int = 0
     # part of tap_rate a consumer grows into beyond its declared taps (science growth)
     growth_tap_rate: float = 0.0
+    # build ahead: plates/min the next blocks will draw after the horizon, its sources
+    # ((source, per_minute), ...) and the upcoming steps whose draw is unknown (-> allowance)
+    expected_growth: float = 0.0
+    growth_sources: tuple[tuple[str, float], ...] = ()
+    growth_unquantified: tuple[str, ...] = ()
 
 
 def _fund(cost: Mapping[str, float], facts: PlateFacts) -> float:
@@ -331,7 +362,7 @@ def packages(facts: PlateFacts, capacity: float, stage: str, target: float = mat
     slots). A package must add plates, contain a unit of the bottleneck stage
     and be efficient: dropping one pair or one slot lowers its capacity.
     Demand cap: no package above the smallest capacity that reaches ``target``
-    (demand x COVER_MARGIN); when none reaches it, every package stays.
+    (expected demand x COVER_MARGIN); when none reaches it, every package stays.
     """
     free_pairs = max(0, facts.pair_slots - facts.pairs_built)
     free_slots = max(0, facts.capacity_slots - facts.per_side)
@@ -429,6 +460,95 @@ def _choose(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
     return best
 
 
+def revisit_seconds(capacity_after: float, full_after: float, expected: float, trips: int, entities: float) -> float:
+    """Seconds a later expansion to ``full_after`` costs when ``capacity_after`` is built now (module docstring).
+
+    0 when the package already reaches the full one; else the extra trip(s) plus the share of
+    ``expected`` demand left unserved while the next package settles, travels and is placed.
+    """
+    if capacity_after >= full_after - EPSILON:
+        return 0.0
+    trip = max(1, trips) * TRIP_SECONDS
+    short = max(0.0, 1.0 - capacity_after / expected) if expected > EPSILON else 0.0
+    return trip + short * (SETTLE_SECONDS + trip + max(0.0, entities) * SECONDS_PER_ENTITY)
+
+
+def _module_pairs(facts: PlateFacts, package: Mapping[str, Any]) -> int:
+    return max(0, package["pairs"] - max(0, facts.pair_slots - facts.pairs_built))
+
+
+def _later_stages(package: Mapping[str, Any], full: Mapping[str, Any]) -> int:
+    """Stages the full package still needs after ``package`` (an ore stage per kind of pair, a furnace stage)."""
+    ore = [s for s in full["stages"] if s["stage"] == "ore"] if full["pairs"] > package["pairs"] else []
+    return len(ore) + (1 if full["furnace_slots"] > package["furnace_slots"] else 0)
+
+
+def build_ahead(
+    facts: PlateFacts, candidates: list[dict[str, Any]], quickest: dict[str, Any], expected: float, wait: float
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``(chosen, receipt)``: the package minimising T1 + revisit cost between the quickest and the full one.
+
+    Candidates stay in the reserved frame (no more connected-module pairs than the quickest
+    needs), are never slower than waiting for the known demand, and while critical jobs claim
+    plates never fund longer than the quickest (module docstring).
+    """
+    target = expected * COVER_MARGIN
+    frame = [
+        p
+        for p in candidates
+        if _module_pairs(facts, p) <= _module_pairs(facts, quickest) and math.isfinite(p["expand"])
+    ]
+    covering = [p for p in frame if p["capacity_after"] >= target - EPSILON]
+    full = (
+        min(covering, key=lambda p: (p["capacity_after"], p["entities"]))
+        if covering
+        else max(frame + [quickest], key=lambda p: (p["capacity_after"], -p["entities"]))
+    )
+    for p in frame + [quickest]:
+        p["revisit"] = revisit_seconds(
+            p["capacity_after"],
+            full["capacity_after"],
+            expected,
+            _later_stages(p, full),
+            full["entities"] - p["entities"],
+        )
+    pool, excluded = [quickest], []
+    for p in frame:
+        if p is quickest or not quickest["capacity_after"] < p["capacity_after"] <= full["capacity_after"] + EPSILON:
+            continue
+        if math.isfinite(wait) and p["expand"] >= wait:
+            excluded.append((p, "slower than waiting for the known demand"))
+        elif facts.claimed > EPSILON and p["fund"] > quickest["fund"] + EPSILON:
+            excluded.append((p, "its extra plates wait behind the critical claim"))
+        else:
+            pool.append(p)
+    chosen = min(pool, key=lambda p: (round(p["expand"] + p["revisit"], 6), p["capacity_after"], p["entities"]))
+    if chosen is quickest:
+        if quickest["capacity_after"] >= full["capacity_after"] - EPSILON:
+            why = f"the quickest package already reaches the expected {expected:.1f}/min x {COVER_MARGIN:g}"
+        elif excluded and len(pool) == 1:
+            why = "larger packages lose: " + "; ".join(sorted({w for _, w in excluded}))
+        else:
+            why = "the quickest package wins: building ahead now costs more than the avoided revisit"
+    else:
+        why = (
+            f"T1 {chosen['expand']:.0f}s + revisit {chosen['revisit']:.0f}s < quickest T1 {quickest['expand']:.0f}s "
+            f"+ revisit {quickest['revisit']:.0f}s: build ahead in one go"
+        )
+    return chosen, {
+        "expected_demand_per_minute": round(expected, 2),
+        "target_per_minute": round(target, 2),
+        "full_package": _describe(full),
+        "quickest": _describe(quickest),
+        "quickest_expand_seconds": _seconds(quickest["expand"]),
+        "quickest_revisit_seconds": round(quickest["revisit"]),
+        "chosen": _describe(chosen),
+        "chosen_revisit_seconds": round(chosen["revisit"]),
+        "why": why,
+        "excluded": [f"{_describe(p)}: {w}" for p, w in excluded][:RECEIPT_ALTERNATIVES],
+    }
+
+
 def decide(facts: PlateFacts) -> dict[str, Any]:
     """The growth decision for one plate (module rule), JSON-safe; ``grow`` True only for a package that pays."""
     horizon = DEMAND_HORIZON_MINUTES
@@ -436,6 +556,9 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
     work = bill + taps * horizon
     demand = work / horizon
     capacity = _capacity(facts.ore_nominal, facts.furnace_nominal, facts.belt_cap)
+    allowance = DEFAULT_GROWTH_SHARE * demand if facts.growth_unquantified else 0.0
+    growth = max(max(0.0, facts.expected_growth), allowance)
+    expected = demand + growth
     row: dict[str, Any] = {
         "plate": facts.plate,
         "resource": facts.resource,
@@ -447,6 +570,14 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
             "horizon_minutes": horizon,
             "per_minute": round(demand, 2),
             "claimed_by_critical_jobs": round(facts.claimed, 1),
+        },
+        "expected": {
+            "growth_per_minute": round(growth, 2),
+            "quantified_per_minute": round(max(0.0, facts.expected_growth), 2),
+            "sources": [[name, round(rate, 2)] for name, rate in facts.growth_sources],
+            "unquantified_steps": list(facts.growth_unquantified),
+            "allowance_per_minute": round(allowance, 2),
+            "expected_per_minute": round(expected, 2),
         },
         "supply": {
             # force-wide counter; the rule compares against the district (connected) capacity only
@@ -491,19 +622,27 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
             next_unit="another_bank",
         )
     target = demand * COVER_MARGIN
-    candidates = packages(facts, capacity, stage, target)
+    candidates = packages(facts, capacity, stage, max(target, expected * COVER_MARGIN))
     if not candidates:
         return dict(row, reason=f"no package adds plates: {why}")
     wait = _serve_seconds(bill, capacity, taps)
     for package in candidates:
         _evaluate(facts, package, capacity, bill, taps)
-    chosen = _choose(candidates)
+    # The quickest package for the known demand (cap: the smallest reaching demand x COVER_MARGIN).
+    reaching = [p["capacity_after"] for p in candidates if p["capacity_after"] >= target - EPSILON]
+    now_cap = min(reaching) if reaching else math.inf
+    quick = [p for p in candidates if p["capacity_after"] <= now_cap + EPSILON]
+    chosen = _choose(quick)
     taps_short = math.isinf(wait) and capacity < taps - EPSILON
     if chosen is None and taps_short:
         # The taps alone exceed every package: the largest closes most of the gap (none is above the taps).
         fundable = [p for p in candidates if math.isfinite(p["prep"])]
         chosen = max(fundable, key=lambda p: (p["capacity_after"], -p["entities"])) if fundable else None
-    shown = chosen or min(candidates, key=lambda p: (p["expand"], p["entities"]))
+    quickest = chosen
+    ahead = None
+    if chosen is not None and math.isfinite(chosen["expand"]):
+        chosen, ahead = build_ahead(facts, candidates, chosen, expected, wait)
+    shown = chosen or min(quick, key=lambda p: (p["expand"], p["entities"]))
     expand = shown["expand"]
     first = shown["stages"][0]
     ranked = sorted(candidates, key=lambda p: (p["expand"], p["entities"]))[:RECEIPT_ALTERNATIVES]
@@ -522,6 +661,7 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
             stages=[dict(s) for s in shown["stages"]],
             summary=_describe(shown),
             demand_cap_per_minute=round(target, 2),
+            expected_cap_per_minute=round(expected * COVER_MARGIN, 2),
         ),
         alternatives=[_package_row(p, wait) for p in ranked],
         times={
@@ -533,10 +673,12 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
             "payback_seconds": _seconds(shown["payback"]),
         },
     )
+    if ahead is not None:
+        row["build_ahead"] = dict(ahead, margin_per_minute=round(growth, 2))
     if math.isinf(shown["prep"]):
         return dict(row, reason=f"package inputs cannot be funded ({', '.join(sorted(shown['cost']))})")
     summary = _describe(shown)
-    if chosen is None:
+    if quickest is None:
         if not shown["usable"]:
             return dict(
                 row,
@@ -544,15 +686,18 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
                 f"is served or never repays its plates (expand {expand:.0f}s, prep {shown['prep']:.0f}s)",
             )
         return dict(row, reason=f"waiting is as fast: wait {wait:.0f}s, best package {summary} expand {expand:.0f}s")
-    clearly = wait - expand >= MIN_SAVING_SECONDS and expand <= MAX_RATIO * wait
-    bounded = wait > chosen["payback"] and expand < wait  # the wait outlasts the package's own payback
+    # Growth is justified on the quickest package; build ahead only sizes a justified growth.
+    quick_expand = quickest["expand"]
+    clearly = wait - quick_expand >= MIN_SAVING_SECONDS and quick_expand <= MAX_RATIO * wait
+    bounded = wait > quickest["payback"] and quick_expand < wait  # the wait outlasts the package's own payback
     if not (clearly or bounded or taps_short):
         return dict(
             row,
-            reason=f"waiting is as fast: wait {wait:.0f}s, best package {summary} expand {expand:.0f}s "
-            f"(saves {wait - expand:.0f}s < {MIN_SAVING_SECONDS:g}s or > {MAX_RATIO:g} of the wait; "
-            f"wait {wait:.0f}s <= payback {chosen['payback']:.0f}s)",
+            reason=f"waiting is as fast: wait {wait:.0f}s, best package {_describe(quickest)} expand "
+            f"{quick_expand:.0f}s (saves {wait - quick_expand:.0f}s < {MIN_SAVING_SECONDS:g}s or > {MAX_RATIO:g} "
+            f"of the wait; wait {wait:.0f}s <= payback {quickest['payback']:.0f}s)",
         )
+    ahead_note = "" if chosen is quickest else f"; build ahead for {expected:.1f}/min expected: {ahead['why']}"
     row.update(
         grow=True,
         capability=first["capability"],
@@ -561,8 +706,9 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
         reason=(
             f"{why}; demand {demand:.1f}/min > capacity {capacity:g}/min: package {summary} "
             f"saves {wait - expand:.0f}s (wait {wait:.0f}s, expand {expand:.0f}s"
-            + ("" if clearly else f", wait > payback {chosen['payback']:.0f}s")
+            + ("" if clearly else f", wait > payback {quickest['payback']:.0f}s")
             + ")"
+            + ahead_note
         ),
     )
     return row
@@ -649,6 +795,141 @@ def critical_plate_claims(catalog, jobs, observation) -> dict[str, float]:
     return rows
 
 
+# Build ahead: capabilities whose block draws no plates continuously once built (construction
+# only, research, coal/stone/fluid blocks, stock rows: their plates are bills, not taps).
+PLATE_NEUTRAL = frozenset(
+    {
+        "starter",
+        "power",
+        "starter_research",
+        "bootstrap_research",
+        "research",
+        "power_coal_feed",
+        "electric_coal",
+        "bootstrap_logistics",
+        "mining_outpost",
+        "smelting_district",
+        "planned_main_bus",
+        "steam_expansion",
+        "defense_perimeter",
+        "dedicated_materials",
+        "steel_supply",
+        "steel_coal_supply",
+        "chemical_coal_supply",
+        "brick_production",
+        "ammo_production",  # its tap is a production_row (stock), as in the taps
+        "oil_gathering",
+        "basic_petroleum",
+        "water_gathering",
+        "gas_distribution",
+        "water_distribution",
+        "chemical_production",
+    }
+)
+
+
+def upcoming_rates(catalog, step) -> dict[str, float] | None:
+    """Plates/min the block of a roadmap ``step`` draws once running ({} none, None unknown)."""
+    from .research_capacity import GREEN_PACK, RED_PACK
+
+    capability, parameters = step.capability, step.parameters or {}
+    try:
+        if capability in ("automation_science", "logistic_science"):
+            pack = RED_PACK if capability == "automation_science" else GREEN_PACK
+            rate = finite_number(parameters.get("rate_per_minute"))
+            if rate is None:
+                return None
+            from .progression import raw_cost
+
+            return {p: v for p, v in raw_cost(catalog, {pack: rate}).items() if p in PLATES}
+        if capability == "steel_production":
+            from .steel_production import steel_rates
+
+            return {"iron-plate": float(steel_rates(catalog)["iron_per_minute"])}
+        if capability == "engine_production":
+            from .engine_production import engine_rates
+
+            return {"iron-plate": float(engine_rates(catalog)["iron_per_minute"])}
+        if capability == "advanced_circuit_production":
+            from .advanced_circuits import advanced_circuit_rates
+
+            rated = advanced_circuit_rates(catalog)
+            return {"iron-plate": float(rated["iron_per_minute"]), "copper-plate": float(rated["copper_per_minute"])}
+    except Exception:  # a rate estimate never breaks the receipt: unknown
+        return None
+    return {} if capability in PLATE_NEUTRAL else None
+
+
+def _science_growth_rates(catalog, observation) -> tuple[str, dict[str, float]] | None:
+    """``(source, plates/min)`` of the extra pack machines research_capacity targets without a staged block.
+
+    A staged science block (an ``observation["science_growth"]`` receipt) is never counted
+    here: its growth target is already tap rate (declared taps, or ``growth_taps`` from
+    ``science_growth.undeclared_plate_draw``).
+    """
+    from .progression import raw_cost
+    from .research_capacity import pack_rate_per_assembler
+
+    if isinstance(observation.get("science_growth"), Mapping):
+        return None
+    extra, pack = 0, None
+    decision = (observation.get("research_capacity") or {}).get("decision")
+    if isinstance(decision, Mapping) and decision.get("expand") and decision.get("pack"):
+        pack, source = decision["pack"], "research_capacity"
+        extra = int(decision.get("target_assemblers") or 0) - int(decision.get("current_assemblers") or 0)
+    if extra <= 0:
+        return None
+    rate = extra * pack_rate_per_assembler(catalog, pack)
+    plates = {p: v for p, v in raw_cost(catalog, {pack: rate}).items() if p in PLATES}
+    return f"{source}: +{extra} {pack} machines", plates
+
+
+def expected_growth(catalog, jobs, observation, stations) -> dict[str, tuple[float, tuple, tuple]]:
+    """Per plate ``(plates/min, sources, unquantified steps)`` the next blocks add after the horizon (build ahead).
+
+    Unbuilt declared bus taps (not stock rows), the running rates of the next LOOKAHEAD_STEPS
+    roadmap steps without a station of their own yet (``upcoming_rates``), and the extra pack
+    machines research_capacity targets when no staged science block exists (a staged block's
+    growth is ``growth_taps``). A step whose draw is unknown is listed (allowance).
+    """
+    from .progression import LOOKAHEAD_STEPS, _names, _upcoming
+
+    sources: dict[str, list[tuple[str, float]]] = {plate: [] for plate in PLATES}
+    unknown: list[str] = []
+    owners = set()
+    for s in stations:
+        if not isinstance(s, Mapping):
+            continue
+        owner = str(s.get("owner") or "")
+        owners.add(owner)
+        rate = finite_number(s.get("demand_per_minute"))
+        if s.get("item") in PLATES and not s.get("built", True) and rate and not owner.startswith("production_row"):
+            sources[s["item"]].append((f"unbuilt tap {s.get('name') or owner}", rate))
+    researched = _names(observation.get("technologies"))
+    for step in _upcoming(list(jobs), researched, LOOKAHEAD_STEPS):
+        if step.capability in owners:
+            continue  # its declared taps count (built: in the taps; unbuilt: above)
+        rates = upcoming_rates(catalog, step)
+        if rates is None:
+            unknown.append(step.id)
+            continue
+        for plate, rate in rates.items():
+            if rate > EPSILON:
+                sources[plate].append((f"roadmap {step.id}", rate))
+    try:
+        science = _science_growth_rates(catalog, observation)
+    except Exception:  # unknown pack recipe: no science growth counted
+        science = None
+    if science is not None:
+        for plate, rate in science[1].items():
+            if rate > EPSILON:
+                sources[plate].append((science[0], rate))
+    return {
+        plate: (sum(rate for _, rate in rows), tuple((n, round(r, 2)) for n, r in rows), tuple(unknown))
+        for plate, rows in sources.items()
+    }
+
+
 def plate_facts(
     catalog,
     plate,
@@ -662,6 +943,7 @@ def plate_facts(
     claimed=0.0,
     starter_phase="",
     growth_taps=0.0,
+    expected=(0.0, (), ()),
 ) -> PlateFacts:
     """``PlateFacts`` of one district bank from saved state rows and the observe receipt.
 
@@ -751,6 +1033,9 @@ def plate_facts(
         patch_rows=len((first.get("patch_grid") or {}).get("rows") or ()),
         stocks=_stocks(observation),
         settling=_settling(resource, jobs, observation.get("tick")),
+        expected_growth=float(expected[0]),
+        growth_sources=tuple(expected[1]),
+        growth_unquantified=tuple(expected[2]),
     )
 
 
@@ -816,6 +1101,11 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
     from .science_growth import undeclared_plate_draw
 
     growth_taps = undeclared_plate_draw(read("automation-science.json"), observation.get("science_growth"))
+    try:
+        # Build ahead: what the next blocks add after the horizon (science growth is in growth_taps).
+        growth = expected_growth(catalog, jobs, observation, stations)
+    except Exception:  # an expectation never breaks the receipt: flat demand
+        growth = {}
     facts_by_plate: dict[str, PlateFacts] = {}
     order: list[str | dict] = []
     for plate, resource in PLATES.items():
@@ -841,6 +1131,7 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
             claimed=claims.get(plate, 0.0),
             starter_phase=_starter_phase(retirement, resource, jobs),
             growth_taps=growth_taps.get(plate, 0.0),
+            expected=growth.get(plate, (0.0, (), ())),
         )
         order.append(plate)
     funded = _bus_funding(facts_by_plate)

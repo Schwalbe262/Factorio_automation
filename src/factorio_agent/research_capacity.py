@@ -767,13 +767,52 @@ def lab_pack_rate(targets, labs: int, pack=RED_PACK, lab_speed=DEFAULT_LAB_SPEED
     return labs * lab_speed * 60.0 * packs / work
 
 
+def split_producible(targets, produced: Iterable[str], pack_stock: Mapping[str, float] | None = None):
+    """``(researchable, blocked)``: technologies whose every pack has a producer, and the rest.
+
+    A pack counts when something makes it (``produced``: a built block or a pre-bus cell
+    with that recipe) or the stock already covers the technology's need. A technology
+    needing a pack nobody makes is ``{"technology", "pack"}`` in ``blocked``: it would make
+    the whole queue infinite and the sizing degenerate to "keep", so it is reported, not sized.
+    """
+    produced = set(produced)
+    stock = dict(pack_stock or {})
+    ok, blocked = [], []
+    for target in _targets(targets):
+        missing = next(
+            (
+                pack
+                for pack, per_unit in sorted(target.packs_per_unit.items())
+                if per_unit > 0 and pack not in produced and stock.get(pack, 0.0) < target.units * per_unit - 1e-9
+            ),
+            None,
+        )
+        if missing is None:
+            ok.append(target)
+        else:
+            blocked.append({"technology": target.technology, "pack": missing})
+    return ok, blocked
+
+
 def research_capacity_receipt(catalog, jobs, observation: Mapping, *, horizon=4) -> dict:
-    """The planner's decision for the running (or next) research queue, for the observe receipt."""
+    """The planner's decision for the running (or next) research queue, for the observe receipt.
+
+    Sized on the technologies whose packs have a producer (``split_producible``); the
+    others are listed in ``blocked_by_missing_pack``.
+    """
     researched = _researched(observation)
     targets = queue_targets(catalog, jobs, observation, horizon=horizon)
-    names = [target.technology for target in targets]
     evidence = _evidence_from_supply(observation)
-    receipt: dict[str, Any] = {"technologies": names}
+    receipt: dict[str, Any] = {}
+    if targets:
+        packs = sorted({pack for target in targets for pack in target.packs_per_unit})
+        hardware = hardware_from_observation(catalog, observation, packs)
+        # Red packs always have a producer (the startup path hand-crafts and then machine-builds them).
+        produced = {pack for pack, count in hardware.assemblers.items() if count > 0} | {RED_PACK}
+        targets, blocked = split_producible(targets, produced, hardware.pack_stock)
+        if blocked:
+            receipt["blocked_by_missing_pack"] = blocked
+    receipt["technologies"] = [target.technology for target in targets]
     if targets:
         packs = sorted({pack for target in targets for pack in target.packs_per_unit})
         hardware = hardware_from_observation(catalog, observation, packs)
