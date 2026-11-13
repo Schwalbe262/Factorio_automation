@@ -266,9 +266,15 @@ def _assess(
     # measured rate lags every expansion and the planner stacks a second one
     # on top (seed 2099054105: coal 1 -> 3 -> 5 within two minutes).
     pending = max(0.0, facts.current * facts.cell_rate - facts.produced)
-    net = facts.net + pending
     if facts.item == FUEL_ITEM:
-        net -= extra_fuel_burn
+        # Coal is burned in the background, so what accumulates is the net rate.
+        net = facts.net + pending - extra_fuel_burn
+    else:
+        # Plates and stone are consumed by the very construction this bill
+        # describes. Subtracting that consumption counted the demand twice,
+        # made every wait look endless and drove the cells to the cap
+        # (seed 4176033748: iron 1 -> 7 cells in 8 minutes at "net 1.3/min").
+        net = facts.produced + pending
     wait = _seconds(facts.required, net)
     cap = config.max_cells if facts.item == FUEL_ITEM else min(config.max_cells, config.max_plate_cells)
     if facts.item == FUEL_ITEM and fuel_cells_needed is not None:

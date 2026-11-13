@@ -145,9 +145,17 @@ class TimeComparisonTests(unittest.TestCase):
         self.assertEqual([(d.item, d.current_cells) for d in decisions], [("coal", 1)])
         self.assertLessEqual(decisions[0].target_cells, 2)
 
+    def test_plates_are_not_over_expanded_when_gross_output_already_covers_the_bill(self):
+        # User rule: do not overbuild plate output; more cells cost plates and time.
+        # Seed 4176033748: "net 1.3/min" (production minus the construction that
+        # the bill itself describes) made the wait look endless: iron 1 -> 7 cells.
+        busy = dict(productive_cells=5, installed_live_cells=5, produced_per_minute=75.0, net_per_minute=1.3)
+        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=70, **busy)}, {"iron-plate": 330}), [])
+        self.assertEqual(len(plan_capacity({"iron-plate": iron(shortfall=70, **busy)}, {"iron-plate": 1500})), 1)
+
     def test_max_cells_cap(self):
-        full = dict(productive_cells=7, produced_per_minute=105.0, net_per_minute=5.0)
-        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7, **full)}, {})
+        full = dict(productive_cells=6, produced_per_minute=90.0, net_per_minute=5.0)
+        decisions = plan_capacity({"iron-plate": iron(shortfall=3000, installed_live_cells=6, **full)}, {})
         self.assertEqual(decisions[0].target_cells, 8)
         self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=8)}, {}), [])
         tight = CapacityConfig(max_plate_cells=4)
@@ -175,7 +183,7 @@ class LiveCaseTests(unittest.TestCase):
     def test_iron_short_coal_surplus_expands_iron_only(self):
         decisions = plan_capacity(live_supply(), {})
         self.assertEqual([(d.item, d.target_cells) for d in decisions], [("iron-plate", 3)])
-        self.assertTrue(math.isclose(decisions[0].evidence["wait_seconds"], 133 / 0.6 * 60))
+        self.assertTrue(math.isclose(decisions[0].evidence["wait_seconds"], 133 / 15.1 * 60))  # gross production
 
     def test_coal_cells_follow_the_burner_cells_not_the_measured_rate(self):
         # User rule: one coal cell fuels several drills and furnaces, so coal
@@ -212,7 +220,7 @@ class OrderingTests(unittest.TestCase):
     def test_one_expansion_when_the_second_spends_the_first_bottleneck(self):
         supply = {
             "iron-plate": iron(shortfall=200, net_per_minute=1.0),
-            "copper-plate": iron(shortfall=200, net_per_minute=5.0, raw_cost_per_cell={"iron-plate": 9}),
+            "copper-plate": iron(shortfall=100, net_per_minute=5.0, raw_cost_per_cell={"iron-plate": 9}),
         }
         self.assertEqual([d.item for d in plan_capacity(supply, {})], ["iron-plate"])
 
