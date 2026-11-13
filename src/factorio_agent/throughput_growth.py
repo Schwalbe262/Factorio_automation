@@ -22,7 +22,10 @@ Supply::
     belt     = 2 lanes x unstacked lane capacity of the plate port
     capacity = min(furnaces, ore, belt)            built-but-not-yet-producing units count
                                                    at nominal rate: a build never looks like a deficit
-    measured = engine production counter (reported; includes starter cells)
+    measured = force-wide engine production counter, split (reported):
+               connected = district furnaces on the bus (working share x nominal, <= measured)
+               off_bus   = measured - connected (starter cells: hand-collectable stock only,
+                           already in the bill's ``available``; nothing once they retire)
     signals  = built furnaces idle for ore / with full output, drills backed up
 
 Rule (``decide``)::
@@ -31,16 +34,31 @@ Rule (``decide``)::
     bottleneck evidence first: furnace output full -> demand; furnaces idle for ore and
                drills backed -> transport; furnaces idle for ore -> ore; drills backed ->
                furnaces; else the smaller nominal stage; equal -> balanced (ore first)
-    step       ore: one drill pair in the bank's reserved slots (mining_outpost target
-               + pair rate; a full bank gets a connected module from outposts.py);
-               furnaces: one slot per row (smelting_capacity, rate <= ore);
-               balanced: the ore step first; a step after which the other stage binds
-               below demand is valued together with that stage's next step (only
-               the first is proposed; the second is re-decided once it is measured)
-    pays       T0 = 60 * work / capacity
-               T1 = fund + build + 60 * (work + own plate cost) / (capacity + gain)
-               grow when T0 - T1 >= MIN_SAVING_SECONDS and T1 <= MAX_RATIO * T0
-    once       one step per plate; nothing while a growth or outpost job of the
+    packages   every (k drill pairs, f furnace slots per row) along drills -> ore belt ->
+               furnaces -> plate belt: k up to the free reserved pairs plus one connected
+               module of MODULE_PAIRS_MAX pairs (outposts.prepare_connected_bank), f up to
+               the free reserved slots; capacity_after = min(ore + 2 k drill, 2 (per_side + f)
+               furnace, belt, SMELTING_RATE_MAX); only efficient packages (dropping one unit
+               of either stage lowers capacity_after), with a unit of the bottleneck stage
+    time       the bill is served after the taps (taps take their rate first):
+               S(bill, rate) = 60 bill / (rate - taps)        (inf when rate <= taps)
+               T0   = S(bill, capacity)
+               prep = max(fund of other inputs, fund_seconds(claimed + own plates,
+                      plate stock, capacity)) + stages x TRIP + entities x SECONDS_PER_ENTITY
+                      (claimed = plates critical jobs reserve: a slack growth job gets them last)
+               T1   = prep + S(bill + own - (capacity - taps) prep / 60, capacity_after)
+                      (the plant keeps producing while the package is funded and built)
+    usable     gain x (T1 - prep) / 60 >= own plates: the known demand uses the package
+               long enough to repay its plates (no capacity the known demand cannot use)
+    choose     smallest package first; a larger one replaces it only when its T1 is
+               MIN_SAVING_SECONDS lower (ties go to the smaller package)
+    grow when  T0 - T1 >= MIN_SAVING_SECONDS and T1 <= MAX_RATIO T0, or
+               T0 > payback = prep + 60 own / gain and T1 < T0 (a wait longer than the
+               package needs to repay itself is never accepted on a thin margin)
+    stages     the package runs as its existing jobs in order (mining_outpost into the
+               reserved pairs, mining_outpost beyond them = connected module,
+               smelting_capacity), chained by ``depends_on``; nothing granted
+    once       one package per plate; nothing while a growth or outpost job/node of the
                resource is open or the last one finished < SETTLE_TICKS ago
 """
 
@@ -50,7 +68,7 @@ import math
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .capacity_planning import finite_number, fund_seconds, stock_on_hand
@@ -85,6 +103,15 @@ SECONDS_PER_ENTITY = 3.0
 # Hand-gathered inputs (a tree gives 4 wood), as capacity_planning.
 HAND_GATHERED_SECONDS = {"wood": 2.0}
 EPSILON = 1e-6
+# One connected module adds at most 8 drills (outposts.prepare_extension / prepare_connected_bank).
+MODULE_PAIRS_MAX = 4
+# smelting.validate_capacity: a bank never runs above this rate; mining_outpost targets stop at 960.
+SMELTING_RATE_MAX = 450.0
+ORE_RATE_MAX = 960.0
+# Receipt size: the best packages listed beside the chosen one.
+RECEIPT_ALTERNATIVES = 5
+# Starter-cell phases after which their output no longer funds anything (starter_retirement.json).
+RETIRING_PHASES = frozenset({"retiring", "retired"})
 
 IDLE_FOR_ORE = frozenset({"no_ingredients", "item_ingredient_shortage"})
 OUTPUT_FULL = frozenset({"full_output"})
@@ -142,12 +169,16 @@ class PlateFacts:
     # item -> (stock on hand, produced per minute) for the step's non-own inputs
     stocks: Mapping[str, tuple[float, float | None]] = field(default_factory=dict)
     settling: str = ""
-
-
-def _seconds_to_deliver(amount: float, rate: float) -> float:
-    if amount <= 0:
-        return 0.0
-    return 60.0 * amount / rate if rate > 0 else math.inf
+    # cost of one drill pair beyond the reserved slots (connected module, MINING_OUTPOST_BUILDS)
+    module_step_cost: Mapping[str, float] | None = None
+    module_step_entities: int | None = None
+    # plates of this kind that critical jobs reserve (critical_path claims): a slack growth job gets them last
+    claimed: float = 0.0
+    # measured split: district furnaces on the bus vs everything else (starter cells off the bus)
+    connected_measured: float | None = None
+    off_bus_measured: float | None = None
+    starter_phase: str = ""
+    patch_rows: int = 0
 
 
 def _fund(cost: Mapping[str, float], facts: PlateFacts) -> float:
@@ -195,52 +226,212 @@ def bottleneck(facts: PlateFacts) -> tuple[str, str]:
     return "balanced", f"ore = furnaces = {ore:g}/min"
 
 
-def _ore_step(facts: PlateFacts) -> dict[str, Any]:
-    pair = 2 * facts.drill_rate
-    target = round(min(960.0, facts.ore_nominal + pair), 1)
-    full = facts.pairs_built >= facts.pair_slots
-    return {
-        "stage": "ore",
-        "capability": MINING,
-        "parameters": {"resource": facts.resource, "rate_per_minute": target},
-        "ore_after": target,
-        "cost": dict(facts.ore_step_cost),
-        "entities": facts.ore_step_entities,
-        "unit": (
-            "another 2-drill module joined to the ore trunk (outposts.prepare_connected_bank)"
-            if full
-            else f"drill pair {facts.pairs_built + 1}/{facts.pair_slots} in the bank's reserved slots"
-        ),
-    }
-
-
-def _furnace_step(facts: PlateFacts, ore: float) -> dict[str, Any] | None:
-    """One more furnace per row, rate capped by the ore (smelting_capacity refuses rate > ore); None when impossible."""
-    if facts.per_side >= facts.capacity_slots or facts.furnace_each <= 0:
-        return None
-    full = 2 * (facts.per_side + 1) * facts.furnace_each
-    rate = round(min(full, ore, 450.0), 1)
-    if math.ceil(rate / facts.furnace_each / 2 - 1e-9) <= facts.per_side:
-        return None
-    return {
-        "stage": "furnaces",
-        "capability": SMELTING,
-        "parameters": {"resource": facts.resource, "rate_per_minute": rate},
-        "furnaces_after": full,
-        "cost": dict(facts.furnace_step_cost),
-        "entities": facts.furnace_step_entities,
-        "unit": f"furnace slot {facts.per_side + 1}/{facts.capacity_slots} in both rows",
-    }
-
-
 def _capacity(ore: float, furnaces: float, belt: float | None) -> float:
     return min(ore, furnaces, belt if belt is not None else math.inf)
 
 
+def _serve_seconds(bill: float, rate: float, taps: float) -> float:
+    """Seconds until ``bill`` plates are delivered at ``rate`` while the taps take theirs first (inf: never)."""
+    if rate < taps - EPSILON:
+        return math.inf  # the taps alone are never served
+    if bill <= 0:
+        return 0.0
+    net = rate - taps
+    return 60.0 * bill / net if net > EPSILON else math.inf
+
+
+def _after(facts: PlateFacts, pairs: int, slots: int) -> tuple[float, float, float]:
+    """``(ore, furnaces, capacity)`` per minute after ``pairs`` more drill pairs and ``slots`` more slots per row."""
+    ore = min(ORE_RATE_MAX, facts.ore_nominal + pairs * 2 * facts.drill_rate)
+    furnaces = 2 * (facts.per_side + slots) * facts.furnace_each if slots else facts.furnace_nominal
+    return ore, furnaces, min(_capacity(ore, furnaces, facts.belt_cap), SMELTING_RATE_MAX)
+
+
+def _span(first: int, last: int) -> str:
+    return f"{first}" if first == last else f"{first}-{last}"
+
+
+def _package(facts: PlateFacts, pairs: int, slots: int, capacity: float) -> dict[str, Any] | None:
+    """The stages of one package in build order (existing jobs), or None when a stage cannot be expressed."""
+    ore_after, furnaces_after, after = _after(facts, pairs, slots)
+    free_pairs = max(0, facts.pair_slots - facts.pairs_built)
+    reserved, module = min(pairs, free_pairs), max(0, pairs - free_pairs)
+    stages: list[dict[str, Any]] = []
+    cost: Counter = Counter()
+    entities = 0
+    if reserved:
+        stages.append(
+            {
+                "stage": "ore",
+                "capability": MINING,
+                "parameters": {
+                    "resource": facts.resource,
+                    "rate_per_minute": round(facts.ore_nominal + reserved * 2 * facts.drill_rate, 1),
+                },
+                "unit": f"drill pair {_span(facts.pairs_built + 1, facts.pairs_built + reserved)}/{facts.pair_slots} "
+                "in the bank's reserved slots",
+            }
+        )
+        cost.update({k: v * reserved for k, v in facts.ore_step_cost.items()})
+        entities += facts.ore_step_entities * reserved
+    if module:
+        rows = f"; patch_grid {facts.patch_rows} rows" if facts.patch_rows else ""
+        stages.append(
+            {
+                "stage": "ore",
+                "capability": MINING,
+                "parameters": {"resource": facts.resource, "rate_per_minute": round(ore_after, 1)},
+                "unit": f"connected module of {2 * module} drills beside the full bank "
+                f"(another 2-drill module per pair, outposts.prepare_connected_bank{rows})",
+            }
+        )
+        module_cost = facts.module_step_cost if facts.module_step_cost is not None else facts.ore_step_cost
+        module_entities = (
+            facts.module_step_entities if facts.module_step_entities is not None else facts.ore_step_entities
+        )
+        cost.update({k: v * module for k, v in module_cost.items()})
+        entities += module_entities * module
+    if slots:
+        # smelting_capacity refuses rate > connected ore: the mining stages run first (depends_on).
+        rate = round(min(furnaces_after, ore_after, SMELTING_RATE_MAX), 1)
+        if math.ceil(rate / facts.furnace_each / 2 - 1e-9) != facts.per_side + slots:
+            return None
+        stages.append(
+            {
+                "stage": "furnaces",
+                "capability": SMELTING,
+                "parameters": {"resource": facts.resource, "rate_per_minute": rate},
+                "unit": f"furnace slot {_span(facts.per_side + 1, facts.per_side + slots)}/{facts.capacity_slots} "
+                "in both rows",
+            }
+        )
+        cost.update({k: v * slots for k, v in facts.furnace_step_cost.items()})
+        entities += facts.furnace_step_entities * slots
+    return {
+        "pairs": pairs,
+        "furnace_slots": slots,
+        "ore_after": round(ore_after, 2),
+        "furnaces_after": round(furnaces_after, 2),
+        "capacity_after": round(after, 2),
+        "gain": after - capacity,
+        "stages": stages,
+        "cost": dict(cost),
+        "entities": entities,
+        "build": len(stages) * TRIP_SECONDS + entities * SECONDS_PER_ENTITY,
+    }
+
+
+def packages(facts: PlateFacts, capacity: float, stage: str, target: float = math.inf) -> list[dict[str, Any]]:
+    """Efficient packages along drills -> ore belt -> furnaces -> plate belt, smallest first.
+
+    ``k`` drill pairs (free reserved pairs, then one connected module of up to
+    MODULE_PAIRS_MAX pairs) and ``f`` furnace slots per row (free reserved
+    slots). A package must add plates, contain a unit of the bottleneck stage
+    and be efficient: dropping one pair or one slot lowers its capacity.
+    Demand cap: no package above the smallest capacity that reaches ``target``
+    (demand x COVER_MARGIN); when none reaches it, every package stays.
+    """
+    free_pairs = max(0, facts.pair_slots - facts.pairs_built)
+    free_slots = max(0, facts.capacity_slots - facts.per_side)
+    max_pairs = free_pairs + MODULE_PAIRS_MAX if facts.drill_rate > 0 else 0
+    max_slots = free_slots if facts.furnace_each > 0 else 0
+    found = []
+    for k in range(max_pairs + 1):
+        for f in range(max_slots + 1):
+            if (k, f) == (0, 0) or (stage == "ore" and not k) or (stage == "furnaces" and not f):
+                continue
+            after = _after(facts, k, f)[2]
+            if after <= capacity + EPSILON:
+                continue
+            if (k and _after(facts, k - 1, f)[2] >= after - EPSILON) or (
+                f and _after(facts, k, f - 1)[2] >= after - EPSILON
+            ):
+                continue
+            package = _package(facts, k, f, capacity)
+            if package is not None:
+                found.append(package)
+    covering = [p["capacity_after"] for p in found if p["capacity_after"] >= target - EPSILON]
+    if covering:
+        cap = min(covering)
+        found = [p for p in found if p["capacity_after"] <= cap + EPSILON]
+    return sorted(found, key=lambda p: (p["entities"], p["capacity_after"], p["pairs"]))
+
+
+def _evaluate(facts: PlateFacts, package: dict[str, Any], capacity: float, bill: float, taps: float) -> None:
+    """Adds ``fund``, ``prep``, ``expand``, ``payback``, ``usable`` (seconds) to ``package`` (module docstring)."""
+    cost = package["cost"]
+    own = max(0.0, cost.get(facts.plate, 0.0))
+    other = _fund(cost, facts)
+    stock = facts.stocks.get(facts.plate, (0.0, None))[0]
+    # A slack growth job is refused plates a critical job claims: its own plates come after the claim.
+    own_wait = fund_seconds(max(0.0, facts.claimed) + own, stock, capacity) if own > 0 else 0.0
+    fund = max(other, own_wait)
+    prep = fund + package["build"]
+    if math.isinf(prep):
+        expand = math.inf
+    else:
+        net = max(0.0, capacity - taps)
+        remaining = bill + own - net * prep / 60.0
+        if remaining <= 0 and capacity >= taps - EPSILON:  # the bill is served before the package lands
+            expand = _serve_seconds(bill + own, capacity, taps)
+        else:
+            expand = prep + _serve_seconds(max(0.0, remaining), package["capacity_after"], taps)
+    gain = package["gain"]
+    package.update(
+        fund=fund,
+        prep=prep,
+        expand=expand,
+        payback=prep + 60.0 * own / gain if gain > EPSILON else math.inf,
+        # The known demand uses the package long enough to repay its own plates.
+        usable=math.isfinite(expand) and gain * (expand - prep) / 60.0 >= own - EPSILON,
+    )
+
+
+def _seconds(value: float) -> int | None:
+    return None if math.isinf(value) else round(value)
+
+
+def _package_row(package: dict[str, Any], wait: float) -> dict[str, Any]:
+    return {
+        "pairs": package["pairs"],
+        "furnace_slots": package["furnace_slots"],
+        "capacity_after": package["capacity_after"],
+        "gain_per_minute": round(package["gain"], 2),
+        "entities": package["entities"],
+        "expand_seconds": _seconds(package["expand"]),
+        "saving_seconds": None
+        if math.isinf(package["expand"]) or math.isinf(wait)
+        else round(wait - package["expand"]),
+        "usable": package["usable"],
+    }
+
+
+def _describe(package: dict[str, Any]) -> str:
+    parts = []
+    if package["pairs"]:
+        parts.append(f"+{package['pairs']} drill pair{'s' if package['pairs'] > 1 else ''}")
+    if package["furnace_slots"]:
+        n = 2 * package["furnace_slots"]
+        parts.append(f"+{n} furnace{'s' if n > 1 else ''}")
+    return " ".join(parts) + f" -> {package['capacity_after']:g}/min"
+
+
+def _choose(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Smallest usable package first; a larger one wins only with T1 at least MIN_SAVING_SECONDS lower."""
+    best = None
+    for package in candidates:
+        if not package["usable"]:
+            continue
+        if best is None or package["expand"] < best["expand"] - MIN_SAVING_SECONDS:
+            best = package
+    return best
+
+
 def decide(facts: PlateFacts) -> dict[str, Any]:
-    """The growth decision for one plate (module rule), JSON-safe; ``grow`` True only for a step that pays."""
+    """The growth decision for one plate (module rule), JSON-safe; ``grow`` True only for a package that pays."""
     horizon = DEMAND_HORIZON_MINUTES
-    work = max(0.0, facts.bill) + max(0.0, facts.tap_rate) * horizon
+    bill, taps = max(0.0, facts.bill), max(0.0, facts.tap_rate)
+    work = bill + taps * horizon
     demand = work / horizon
     capacity = _capacity(facts.ore_nominal, facts.furnace_nominal, facts.belt_cap)
     row: dict[str, Any] = {
@@ -248,13 +439,20 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
         "resource": facts.resource,
         "grow": False,
         "demand": {
-            "taps_per_minute": round(facts.tap_rate, 2),
-            "bill_plates": round(facts.bill, 1),
+            "taps_per_minute": round(taps, 2),
+            "bill_plates": round(bill, 1),
             "horizon_minutes": horizon,
             "per_minute": round(demand, 2),
+            "claimed_by_critical_jobs": round(facts.claimed, 1),
         },
         "supply": {
+            # force-wide counter; the rule compares against the district (connected) capacity only
             "measured_per_minute": None if facts.measured is None else round(facts.measured, 2),
+            "measured_connected_per_minute": (
+                None if facts.connected_measured is None else round(facts.connected_measured, 2)
+            ),
+            "measured_off_bus_per_minute": None if facts.off_bus_measured is None else round(facts.off_bus_measured, 2),
+            "starter_cells": facts.starter_phase or None,
             "furnaces_per_minute": round(facts.furnace_nominal, 2),
             "ore_per_minute": round(facts.ore_nominal, 2),
             "belt_per_minute": facts.belt_cap,
@@ -281,71 +479,87 @@ def decide(facts: PlateFacts) -> dict[str, Any]:
         return dict(row, reason=f"no stage to grow: {why}")
     if stage == "belt":
         return dict(row, reason=f"{why}; next unit: another bank in the zone's free half (not automated)")
-    ore_step = _ore_step(facts)
-    if stage == "furnaces":
-        step = _furnace_step(facts, facts.ore_nominal)
-        if step is None:
-            return dict(
-                row,
-                reason="paired_bank_full_next_growth_is_another_bank: every reserved furnace slot is built; "
-                "next unit: a second paired bank of the same plate in the district zone's free half, "
-                "fed by a splitter off the ore trunk, output merged onto the same bus lane (not automated)",
-                next_unit="another_bank",
-            )
-        steps = [step]
-        ore_after, furnaces_after = facts.ore_nominal, step["furnaces_after"]
-        if ore_after < min(furnaces_after, demand):  # the ore binds next: value the drill pair with it
-            steps.append(ore_step)
-            ore_after = ore_step["ore_after"]
-    else:  # ore (balanced: ore first, smelting_capacity never runs above the ore)
-        steps = [ore_step]
-        ore_after, furnaces_after = ore_step["ore_after"], facts.furnace_nominal
-        follow = _furnace_step(facts, ore_after) if furnaces_after < min(ore_after, demand) else None
-        if follow:  # the furnaces bind next: value the pair with the furnace step it enables
-            steps.append(follow)
-            furnaces_after = follow["furnaces_after"]
-    gain = _capacity(ore_after, furnaces_after, facts.belt_cap) - capacity
-    cost: Counter = Counter()
-    for step in steps:
-        cost.update(step["cost"])
-    entities = sum(step["entities"] for step in steps)
-    wait = _seconds_to_deliver(work, capacity)
-    fund = _fund(cost, facts)
-    build = len(steps) * TRIP_SECONDS + entities * SECONDS_PER_ENTITY
-    own = cost.get(facts.plate, 0.0)
-    expand = fund + build + _seconds_to_deliver(work + own, capacity + gain) if gain > EPSILON else math.inf
-    first = steps[0]
+    if stage == "furnaces" and facts.per_side >= facts.capacity_slots:
+        return dict(
+            row,
+            reason="paired_bank_full_next_growth_is_another_bank: every reserved furnace slot is built; "
+            "next unit: a second paired bank of the same plate in the district zone's free half, "
+            "fed by a splitter off the ore trunk, output merged onto the same bus lane (not automated)",
+            next_unit="another_bank",
+        )
+    target = demand * COVER_MARGIN
+    candidates = packages(facts, capacity, stage, target)
+    if not candidates:
+        return dict(row, reason=f"no package adds plates: {why}")
+    wait = _serve_seconds(bill, capacity, taps)
+    for package in candidates:
+        _evaluate(facts, package, capacity, bill, taps)
+    chosen = _choose(candidates)
+    taps_short = math.isinf(wait) and capacity < taps - EPSILON
+    if chosen is None and taps_short:
+        # The taps alone exceed every package: the largest closes most of the gap (none is above the taps).
+        fundable = [p for p in candidates if math.isfinite(p["prep"])]
+        chosen = max(fundable, key=lambda p: (p["capacity_after"], -p["entities"])) if fundable else None
+    shown = chosen or min(candidates, key=lambda p: (p["expand"], p["entities"]))
+    expand = shown["expand"]
+    first = shown["stages"][0]
+    ranked = sorted(candidates, key=lambda p: (p["expand"], p["entities"]))[:RECEIPT_ALTERNATIVES]
     row.update(
         step={
             "stage": first["stage"],
             "capability": first["capability"],
             "parameters": first["parameters"],
             "unit": first["unit"],
-            "valued_with": [s["unit"] for s in steps[1:]],
-            "gain_per_minute": round(gain, 2),
-            "cost": {k: round(v, 1) for k, v in sorted(cost.items())},
+            "valued_with": [s["unit"] for s in shown["stages"][1:]],
+            "gain_per_minute": round(shown["gain"], 2),
+            "cost": {k: round(v, 1) for k, v in sorted(shown["cost"].items())},
         },
+        package=dict(
+            _package_row(shown, wait),
+            stages=[dict(s) for s in shown["stages"]],
+            summary=_describe(shown),
+            demand_cap_per_minute=round(target, 2),
+        ),
+        alternatives=[_package_row(p, wait) for p in ranked],
         times={
-            "wait_seconds": None if math.isinf(wait) else round(wait),
-            "expand_seconds": None if math.isinf(expand) else round(expand),
-            "fund_seconds": None if math.isinf(fund) else round(fund),
-            "build_seconds": round(build),
-            "saving_seconds": None if math.isinf(expand) else (None if math.isinf(wait) else round(wait - expand)),
+            "wait_seconds": _seconds(wait),
+            "expand_seconds": _seconds(expand),
+            "fund_seconds": _seconds(shown["fund"]),
+            "build_seconds": round(shown["build"]),
+            "saving_seconds": None if math.isinf(expand) or math.isinf(wait) else round(wait - expand),
+            "payback_seconds": _seconds(shown["payback"]),
         },
     )
-    if gain <= EPSILON:
-        return dict(row, reason=f"{first['unit']} adds no plates: {why}")
-    if math.isinf(expand):
-        return dict(row, reason=f"step inputs cannot be funded ({', '.join(sorted(cost))})")
-    if not (wait - expand >= MIN_SAVING_SECONDS and expand <= MAX_RATIO * wait):
-        return dict(row, reason=f"waiting is as fast: wait {wait:.0f}s, expand {expand:.0f}s")
+    if math.isinf(shown["prep"]):
+        return dict(row, reason=f"package inputs cannot be funded ({', '.join(sorted(shown['cost']))})")
+    summary = _describe(shown)
+    if chosen is None:
+        if not shown["usable"]:
+            return dict(
+                row,
+                reason=f"waiting is as fast: wait {wait:.0f}s; best package {summary} lands after the known demand "
+                f"is served or never repays its plates (expand {expand:.0f}s, prep {shown['prep']:.0f}s)",
+            )
+        return dict(row, reason=f"waiting is as fast: wait {wait:.0f}s, best package {summary} expand {expand:.0f}s")
+    clearly = wait - expand >= MIN_SAVING_SECONDS and expand <= MAX_RATIO * wait
+    bounded = wait > chosen["payback"] and expand < wait  # the wait outlasts the package's own payback
+    if not (clearly or bounded or taps_short):
+        return dict(
+            row,
+            reason=f"waiting is as fast: wait {wait:.0f}s, best package {summary} expand {expand:.0f}s "
+            f"(saves {wait - expand:.0f}s < {MIN_SAVING_SECONDS:g}s or > {MAX_RATIO:g} of the wait; "
+            f"wait {wait:.0f}s <= payback {chosen['payback']:.0f}s)",
+        )
     row.update(
         grow=True,
         capability=first["capability"],
         parameters=first["parameters"],
+        stages=[{k: s[k] for k in ("capability", "parameters", "unit")} for s in chosen["stages"]],
         reason=(
-            f"{why}; demand {demand:.1f}/min > capacity {capacity:g}/min: {first['unit']} "
-            f"+{gain:g}/min saves {wait - expand:.0f}s (wait {wait:.0f}s, expand {expand:.0f}s)"
+            f"{why}; demand {demand:.1f}/min > capacity {capacity:g}/min: package {summary} "
+            f"saves {wait - expand:.0f}s (wait {wait:.0f}s, expand {expand:.0f}s"
+            + ("" if clearly else f", wait > payback {chosen['payback']:.0f}s")
+            + ")"
         ),
     )
     return row
@@ -400,7 +614,41 @@ def _settling(resource: str, jobs: Iterable[Mapping], tick) -> str:
     return ""
 
 
-def plate_facts(catalog, plate, bank, bound, mining_banks, stations, jobs, observation) -> PlateFacts:
+def _measured_split(measured, furnace_status, each: float, nominal: float) -> tuple[float | None, float | None]:
+    """``(connected, off_bus)`` plates/min: the force-wide counter split into district furnaces and the rest.
+
+    The production counter counts every furnace of the force, also starter cells
+    whose plates never reach the bus (eval-4177156614: 148.9/min measured under a
+    112.5/min district). Connected = working district furnaces x nominal each
+    (all at nominal when none is observed), never above the measurement.
+    """
+    if measured is None:
+        return None, None
+    observed = [s for s in furnace_status if s is not None]
+    connected = each * sum(s == "working" for s in observed) if observed else nominal
+    connected = min(max(0.0, measured), connected)
+    return connected, max(0.0, measured - connected)
+
+
+def critical_plate_claims(catalog, jobs, observation) -> dict[str, float]:
+    """Plates critical jobs reserve now (``critical_path.allocation``; a claim without units is the whole bill: inf)."""
+    from .critical_path import allocation
+    from .jobs import CAPABILITIES
+
+    keyed = {str(job.get("key") or i): job for i, job in enumerate(jobs) if isinstance(job, Mapping)}
+    claimed = allocation(keyed, observation, CAPABILITIES, catalog).claimed
+    rows = {}
+    for plate in PLATES:
+        row = claimed.get(plate)
+        if isinstance(row, Mapping):
+            units = finite_number(row.get("units"))
+            rows[plate] = math.inf if units is None else max(0.0, units)
+    return rows
+
+
+def plate_facts(
+    catalog, plate, bank, bound, mining_banks, stations, jobs, observation, *, claimed=0.0, starter_phase=""
+) -> PlateFacts:
     """``PlateFacts`` of one district bank from saved state rows and the observe receipt."""
     from .progression import MINING_OUTPOST_BUILDS, raw_cost
 
@@ -434,9 +682,15 @@ def plate_facts(catalog, plate, bank, bound, mining_banks, stations, jobs, obser
     else:
         pair_items = dict(MINING_OUTPOST_BUILDS)
     belt = finite_number(bound.get("unstacked_belt_capacity_per_lane"))
-    measured = (
-        ((observation.get("production_rate_measurement") or {}).get("rates_per_game_minute") or {}).get(plate) or {}
-    ).get("produced")
+    measured = finite_number(
+        (
+            ((observation.get("production_rate_measurement") or {}).get("rates_per_game_minute") or {}).get(plate) or {}
+        ).get("produced")
+    )
+    each = nominal / len(furnaces) if furnaces else 0.0
+    connected, off_bus = _measured_split(measured, furnace_status, each, nominal)
+    bill = _bill(plate, observation)
+    module_items = dict(MINING_OUTPOST_BUILDS)
     return PlateFacts(
         plate=plate,
         resource=resource,
@@ -448,9 +702,9 @@ def plate_facts(catalog, plate, bank, bound, mining_banks, stations, jobs, obser
             and s.get("built", True)
             and not str(s.get("owner") or "").startswith("production_row")
         ),
-        bill=_bill(plate, observation),
+        bill=bill,
         furnace_nominal=nominal,
-        furnace_each=nominal / len(furnaces) if furnaces else 0.0,
+        furnace_each=each,
         per_side=per_side,
         capacity_slots=int(bank.get("capacity_slots", per_side)),
         ore_nominal=float(bound["connected_nominal_ore_supply"]),
@@ -458,7 +712,11 @@ def plate_facts(catalog, plate, bank, bound, mining_banks, stations, jobs, obser
         pairs_built=int(pairs),
         pair_slots=int(slots),
         belt_cap=None if belt is None else 2 * belt,
-        measured=finite_number(measured),
+        measured=measured,
+        connected_measured=connected,
+        off_bus_measured=off_bus,
+        starter_phase=starter_phase,
+        claimed=min(bill, claimed),
         furnaces=sum(s is not None for s in furnace_status),
         furnaces_idle_for_ore=sum(s in IDLE_FOR_ORE for s in furnace_status),
         furnaces_output_full=sum(s in OUTPUT_FULL for s in furnace_status),
@@ -468,9 +726,46 @@ def plate_facts(catalog, plate, bank, bound, mining_banks, stations, jobs, obser
         ore_step_entities=sum(pair_items.values()),
         furnace_step_cost=raw_cost(catalog, slot_items),
         furnace_step_entities=sum(slot_items.values()),
+        module_step_cost=raw_cost(catalog, module_items),
+        module_step_entities=sum(module_items.values()),
+        patch_rows=len((first.get("patch_grid") or {}).get("rows") or ()),
         stocks=_stocks(observation),
         settling=_settling(resource, jobs, observation.get("tick")),
     )
+
+
+def _starter_phase(retirement: Mapping, resource: str, jobs: Iterable[Mapping]) -> str:
+    """``retired`` / ``retiring`` / saved phase / "" for the resource's starter cells."""
+    for job in jobs:
+        parameters = job.get("parameters") if isinstance(job.get("parameters"), Mapping) else {}
+        if job.get("capability") == "starter_retirement" and parameters.get("resource") == resource:
+            if job.get("status") == "succeeded":
+                return "retired"
+    row = (retirement.get("resources") or {}).get(resource)
+    return str(row.get("phase") or "") if isinstance(row, Mapping) else ""
+
+
+def _bus_funding(facts: Mapping[str, PlateFacts]) -> dict[str, PlateFacts]:
+    """Plate inputs of a package are funded from the plate that reaches the bus.
+
+    Production of a plate = connected district output, plus the off-bus starter
+    output only while those cells are not retiring (afterwards they are mined,
+    their stock is collected once and already counts in the bill's ``available``).
+    """
+    rates = {}
+    for plate, row in facts.items():
+        if row.connected_measured is None:
+            continue
+        off_bus = 0.0 if row.starter_phase in RETIRING_PHASES else (row.off_bus_measured or 0.0)
+        rates[plate] = row.connected_measured + off_bus
+    result = {}
+    for plate, row in facts.items():
+        stocks = dict(row.stocks)
+        for item, rate in rates.items():
+            if item in stocks:
+                stocks[item] = (stocks[item][0], rate)
+        result[plate] = replace(row, stocks=stocks)
+    return result
 
 
 def growth_receipt(root, catalog, jobs, observation) -> dict | None:
@@ -492,7 +787,13 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
     bounds = observation.get("smelting_throughput_bounds")
     bound_rows = {r.get("resource"): r for r in (bounds or {}).get("banks", []) if isinstance(r, Mapping)}
     jobs = list(jobs)
-    rows = []
+    retirement = read("starter-retirement.json")
+    try:
+        claims = critical_plate_claims(catalog, jobs, observation)
+    except Exception:  # a claim estimate never breaks the receipt: no claim known
+        claims = {}
+    facts_by_plate: dict[str, PlateFacts] = {}
+    order: list[str | dict] = []
     for plate, resource in PLATES.items():
         bank = next((b for b in district["banks"] if b.get("resource") == resource), None)
         bound = bound_rows.get(resource)
@@ -502,10 +803,23 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
             b for b in mining.get("banks", []) if b.get("ready") and (b.get("plan") or {}).get("resource") == resource
         ]
         if not banks:
-            rows.append({"plate": plate, "resource": resource, "grow": False, "reason": "no ready mining bank"})
+            order.append({"plate": plate, "resource": resource, "grow": False, "reason": "no ready mining bank"})
             continue
-        facts = plate_facts(catalog, plate, bank, bound, banks, stations, jobs, observation)
-        rows.append(decide(facts))
+        facts_by_plate[plate] = plate_facts(
+            catalog,
+            plate,
+            bank,
+            bound,
+            banks,
+            stations,
+            jobs,
+            observation,
+            claimed=claims.get(plate, 0.0),
+            starter_phase=_starter_phase(retirement, resource, jobs),
+        )
+        order.append(plate)
+    funded = _bus_funding(facts_by_plate)
+    rows = [decide(funded[entry]) if isinstance(entry, str) else entry for entry in order]
     return {
         "plates": rows,
         "scope": "nominal stage capacities, declared taps and the roadmap bill; module throughput_growth",
@@ -514,11 +828,13 @@ def growth_receipt(root, catalog, jobs, observation) -> dict | None:
 
 # ----- autopilot nodes ---------------------------------------------------------------------
 def throughput_growth_nodes(jobs, queue_nodes, observation, capabilities, *, critical: bool) -> list[dict]:
-    """One node per plate whose receipt row grows, ``critical`` selecting the critical-path class.
+    """The chosen package of each growing plate as chained nodes, ``critical`` selecting the critical-path class.
 
-    The receipt (``growth_receipt``) holds the rule; here only: the capability
-    exists and its ``requires`` succeeded, nothing of the resource's growth
-    capabilities is queued or open, and the same step has not stalled.
+    The receipt (``growth_receipt``) holds the rule; here only: each stage's
+    capability exists and its ``requires`` succeeded, nothing of the resource's
+    growth capabilities is queued or open (one package per plate in flight), and
+    no stage of the package has stalled before. Stage ``i + 1`` depends on stage
+    ``i`` (smelting_capacity refuses a rate above the connected ore).
     """
     receipt = observation.get("throughput_growth")
     rows = receipt.get("plates") if isinstance(receipt, Mapping) else None
@@ -531,18 +847,24 @@ def throughput_growth_nodes(jobs, queue_nodes, observation, capabilities, *, cri
     for row in rows:
         if not isinstance(row, Mapping) or not row.get("grow"):
             continue
-        capability, parameters = row.get("capability"), row.get("parameters")
-        if (
-            capability not in GROWTH_CAPABILITIES
-            or capability not in capabilities
-            or not isinstance(parameters, Mapping)
+        stages = row.get("stages")
+        if not isinstance(stages, list) or not stages:
+            stages = [{"capability": row.get("capability"), "parameters": row.get("parameters")}]
+        if not all(
+            isinstance(stage, Mapping)
+            and stage.get("capability") in GROWTH_CAPABILITIES
+            and stage.get("capability") in capabilities
+            and isinstance(stage.get("parameters"), Mapping)
+            for stage in stages
         ):
             continue
-        if "smelting_district" not in succeeded or not set(capabilities[capability].get("requires", [])) <= succeeded:
+        if "smelting_district" not in succeeded or not all(
+            set(capabilities[stage["capability"]].get("requires", [])) <= succeeded for stage in stages
+        ):
             continue
         if bottleneck_blocks_critical_path(row.get("plate"), jobs, observation) != critical:
             continue
-        resource = parameters.get("resource")
+        resource = stages[0]["parameters"].get("resource")
 
         def same_resource(r):
             p = r.get("parameters")
@@ -555,23 +877,32 @@ def throughput_growth_nodes(jobs, queue_nodes, observation, capabilities, *, cri
         if any(same_resource(j) and j.get("status") not in ("succeeded", "blocked", "failed") for j in jobs):
             continue
         if any(
-            j.get("capability") == capability
-            and j.get("parameters") == parameters
+            j.get("capability") == stage["capability"]
+            and j.get("parameters") == stage["parameters"]
             and j.get("status") in ("blocked", "failed")
             for j in jobs
+            for stage in stages
         ):
             continue
-        node_id = f"{NODE_PREFIX}{resource}_{capability}_{int(parameters.get('rate_per_minute', 0))}"
-        if node_id in queued_ids:
-            continue
-        nodes.append(
-            {
-                "id": node_id,
-                "capability": capability,
-                "parameters": dict(parameters),
-                "priority": CRITICAL_PRIORITY if critical else SLACK_PRIORITY,
-                "depends_on": [],
-                "reason": f"{'critical' if critical else 'slack'} plate growth: {row.get('reason', '')}"[:300],
-            }
-        )
+        chain: list[dict] = []
+        for stage in stages:
+            capability, parameters = stage["capability"], stage["parameters"]
+            node_id = f"{NODE_PREFIX}{resource}_{capability}_{int(parameters.get('rate_per_minute', 0))}"
+            if node_id in queued_ids or any(n["id"] == node_id for n in chain):
+                break  # an earlier node of that id exists: the chain ends before it (re-decided after landing)
+            chain.append(
+                {
+                    "id": node_id,
+                    "capability": capability,
+                    "parameters": dict(parameters),
+                    "priority": CRITICAL_PRIORITY if critical else SLACK_PRIORITY,
+                    "depends_on": [chain[-1]["id"]] if chain else [],
+                    "reason": (
+                        f"{'critical' if critical else 'slack'} plate growth"
+                        + (f" (stage {len(chain) + 1}/{len(stages)})" if len(stages) > 1 else "")
+                        + f": {row.get('reason', '')}"
+                    )[:300],
+                }
+            )
+        nodes.extend(chain)
     return nodes

@@ -13,11 +13,14 @@ inserters, pole), ``lab_row`` three per lab slot (lab, inserter, pole). A
 built subset is always a prefix of the slots, so its poles stay one chain
 and the block's first pole (slot 0, wired to the grid) is always built.
 
-Growth rule (``growth_decision``, see ``docs/v2/PLANNERS.md``): labs grow
-only while every built lab is working and packs back up; science machines
-grow only while labs starve for packs and the machines are not short of
-plates; how many is decided by ``research_capacity.plan_research_capacity``
-with those two permissions as its limits. Pure functions, no IO.
+Growth rule (``growth_decision``, see ``docs/v2/PLANNERS.md``) follows the chain
+plates -> pack machines -> labs: a lab idle for packs (``missing_science_packs``)
+is a pack shortage, so the pack machines grow while every one works (the plate
+supply is the limit when they lack ingredients); labs grow only when packs pile
+up, or every lab works and ``research_capacity`` finds labs the limit. Only units
+idle for lack of demand (no research, low power) hold growth back. How many is
+decided by ``research_capacity.plan_research_capacity`` (the receipt's time
+comparison) with those permissions as its limits. Pure functions, no IO.
 """
 
 from __future__ import annotations
@@ -45,6 +48,9 @@ START_SCIENCE_MACHINES = 2
 LAB_BACKUP_PACKS = 2
 # Red packs on the lab row belt that no lab takes: the feed is backing up.
 BELT_BACKUP_PACKS = 8
+# A lab with this status waits for packs (supply), not for research (demand).
+PACK_SHORT = "missing_science_packs"
+MACHINE_INGREDIENT_SHORT = frozenset({"item_ingredient_shortage", "no_ingredients"})
 LAB_SLOT = ("lab", "inserter", "small-electric-pole")
 MACHINE_SLOT = ("assembling-machine-1", "inserter", "inserter", "small-electric-pole")
 
@@ -216,28 +222,39 @@ def growth_decision(catalog, state, observation, targets, evidence):
     research = observation.get("research")
     if not isinstance(research, str) or not research or not targets:
         return dict(row, reason="no research in progress")
+    # Bottleneck chain plates -> pack machines -> labs. A lab idle for packs is a pack
+    # shortage, not a lack of demand: the staged guard only holds units idle for demand.
     status = activity["lab_status"]
-    idle = [s for s in status if s != "working"]
+    idle_for_demand = [s for s in status if s not in ("working", PACK_SHORT)]
     backlog = (
         activity["belt_packs"] >= BELT_BACKUP_PACKS
         or all(n >= LAB_BACKUP_PACKS for n in activity["lab_packs"])
         or "full_output" in activity["machine_status"]
     )
-    starving = "missing_science_packs" in status and activity["belt_packs"] == 0
-    short = any(s in ("item_ingredient_shortage", "no_ingredients") for s in activity["machine_status"])
+    starving = PACK_SHORT in status and not backlog
+    short = any(s in MACHINE_INGREDIENT_SHORT for s in activity["machine_status"])
+    machines_busy = all(s == "working" for s in activity["machine_status"])
+    labs_busy = all(s == "working" for s in status)
     free_labs = stage["lab_slots"] - labs
     free_machines = max(0, stage.get("machine_limit", stage["machine_slots"]) - machines)
-    may_labs = not idle and backlog and free_labs > 0
-    may_machines = starving and not short and free_machines > 0
+    # Labs only while every lab works: with packs piling up, or when research_capacity finds labs the limit.
+    may_labs = labs_busy and free_labs > 0
+    may_machines = starving and not short and machines_busy and free_machines > 0
+    row["chain"] = "demand" if idle_for_demand else "plates" if starving and short else "packs" if starving else "labs"
     if not may_labs and not may_machines:
-        if idle and not starving:
-            why = "built labs are idle"
+        if idle_for_demand:
+            why = f"built labs are idle without a pack shortage ({', '.join(sorted(set(idle_for_demand)))})"
         elif starving and short:
-            why = "labs starve but science machines lack plates"
+            why = (
+                "labs starve for packs and the pack machines lack plates: the plate supply is the limit "
+                "(throughput_growth grows it)"
+            )
+        elif starving and not machines_busy:
+            why = "labs starve for packs but a pack machine is not working"
         elif starving:
-            why = "labs starve and every machine slot is built"
-        elif not backlog:
-            why = "labs are busy but packs do not back up"
+            why = "labs starve for packs and every machine slot is built"
+        elif not labs_busy:
+            why = "a lab misses packs while packs back up: the lab feed, not a stage"
         else:
             why = "every lab slot is built"
         return dict(row, reason=why)
@@ -253,11 +270,17 @@ def growth_decision(catalog, state, observation, targets, evidence):
         pack_cost={RED_PACK: costs["pack"]},
         machines_per_assembler={RED_PACK: costs["machines_per_assembler"]},
     )
-    config = ResearchCapacityConfig(
-        max_assemblers=machines + (free_machines if may_machines else 0),
-        max_labs=labs + (free_labs if may_labs else 0),
-    )
-    decision = plan_research_capacity(targets, hardware, materials, config=config)
+
+    def plan(lab_room):
+        config = ResearchCapacityConfig(
+            max_assemblers=machines + (free_machines if may_machines else 0), max_labs=labs + lab_room
+        )
+        return plan_research_capacity(targets, hardware, materials, config=config)
+
+    decision = plan(free_labs if may_labs else 0)
+    if decision.target_labs > labs and not backlog and decision.bottleneck_before != "labs":
+        # Busy labs without a pack backlog: labs grow only when research_capacity finds them the limit.
+        decision = plan(0)
     target_machines = decision.target_assemblers if decision.pack == RED_PACK else machines
     row.update(
         target_labs=max(labs, decision.target_labs),

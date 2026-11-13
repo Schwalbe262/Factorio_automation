@@ -146,6 +146,11 @@ def queue():
     return [rc.research_target(cat, name) for name in ("fast-inserter", "logistics", "military")]
 
 
+# Packs-limited like eval-4177156614 at 82 min (research_capacity: "packs-limited: labs 524s, packs 727s"):
+# 7.2 s units, two labs eat 16.7 packs/min (packs/labs = 1.39 as there), two machines make 12.
+FAST_QUEUE = [rc.ResearchTarget("fast", 300, 7.2, {RED: 1})]
+
+
 class GrowthRuleTests(unittest.TestCase):
     def decide(self, row, obs):
         return sg.growth_decision(catalog(), row, obs, queue(), deepcopy(AMPLE))
@@ -179,9 +184,17 @@ class GrowthRuleTests(unittest.TestCase):
         self.assertFalse(decision["grow"])
         self.assertIn("plates", decision["reason"])
 
-    def test_busy_labs_without_backlog_and_no_research_do_not_grow(self):
+    def test_busy_labs_without_backlog_grow_labs_only_when_labs_limit(self):
         row = state(machines=2)
-        self.assertFalse(self.decide(row, observed(row, lab_packs=1, belt_packs=0))["grow"])
+        # The fixture queue is labs-limited (research_capacity): every lab works, so labs may follow.
+        labs_limited = self.decide(row, observed(row, lab_packs=1, belt_packs=0))
+        self.assertGreaterEqual(labs_limited["target_labs"], 2)
+        self.assertEqual(labs_limited["target_machines"], 2)
+        # A packs-limited queue adds no lab without a backlog.
+        packs_limited = sg.growth_decision(
+            catalog(), row, observed(row, lab_packs=1, belt_packs=0), FAST_QUEUE, deepcopy(AMPLE)
+        )
+        self.assertEqual(packs_limited["target_labs"], 2)
         self.assertFalse(self.decide(row, observed(row, belt_packs=12, research=None))["grow"])
 
     def test_unpowered_or_missing_built_lab_blocks_growth(self):
@@ -189,6 +202,48 @@ class GrowthRuleTests(unittest.TestCase):
         obs = observed(row, belt_packs=12)
         next(e for e in obs["entities"] if e["name"] == "lab")["energy"] = 0
         self.assertEqual(self.decide(row, obs)["reason"], "built stage not fully observed and powered")
+
+    def live(self, row, statuses, packs, belt):
+        """eval-4177156614 at 82 min: lab_status [missing_science_packs, working], lab_packs [0, 2], belt 2."""
+        obs = observed(row, belt_packs=belt)
+        labs = [e for e in obs["entities"] if e["name"] == "lab"]
+        for lab, status, n in zip(labs, statuses, packs):
+            lab.update(status_name=status, inventory={RED: n} if n else {})
+        return obs
+
+    def test_a_lab_idle_for_packs_grows_the_pack_machines_not_the_labs(self):
+        row = state(machines=2)
+        obs = self.live(row, ["missing_science_packs", "working"], [0, 2], 2)
+        decision = sg.growth_decision(catalog(), row, obs, FAST_QUEUE, deepcopy(AMPLE))
+        self.assertTrue(decision["grow"], decision["reason"])
+        self.assertEqual(decision["chain"], "packs")
+        self.assertEqual(decision["target_machines"], 3)
+        self.assertEqual(decision["target_labs"], 2)
+        self.assertEqual(decision["permitted"], {"labs": False, "machines": True})
+
+    def test_labs_follow_once_packs_are_no_longer_the_limit(self):
+        row = state(machines=3)
+        decision = self.decide(row, self.live(row, ["working", "working"], [3, 3], 12))
+        self.assertTrue(decision["grow"], decision["reason"])
+        self.assertEqual(decision["chain"], "labs")
+        self.assertGreater(decision["target_labs"], 2)
+
+    def test_pack_shortage_with_plate_short_machines_points_at_the_plate_supply(self):
+        row = state(machines=2)
+        obs = self.live(row, ["missing_science_packs", "working"], [0, 2], 2)
+        for e in obs["entities"]:
+            if e.get("recipe") == RED:
+                e["status_name"] = "item_ingredient_shortage"
+        decision = self.decide(row, obs)
+        self.assertFalse(decision["grow"])
+        self.assertEqual(decision["chain"], "plates")
+        self.assertIn("throughput_growth", decision["reason"])
+
+    def test_labs_idle_for_demand_hold_every_growth(self):
+        row = state(machines=2)
+        decision = self.decide(row, self.live(row, ["no_research_in_progress", "working"], [0, 2], 2))
+        self.assertFalse(decision["grow"])
+        self.assertEqual(decision["chain"], "demand")
 
     def test_machine_growth_stops_at_the_plate_limit(self):
         row = state(machines=2, machine_limit=2)
