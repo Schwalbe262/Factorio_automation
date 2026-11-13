@@ -60,6 +60,10 @@ POWER_GOAL_RING = tuple(
         for dx in (-2, -1, 0, 1, 2)
         if max(abs(dx), abs(dy)) == 2 and (dx, dy) != POWER_GOAL_OFFSET
     ]
+    # One tile further out still supplies the drill (small-pole supply reaches
+    # 2.5 tiles). Needed when the drill sits inside the patch and the whole
+    # inner ring is ore, where a pole may not stand (seed 283895142).
+    + [(dx, dy) for dy in range(-3, 4) for dx in range(-3, 4) if max(abs(dx), abs(dy)) == 3]
 )
 
 
