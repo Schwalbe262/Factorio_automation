@@ -63,6 +63,11 @@ REPLAN_REASONS = frozenset(
 )  # Extra quiet-interval retries of such a blocker while no job at all is active.
 IDLE_RETRY_LIMIT = 10
 MISSING_PRODUCER_RATE = 6  # items/min of a produce row proposed for a machine-only item (_missing_producers)
+# Supply blockers a machine starting work clears without any job success (a furnace commissioned
+# by upkeep, idle furnaces holding the item): retried after a quiet interval like a stall
+# (eval-1575138435, 375 min: engine_production and oil_gathering blocked on steel while two idle
+# furnaces held 163 steel; every job terminal, nothing could succeed, the run idled 14+ min).
+SUPPLY_RETRY_REASONS = frozenset({"required item needs a production machine"})
 # Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan) are
 # re-planning blockers too. Past AUTO_RETRY_LIMIT every re-planning blocker is still retried,
 # with no limit, when the published facts change (board plans and connections, material
@@ -2152,7 +2157,12 @@ class Supervisor:
             # the answer without a job success (pace1 seed 2692229611: the district blocked at
             # 19.8 min, found its site on the first retry at 25.0, after the next success).
             stalled_long_enough = (
-                (reason == "objective_progress_stalled" or reason.startswith("no_clear_") or _replannable(reason))
+                (
+                    reason == "objective_progress_stalled"
+                    or reason in SUPPLY_RETRY_REASONS
+                    or reason.startswith("no_clear_")
+                    or _replannable(reason)
+                )
                 # The stall path does not stamp blocked_at_time on the job, so
                 # fall back to when this supervisor first saw it blocked.
                 and self.clock() - float(job.get("blocked_at_time") or seen.get("first_seen", self.clock()))
