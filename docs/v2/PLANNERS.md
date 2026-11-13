@@ -394,6 +394,10 @@ T = max(lab time, pack times), summed over the queue (current + next roadmap tec
 option (a, l) = extra assemblers for the limiting pack, extra labs, each 0..max_step
 T(a, l) = fund + (a * machines_per_assembler + l) * build_seconds + T_queue(new hardware, plate-capped rate)
 expand when T(0,0) >= min_remaining_seconds, saving >= min_saving_seconds, T(a,l) <= max_ratio * T(0,0)
+queue    only technologies whose every pack has a producer (an assembler with that recipe, red always,
+         or stock covering the need: split_producible); the rest -> blocked_by_missing_pack
+         [{technology, pack}] (the roadmap proposes that producer), never sized: one green technology
+         made the whole batch "wait inf" and the decision "keep" (eval-4177156614, 126.7 min)
 ```
 
 | Field | Default |
@@ -446,7 +450,12 @@ limit    = min(frame_capacity, plate_limit)                          read live e
            frame_capacity = slots along the slot pitch inside the row's reserved_area whose inserters reach the
                             row's belts and that overlap no planned entity (frame_slot_groups), at most 6;
                             the reserved slots only once an extension failed (frame.extension_blocked)
-           plate_limit    = machines + min over plates floor((max(0, net) + 60 stock / T_queue) / draw per machine)
+           plate_limit    = machines + min over plates floor((max(0, net, spare) + 60 stock / T_queue) / draw per machine)
+                            spare = district partial upper bound - declared bus demand of the plate, only while a
+                            district furnace of it holds full_output (district_spare: net = produced - consumed is
+                            then capped by consumption; eval-4177156614 126.7 min held the limit at 2)
+           queue          = researchable technologies only (split_producible, as research_capacity); others in
+                            blocked_by_missing_pack
 may add machines = starving and not short and every machine working and machines < limit
 may add labs     = every lab working and free lab slots; without a backlog only when
                    research_capacity's baseline is labs-limited (else re-planned with labs fixed)

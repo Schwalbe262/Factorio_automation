@@ -49,6 +49,7 @@ from .research_capacity import (
     lab_pack_rate,
     plan_research_capacity,
     research_queue_seconds,
+    split_producible,
 )
 
 # Two labs: the cheapest pair that already doubles research over the startup
@@ -305,12 +306,15 @@ def undeclared_plate_draw(state, receipt=None):
     return {item: round(max(0.0, rate - declared.get(item, 0.0)), 3) for item, rate in wanted.items()}
 
 
-def plate_machine_limit(machines, per_machine, evidence, seconds):
+def plate_machine_limit(machines, per_machine, evidence, seconds, spare=None):
     """Science machines the current plate supply carries: built plus what the headroom feeds, per plate the least.
 
-    Headroom of a plate = ``max(0, net_per_minute) + 60 * stock / seconds``
+    Headroom of a plate = ``max(0, net_per_minute, spare) + 60 * stock / seconds``
     (stock spread over the remaining research ``seconds``, as the planner's
-    materials cap); a plate without evidence adds no machine.
+    materials cap); a plate without evidence adds no machine. ``spare`` (plate ->
+    per minute, ``district_spare``) is the district's unclaimed capacity while its
+    furnaces hold full output: measured net = produced - consumed is then capped by
+    consumption and says nothing about headroom.
     """
     extra = math.inf
     for item, rate in per_machine.items():
@@ -319,7 +323,7 @@ def plate_machine_limit(machines, per_machine, evidence, seconds):
         row = (evidence or {}).get(item)
         if not isinstance(row, Mapping):
             return machines
-        net = max(0.0, finite_number(row.get("net_per_minute")) or 0.0)
+        net = max(0.0, finite_number(row.get("net_per_minute")) or 0.0, (spare or {}).get(item, 0.0))
         stock = stock_on_hand(row)
         headroom = net + (60.0 * stock / seconds if math.isfinite(seconds) and seconds > 0 else 0.0)
         extra = min(extra, math.floor(headroom / rate + 1e-9))
@@ -446,9 +450,48 @@ def growth_receipt(root, catalog, jobs, observation):
         return None
     targets = queue_targets(catalog, jobs, observation)
     recommended = ((observation.get("research_capacity") or {}).get("recommended_rates") or {}).get(RED_PACK)
+    district = path.with_name("smelting-district.json")
+    district = json.loads(district.read_text(encoding="utf-8")) if district.exists() else {}
     return growth_decision(
-        catalog, state, observation, targets, _evidence_from_supply(observation), expected=recommended
+        catalog,
+        state,
+        observation,
+        targets,
+        _evidence_from_supply(observation),
+        expected=recommended,
+        plate_spare=district_spare(district, observation),
     )
+
+
+def district_spare(district, observation):
+    """Plate -> unclaimed district capacity per minute, only for banks whose built furnaces hold full output.
+
+    ``smelting_throughput_bounds``: partial upper bound (ore, furnaces, belt) minus the
+    declared bus demand of that plate. A bank without a full-output furnace gives nothing
+    (its measured net is the evidence).
+    """
+    if not isinstance(district, Mapping) or district.get("world_id") != observation.get("world_id"):
+        return {}
+    statuses = {
+        _key(e): e.get("status_name")
+        for e in observation.get("entities") or ()
+        if isinstance(e, Mapping) and isinstance(e.get("position"), Mapping) and "name" in e
+    }
+    bounds = {
+        r.get("product"): r
+        for r in (observation.get("smelting_throughput_bounds") or {}).get("banks", [])
+        if isinstance(r, Mapping)
+    }
+    spare = {}
+    for bank in district.get("banks") or ():
+        bound = bounds.get(bank.get("product"))
+        furnaces = [e for e in bank.get("entities", []) if "furnace" in str(e.get("name"))]
+        if not bound or not any(statuses.get(_key(e)) == "full_output" for e in furnaces):
+            continue
+        upper = finite_number(bound.get("partial_upper_bound_per_minute")) or 0.0
+        claimed = finite_number(bound.get("claimed_bus_demand_per_minute")) or 0.0
+        spare[bank["product"]] = max(0.0, upper - claimed)
+    return spare
 
 
 def build_ahead(decision, expected, *, machines, labs):
@@ -528,7 +571,7 @@ def build_ahead(decision, expected, *, machines, labs):
     )
 
 
-def growth_decision(catalog, state, observation, targets, evidence, *, expected=None):
+def growth_decision(catalog, state, observation, targets, evidence, *, expected=None, plate_spare=None):
     """Labs and science machines to add into reserved slots now (module rule), as a JSON-safe dict.
 
     ``targets`` is the research queue (``research_capacity.queue_targets``),
@@ -547,8 +590,16 @@ def growth_decision(catalog, state, observation, targets, evidence, *, expected=
     if activity["labs_powered"] < labs or activity["machines_observed"] < machines:
         return dict(row, reason="built stage not fully observed and powered")
     research = observation.get("research")
+    # Size only what can be researched: a technology whose pack no block makes is reported
+    # (the roadmap proposes that producer) and never turns the queue infinite.
+    produced = {RED_PACK} | {
+        e.get("recipe") for e in observation.get("entities") or () if isinstance(e, Mapping) and e.get("recipe")
+    }
+    targets, blocked = split_producible(targets or (), produced)
+    if blocked:
+        row["blocked_by_missing_pack"] = blocked
     if not isinstance(research, str) or not research or not targets:
-        return dict(row, reason="no research in progress")
+        return dict(row, reason="no research in progress" if not blocked else "no researchable technology queued")
     # Bottleneck chain plates -> pack machines -> labs. A lab idle for packs is a pack
     # shortage, not a lack of demand: the staged guard only holds units idle for demand.
     status = activity["lab_status"]
@@ -577,12 +628,15 @@ def growth_decision(catalog, state, observation, targets, evidence, *, expected=
     # Machine limit, live: the frame's slots and what the plate supply carries now.
     per_machine = {item: amount * costs["pack_rate_per_assembler"] for item, amount in costs["pack"].items()}
     frame = frame_capacity(state)
-    plates = plate_machine_limit(machines, per_machine, evidence, research_queue_seconds(targets, hardware))
+    plates = plate_machine_limit(
+        machines, per_machine, evidence, research_queue_seconds(targets, hardware), spare=plate_spare
+    )
     limit = min(frame, plates)
     row["frame"] = {
         "machine_slots": stage["machine_slots"],
         "frame_slots": frame,
         "plate_limit": plates,
+        "plate_spare_per_minute": {k: round(v, 2) for k, v in (plate_spare or {}).items()},
         "machine_limit": limit,
         "lab_slots": stage["lab_slots"],
     }
