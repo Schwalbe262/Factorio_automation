@@ -330,6 +330,15 @@ def green_layout_record(catalog, plan) -> dict:
     }
 
 
+INGREDIENT_SHORT = frozenset({"item_ingredient_shortage", "no_ingredients"})
+
+
+def starved_inputs(machines) -> dict:
+    """``{"starved_recipes"}``: recipes of the block's machines that wait for ingredients (native status)."""
+    recipes = sorted({m.get("recipe") for m in machines if m.get("status_name") in INGREDIENT_SHORT} - {None})
+    return {"starved_recipes": recipes} if recipes else {}
+
+
 class LogisticScience:
     def __init__(self, game, builder, catalog, smelting, science, site=None):
         self.game, self.builder, self.catalog, self.smelting, self.science = game, builder, catalog, smelting, science
@@ -980,44 +989,59 @@ class LogisticScience:
         }
 
     def proof(self, obs):
-        if (
-            not self.state
-            or self.state["world_id"] != obs["world_id"]
-            or not underground_proof(obs, self.state["plan"])
-        ):
-            return None
+        """Commissioned green supply evidence, or None with ``last_proof_failure`` naming the check."""
+        self.last_proof_failure = None
+        found = self._proof(obs)
+        if found is None and self.last_proof_failure is None:
+            self.last_proof_failure = {"reason": "green_proof_failed"}
+        return found
+
+    def _fail(self, reason, **evidence):
+        self.last_proof_failure = {"reason": reason, **evidence}
+        return None
+
+    def _proof(self, obs):
+        if not self.state or self.state["world_id"] != obs["world_id"]:
+            return self._fail("green_state_missing_or_other_world")
+        if not underground_proof(obs, self.state["plan"]):
+            return self._fail("green_underground_pair_changed")
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
+        # A trunk belt of this block's own bus lane extension that a later tap replaced is that tap's
+        # (planned_tap.released_tiles); it is not missing.
+        released = planned_tap.released_tiles(self.path.parent, obs["world_id"])
         machines = []
         grown = {tuple(k) for k in self.state.get("grown_machines") or ()}
         for wanted in self.state["plan"]["entities"]:
             e = actual.get((wanted["name"], *xy(wanted)))
+            if not e and planned_tap.released_belt_stands(actual, released, wanted):
+                continue
             if not e or e["direction"] != wanted.get("direction", 0):
-                return None
+                return self._fail("green_planned_entity_missing", entity=wanted["name"], position=wanted["position"])
             if wanted.get("recipe"):
                 first = 0 if (wanted["name"], *xy(wanted)) in grown else 1
                 if e.get("recipe") != wanted["recipe"] or e.get("products_finished", 0) < first:
-                    return None
+                    return self._fail("green_machine_not_producing", position=wanted["position"])
                 machines.append(e)
             if e["name"] in ("assembling-machine-1", "inserter", "fast-inserter") and (
                 not e.get("electric_network_connected") or e.get("energy", 0) <= 0
             ):
-                return None
+                return self._fail("green_hardware_unpowered", entity=e["name"], position=wanted["position"])
         join = self.state["lab_join"]
         live = actual.get((join["name"], *xy(join)))
         if not live or live["unit_number"] != join["unit_number"] or live["direction"] != join["direction"]:
-            return None
+            return self._fail("green_lab_join_changed")
         # Only the built stage of a staged lab row (``science_growth.built_labs``); reserved slots come later.
         labs = [actual.get(("lab", *xy(e))) for e in built_labs(self.science.state)]
         if any(not e or not e.get("electric_network_connected") or e.get("energy", 0) <= 0 for e in labs):
-            return None
+            return self._fail("labs_unpowered")
         green_stock = sum(e.get("inventory", {}).get("logistic-science-pack", 0) for e in labs)
         if not green_stock:
-            return None
+            return self._fail("labs_without_green_packs", **starved_inputs(machines))
         lab_units = [e["unit_number"] for e in labs]
         if all(e.get("inventory", {}).get("logistic-science-pack", 0) > 0 for e in labs):
             self.state["commissioned_lab_units"] = lab_units
         if self.state.get("commissioned_lab_units") != lab_units:
-            return None
+            return self._fail("labs_changed_since_commissioning")
         turn = plan_transform(self.science.state["labs"])
         heading = turn.direction(12)
         belts = [e for e in self.science.state["labs"]["entities"] if e["name"] == "transport-belt"]
@@ -1042,10 +1066,12 @@ return result
 """
         )
         if not lane.get("ok") or not isinstance(lane.get(green_lane), dict):
-            return None
+            return self._fail("lab_lane_query_failed")
         mixed = set(lane[green_lane]) - {"logistic-science-pack"}
         if mixed or set(lane.get(red_lane) or {}) - {"automation-science-pack"}:
-            return None
+            return self._fail(
+                "lab_lane_mixed", items=sorted(mixed | (set(lane.get(red_lane) or {}) - {"automation-science-pack"}))
+            )
         if lane[green_lane].get("logistic-science-pack", 0) > 0:
             self.state["lab_lane_evidence"] = dict(lane, receiver_unit=join["unit_number"])
             _atomic_json(self.path, self.state)
@@ -1055,7 +1081,7 @@ return result
             or recent["receiver_unit"] != join["unit_number"]
             or not 0 <= lane["tick"] - recent["tick"] <= 600
         ):
-            return None
+            return self._fail("no_green_on_the_lab_lane", **starved_inputs(machines))
         greens = [e for e in machines if e.get("recipe") == "logistic-science-pack"]
         return {
             "tick": obs["tick"],

@@ -455,6 +455,9 @@ class ProductionRows:
         blocked = planned_tap.publish(self.root, obs["world_id"], taps)
         if blocked:
             return blocked
+        routed = self._route_taps(obs, key, state)
+        if routed is not None:
+            return routed
         clear = state["plan"].get("clear_obstacles", [])
         cut = planned_tap.cutover(self.root, self.builder, obs, taps, clear_obstacles=clear)
         if cut is not None:
@@ -486,14 +489,60 @@ class ProductionRows:
         )
         return {"status": "succeeded", "reason": reason, "evidence": evidence}
 
+    def _route_taps(self, obs, key: str, state: dict) -> dict | None:
+        """Cut over the row's splitter taps on other blocks' routes (``production_sources.route_tap_sites``).
+
+        The tapped belt leaves every owner's saved plan and board copy first
+        (``mine_trunk.release_trunk_belts``, plus the other production rows' states), so no proof or
+        repair rebuilds it; then ``mine_trunk.cutover`` stocks, mines that one belt by unit, builds and
+        configures the splitter. One action or status, or None once every tap stands."""
+        from . import mine_trunk
+
+        for tap in state.get("route_taps") or []:
+            if not tap.get("released"):
+                mine_trunk.release_trunk_belts(self.root, obs["world_id"], tap)
+                self._release_row_belts(obs, key, tap)
+                tap["released"] = True
+                self.save(key, state)
+            built = bool(tap.get("built"))
+            action = mine_trunk.cutover(self.builder, obs, tap)
+            if tap.get("built") and not built:
+                self.save(key, state)
+            if action is not None:
+                return action
+        return None
+
+    def _release_row_belts(self, obs, key: str, tap: dict) -> list[str]:
+        """Drop ``tap``'s replaced belts from the other production rows' saved plans (idempotent)."""
+        wanted = {(p["x"], p["y"]) for p in tap["remove"]}
+        changed = []
+        for path in sorted(self.root.glob(f"{STATE_PREFIX}*.json")):
+            other = path.name[len(STATE_PREFIX) : -len(".json")]
+            if other == key:
+                continue
+            row = self.state(other)
+            plan = row.get("plan") if isinstance(row, dict) else None
+            if row.get("world_id") != obs["world_id"] or not isinstance(plan, dict):
+                continue
+            kept = [e for e in plan.get("entities", []) if not (e["name"] == "transport-belt" and xy(e) in wanted)]
+            if len(kept) != len(plan.get("entities", [])):
+                row["plan"] = dict(plan, entities=kept)
+                row["plan"].setdefault("released_to_route_taps", []).append(tap["name"])
+                self.save(other, row)
+                changed.append(other)
+        return changed
+
     def proof(self, obs, parameters: dict) -> dict | None:
         self.last_proof_failure = None
         state = self.state(row_key(parameters))
         if not state or state["world_id"] != obs["world_id"] or not underground_proof(obs, state["plan"]):
             return None
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
+        released = planned_tap.released_tiles(self.root, obs["world_id"])
         for wanted in state["plan"]["entities"]:
             live = actual.get((wanted["name"], *xy(wanted)))
+            if live is None and planned_tap.released_belt_stands(actual, released, wanted):
+                continue  # a later bus tap's splitter replaced this lane-extension belt
             if live is None:
                 self.last_proof_failure = {"reason": "planned_entity_missing", "entity": wanted["name"]}
                 return None
