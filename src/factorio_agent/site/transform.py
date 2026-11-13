@@ -21,7 +21,8 @@ Conventions (map tiles, x east, y south, Factorio 2.0 16-way directions:
   straight belt stays straight, but the two lanes swap sides (the left lane
   of a mirrored belt carries what the right lane carried). Inserters take
   from both lanes, so furnace and assembler rows behave the same. Splitter
-  ``input_priority`` / ``output_priority`` "left"/"right", ``lane`` and the
+  ``splitter_input_priority`` / ``splitter_output_priority`` (and the short
+  ``input_priority`` / ``output_priority``) "left"/"right", ``lane`` and the
   keys of a port's ``lane_items`` {"left", "right"} are swapped. Fluid
   machines with asymmetric connections (chemical plant, refinery, and an
   assembler with a non-zero direction) cannot be mirrored: ValueError.
@@ -73,7 +74,11 @@ ORIENTED = frozenset(
         "loader",
     }
 )
-SIDED_KEYS = frozenset({"input_priority", "output_priority", "lane"})
+# Splitter entities carry the native names (``splitter_input_priority``/``splitter_output_priority``;
+# a filter goes to the output priority side); records such as bus taps carry the short ones.
+SIDED_KEYS = frozenset(
+    {"input_priority", "output_priority", "splitter_input_priority", "splitter_output_priority", "lane"}
+)
 RECT_KEYS = frozenset({"reserved_area", "area", "mining_footprint", "mining_reserved_area", "growth_area"})
 UNMIRRORABLE = frozenset({"chemical-plant", "oil-refinery"})
 FOOTPRINTS = {"boiler": (3, 2), "steam-engine": (3, 5), "rocket-silo": (9, 9)}
