@@ -143,6 +143,22 @@ class PlannerTests(unittest.TestCase):
         finally:
             pg.plan_capacity = original
 
+    def test_no_starter_cell_while_its_outpost_is_being_built(self):
+        # eval-4177156614: 5 coal cells at 23.6 min while the coal outpost (submitted 21.1) was building.
+        decision = SimpleNamespace(resource="coal", target_cells=5, current_cells=4, reason="r")
+        original = pg.plan_capacity
+        pg.plan_capacity = lambda *a, **k: [decision]
+        building = EARLY + [job("mining_outpost", status="running", resource="coal")]
+        unlocked = {"technologies": {"electric-mining-drill": True}}
+        try:
+            self.assertEqual(pg.capacity_nodes(building, [], unlocked, CAPABILITIES), [])
+            # Before the drill research the outpost cannot produce: the starter cell still pays.
+            self.assertEqual(len(pg.capacity_nodes(building, [], {}, CAPABILITIES)), 1)
+            paused = EARLY + [job("mining_outpost", status="paused", resource="coal")]
+            self.assertEqual(len(pg.capacity_nodes(paused, [], unlocked, CAPABILITIES)), 1)
+        finally:
+            pg.plan_capacity = original
+
 
 def entity(name, x, y, unit, **extra):
     return {"name": name, "position": {"x": x, "y": y}, "unit_number": unit, **extra}
@@ -329,16 +345,21 @@ class CollectionPointTests(unittest.TestCase):
         )
         iron = sorted(y for (_, x, y), item in points.items() if item == "iron-plate")
         copper = sorted(y for (_, x, y), item in points.items() if item == "copper-plate")
-        # live map: iron rows 30..63 (34 tiles), copper rows 42..63 (22 tiles) after the 4-row window + 1 free row
-        self.assertEqual((len(iron), iron[0], iron[-1]), (34 - 1, 31.5, 63.5))
-        self.assertEqual((len(copper), copper[0]), (22 - 1, 43.5))
+        # live map: iron rows 30..63 (34 tiles), copper rows 42..63 (22 tiles) after the 4-row window + 1 free row;
+        # the last TAIL_KEEP rows stay for the tail proof
+        self.assertEqual((len(iron), iron[0], iron[-1]), (34 - 1 - sr.TAIL_KEEP, 31.5, 61.5))
+        self.assertEqual((len(copper), copper[0]), (22 - 1 - sr.TAIL_KEEP, 43.5))
         self.assertTrue(all(x == -90.5 for (_, x, _), i in points.items() if i == "iron-plate"))
         self.assertEqual(sr.collection_points(None), {})
         self.assertEqual(sr.collection_points({"template": "old_bus"}), {})
 
-    def construction(self, tmp, belts, furnace_stock):
+    def construction(self, tmp, belts, furnace_stock, phase="verified", blocks=None):
         root = Path(tmp)
-        (root / "pcb-board.json").write_text(json.dumps(board()), encoding="utf-8")
+        (root / "pcb-board.json").write_text(json.dumps(board(blocks=blocks)), encoding="utf-8")
+        if phase is not None:
+            (root / "planned-main-bus.json").write_text(
+                json.dumps({"world_id": WORLD, "phase": phase}), encoding="utf-8"
+            )
         boot = V2Bootstrap.__new__(V2Bootstrap)
         boot.game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root))
         boot.catalog = SimpleNamespace(fingerprint="fp", items={})
@@ -365,7 +386,7 @@ class CollectionPointTests(unittest.TestCase):
 
     def test_take_prefers_the_bus_surplus_in_a_full_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
-            boot, obs = self.construction(tmp, [60.5, 61.5, 62.5, 63.5], furnace_stock=90)
+            boot, obs = self.construction(tmp, [58.5, 59.5, 60.5, 61.5], furnace_stock=90)
             action = boot._take_output(obs, "iron-plate", 10)
             self.assertEqual(action["type"], "take_many")
             self.assertEqual([s["kind"] for s in action["sources"]][:4], ["belt"] * 4)
@@ -376,6 +397,37 @@ class CollectionPointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             boot, obs = self.construction(tmp, [10.5, 19.5], furnace_stock=0)
             self.assertIsNone(boot._take_output(obs, "iron-plate", 10))
+
+    def test_tail_tiles_are_never_taken(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            boot, obs = self.construction(tmp, [62.5, 63.5], furnace_stock=0)
+            self.assertIsNone(boot._take_output(obs, "iron-plate", 10))
+
+    def test_no_trunk_collection_before_the_bus_proved_its_tails(self):
+        # eval-4177156614: the actor emptied the copper trunk at rows 112..130 for 10 minutes
+        # while the bus waited for plates on its tail.
+        for phase in ("build", "splice", "commission", None):
+            with tempfile.TemporaryDirectory() as tmp:
+                boot, obs = self.construction(tmp, [60.5, 61.5], furnace_stock=30, phase=phase)
+                action = boot._take_output(obs, "iron-plate", 10)
+                self.assertEqual([s["kind"] for s in action["sources"]], ["output"], phase)
+
+    def test_spliced_district_port_feeds_the_bus_not_a_construction_trip(self):
+        port = {"x": -60.5, "y": -5.5}
+        district = {
+            "smelting_district": {
+                "entities": [{"name": "transport-belt", "position": port, "direction": 4}],
+                "ports": [{"direction": "output", "item": "iron-plate", "position": port}],
+            }
+        }
+        for phase, kinds in (("build", ["belt", "output"]), ("commission", ["output"]), ("verified", ["output"])):
+            with tempfile.TemporaryDirectory() as tmp:
+                boot, obs = self.construction(tmp, [], furnace_stock=30, phase=phase, blocks=district)
+                obs["entities"].append(
+                    {"name": "transport-belt", "position": port, "unit_number": 55, "belt_inventory": {"iron-plate": 8}}
+                )
+                action = boot._take_output(obs, "iron-plate", 10)
+                self.assertEqual(sorted(s["kind"] for s in action["sources"]), sorted(kinds), phase)
 
 
 if __name__ == "__main__":

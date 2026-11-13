@@ -63,6 +63,10 @@ LINK_RADIUS = 4  # inserters searched around a cell entity
 FUELS = ("coal", "wood")
 CARRY_BOUNDED = frozenset({"coal"})  # chest stock moved within carried_surplus.trip_room
 SURPLUS_GAP = 1  # trunk rows kept free behind the last tap window
+# Trunk rows at the lane end that are never collection points: the bus proof
+# (``planned_bus.proof``) and growth evidence read plates on the tail tile, and
+# a take_many sweep takes the fullest tiles (the tail) first.
+TAIL_KEEP = 2
 
 
 def _succeeded(jobs):
@@ -133,7 +137,7 @@ def collection_points(bus) -> dict[tuple, str]:
         stations = [s.get("along") for s in view.stations if s.get("lane") == lane]
         start = max((a + WINDOW_ROWS + SURPLUS_GAP for a in stations if isinstance(a, int)), default=0)
         offset = view.lanes[lane].offset
-        for row in range(start, view.lengths.get(lane, 0)):
+        for row in range(start, view.lengths.get(lane, 0) - TAIL_KEEP):
             spot = view.world(row, offset)
             belt = view.tiles.get((spot["x"], spot["y"]))
             if belt and belt.get("name") == "transport-belt" and belt.get("direction", view.facing) == view.facing:

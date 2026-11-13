@@ -223,6 +223,33 @@ def _produced_coal(observation, coal_cells):
     )
 
 
+BUS_FED_PHASES = frozenset({"commission", "verified"})  # planned_bus phases after the feed splice
+
+
+def bus_phase(root: Path, world_id) -> str | None:
+    """Phase of the planned main bus of this world (``planned-main-bus.json``), or None."""
+    from .planned_bus import STATE_FILE
+
+    path = Path(root) / STATE_FILE
+    if not path.exists():
+        return None
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict) or state.get("world_id") != world_id:
+        return None
+    phase = state.get("phase")
+    return phase if isinstance(phase, str) else None
+
+
+def bus_fed_plates(bus, phase) -> set[str]:
+    """Plates the published bus trunks take from their district ports once spliced (``BUS_FED_PHASES``)."""
+    if phase not in BUS_FED_PHASES or not isinstance(bus, dict):
+        return set()
+    return {t.get("item") for t in bus.get("trunks") or () if isinstance(t, dict) and isinstance(t.get("item"), str)}
+
+
 class V2Bootstrap(DeterministicBootstrap):
     def _unreserved_stock_observation(self, observation, item):
         self._collection_points = {}
@@ -235,7 +262,8 @@ class V2Bootstrap(DeterministicBootstrap):
         world = observation.get("world_id")
         fingerprint = getattr(self.catalog, "fingerprint", None)
         raw = path.read_bytes()
-        version = (world, fingerprint, hashlib.sha256(raw).digest())
+        phase = bus_phase(Path(root), world)
+        version = (world, fingerprint, hashlib.sha256(raw).digest(), phase)
         cached = getattr(self, "_stock_ownership_cache", None)
         if cached is None or cached[0] != version:
             board = json.loads(raw.decode("utf-8"))
@@ -249,6 +277,10 @@ class V2Bootstrap(DeterministicBootstrap):
                 groups.append(("shared_main_bus", board["shared_main_bus"]))
             ownership = {}
             owners = {}
+            # Once the bus feed is spliced (phase commission/verified) the district's plate ports
+            # feed the trunks: their plates belong to the bus, never to a construction trip
+            # (eval-4177156614: 42 takes at the iron port kept the lane tail empty for 10 min).
+            fed = bus_fed_plates(board.get("shared_main_bus"), phase)
             for name, block in groups:
                 for entity in block.get("entities", []):
                     p = entity.get("position")
@@ -261,18 +293,24 @@ class V2Bootstrap(DeterministicBootstrap):
                         port["item"]
                         for port in block.get("ports", [])
                         if name != "startup_science" and port.get("direction") == "output" and port.get("position") == p
-                    }
+                    } - fed
                     ownership[key] = public if key not in ownership else ownership[key] & public
                     owners.setdefault(key, set()).add(name)
             # Surplus trunk tiles past the last tap (starter_retirement.collection_points)
             # are the construction plate stock once the bus exists.
             from .starter_retirement import collection_points
 
-            points = {
-                key: plate
-                for key, plate in collection_points(board.get("shared_main_bus")).items()
-                if owners.get(key) == {"shared_main_bus"}
-            }
+            # Only after the bus proved plates on every lane tail: before that, plates taken
+            # off the trunk are plates that never reach the tail the proof waits for.
+            points = (
+                {
+                    key: plate
+                    for key, plate in collection_points(board.get("shared_main_bus")).items()
+                    if owners.get(key) == {"shared_main_bus"}
+                }
+                if phase == "verified"
+                else {}
+            )
             for key, plate in points.items():
                 ownership[key] = ownership[key] | {plate}
             self._stock_ownership_cache = (version, ownership, points)
