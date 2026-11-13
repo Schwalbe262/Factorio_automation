@@ -140,6 +140,23 @@ def validate_starter_retirement(parameters):
     validate_parameters(parameters)
 
 
+def wood_burner_feed_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "wood_burner_feed")
+    if early is not None:
+        return early
+    return ex.wood_burner_feed.step(obs, parameters or {})
+
+
+def wood_burner_feed_proof(ex, obs, result, parameters):
+    return ex.wood_burner_feed.proof(obs)
+
+
+def validate_wood_burner_feed(parameters):
+    from ..wood_burner_feed import validate_parameters
+
+    validate_parameters(parameters)
+
+
 def regularize_power_layout_step(ex, obs, parameters):
     ex.builder._sync(obs)
     fuel_obs = ex.starter_observation(obs)
@@ -173,5 +190,8 @@ register(
     step=starter_retirement_step,
     proof=starter_retirement_proof,
     validate=validate_starter_retirement,
+)
+register(
+    "wood_burner_feed", step=wood_burner_feed_step, proof=wood_burner_feed_proof, validate=validate_wood_burner_feed
 )
 register("regularize_power_layout", step=regularize_power_layout_step, proof=regularize_power_layout_proof)

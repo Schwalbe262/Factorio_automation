@@ -29,6 +29,10 @@ Rules (docs/v2/PLANNERS.md "Starter power in two phases"):
    once the feed is belt-fed and the drill is electric.
 6. ``hand_fed_coal_per_minute`` is the boiler's coal burn for the capacity
    planner's coal rule while the boiler is hand-fed.
+7. Carried wood is burned before coal in the hand-fed boiler (rule 2,
+   ``boiler_fuel_action``); one slot of wood is held for it
+   (``hand_fed_wood_reserve``). Belt-fed boilers get wood through
+   ``wood_burner_feed``.
 """
 
 from __future__ import annotations
@@ -62,6 +66,7 @@ FEED_FALLBACK_TICKS = 54000
 # assemblers draw about a quarter of one boiler early on.
 UNMEASURED_LOAD_SHARE = 0.25
 MACHINE_MADE_BELT = "transport-belt"
+WOOD = "wood"
 
 
 def boiler_sizing(catalog) -> dict:
@@ -97,29 +102,72 @@ def _observed(obs, spec):
     )
 
 
+def wood_fuel_value(catalog) -> float:
+    """Joules in one wood from the catalog (2 MJ in the base game)."""
+    value = ((getattr(catalog, "items", None) or {}).get(WOOD) or {}).get("fuel_value")
+    return float(value) if isinstance(value, (int, float)) and value > 0 else 2_000_000.0
+
+
+def wood_slot(catalog) -> int:
+    """Wood one boiler fuel slot holds (one wood stack)."""
+    stack = ((getattr(catalog, "items", None) or {}).get(WOOD) or {}).get("stack_size")
+    return int(stack) * BOILER_FUEL_SLOTS if isinstance(stack, int) and stack > 0 else 100 * BOILER_FUEL_SLOTS
+
+
+def _hand_fed_boiler(builder, obs):
+    state = getattr(builder, "state", None) or {}
+    if state.get("world_id") != obs.get("world_id") or coal_feed_mode(state) != HAND_FED:
+        return None, None
+    spec = _boiler_spec(state)
+    return spec, (_observed(obs, spec) if spec else None)
+
+
+def hand_fed_wood_reserve(builder, catalog, obs, item) -> int:
+    """Carried wood held for the hand-fed boiler (one fuel slot of wood); 0 otherwise (``carried_surplus.reserve``)."""
+    if item != WOOD:
+        return 0
+    _, boiler = _hand_fed_boiler(builder, obs)
+    return wood_slot(catalog) if boiler is not None else 0
+
+
 def boiler_fuel_action(builder, bootstrap, catalog, obs) -> dict | None:
-    """One batched coal action for the hand-fed boiler, or None.
+    """One batched fuel action for the hand-fed boiler, or None.
 
     Only while the builder's ``coal_feed_mode`` is ``hand_fed`` and the
     plant's boiler stands. A trip starts when the boiler holds less than
-    ``refill_below`` coal (fuel slot plus the burning remainder); it then
-    fills the slot to ``target``. With at least the fill or ``FUEL_BATCH``
-    carried the coal goes in; an empty boiler takes any carried coal;
-    otherwise the coal is collected from the starter coal chests
-    (``ensure_item``). A plain wait returns None, so the job keeps working.
+    ``refill_below`` coal-equivalent (fuel slot plus the burning remainder).
+    Carried wood is burned first (owner, 2026-11-13): with at least
+    ``min(wood fill, WOOD_BATCH)`` wood carried (any wood when the boiler is
+    out or already burns wood) the slot is filled with wood; coal still in the
+    slot is taken out first (one fuel slot holds one fuel kind; the coal is
+    saved for the burners). Otherwise coal fills the slot to ``target``: with
+    at least the fill or ``FUEL_BATCH`` carried the coal goes in (wood left
+    in the slot is taken out first); an empty boiler takes any carried coal;
+    else the coal is collected (``ensure_item``). A plain wait returns None,
+    so the job keeps working.
     """
-    state = getattr(builder, "state", None) or {}
-    if state.get("world_id") != obs.get("world_id") or coal_feed_mode(state) != HAND_FED:
-        return None
-    spec = _boiler_spec(state)
-    boiler = _observed(obs, spec) if spec else None
+    from .wood_burner_feed import WOOD_BATCH
+
+    spec, boiler = _hand_fed_boiler(builder, obs)
     if boiler is None:
         return None
     sizing = boiler_sizing(catalog)
-    held = int((boiler.get("inventory") or {}).get("coal", 0))
-    stored = held + float(boiler.get("remaining_burning_fuel", 0) or 0) / coal_fuel_value(catalog)
+    coal_value, wood_value = coal_fuel_value(catalog), wood_fuel_value(catalog)
+    inventory = boiler.get("inventory") or {}
+    held, held_wood = int(inventory.get("coal", 0)), int(inventory.get(WOOD, 0))
+    burning = float(boiler.get("remaining_burning_fuel", 0) or 0)
+    stored = (held * coal_value + held_wood * wood_value + burning) / coal_value
     if stored >= sizing["refill_below"]:
         return None
+    wood_fill = min(wood_slot(catalog), math.ceil(sizing["target"] * coal_value / wood_value)) - held_wood
+    wood = int((obs.get("inventory") or {}).get(WOOD, 0))
+    if wood_fill > 0 and wood > 0 and (wood >= min(wood_fill, WOOD_BATCH) or stored <= 0 or held_wood > 0):
+        move = builder._move(obs, spec["position"])
+        if move:
+            return move
+        if held > 0:
+            return _take_fuel(spec, "coal", held, "hand-fed boiler: take the coal out so carried wood burns instead")
+        return _insert_fuel(spec, WOOD, min(wood, wood_fill), "hand-fed boiler: burn carried wood before coal")
     fill = sizing["target"] - held
     if fill <= 0:
         return None
@@ -128,17 +176,37 @@ def boiler_fuel_action(builder, bootstrap, catalog, obs) -> dict | None:
         move = builder._move(obs, spec["position"])
         if move:
             return move
-        return {
-            "type": "insert",
-            "name": spec["name"],
-            "position": deepcopy(spec["position"]),
-            "item": "coal",
-            "inventory": "fuel",
-            "count": min(carried, fill),
-            "reason": "hand-fed boiler: refill before the dedicated coal feed exists",
-        }
+        if held_wood > 0:
+            return _take_fuel(spec, WOOD, held_wood, "hand-fed boiler: take the last wood out so the coal fits")
+        return _insert_fuel(
+            spec, "coal", min(carried, fill), "hand-fed boiler: refill before the dedicated coal feed exists"
+        )
     result = bootstrap.ensure_item(obs, "coal", fill)
     return result if isinstance(result, dict) and result.get("type") else None
+
+
+def _insert_fuel(spec, item, count, reason) -> dict:
+    return {
+        "type": "insert",
+        "name": spec["name"],
+        "position": deepcopy(spec["position"]),
+        "item": item,
+        "inventory": "fuel",
+        "count": int(count),
+        "reason": reason,
+    }
+
+
+def _take_fuel(spec, item, count, reason) -> dict:
+    return {
+        "type": "take",
+        "name": spec["name"],
+        "position": deepcopy(spec["position"]),
+        "item": item,
+        "inventory": "fuel",
+        "count": int(min(count, 50)),
+        "reason": reason,
+    }
 
 
 def boiler_upkeep(ex, obs) -> dict | None:

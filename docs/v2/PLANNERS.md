@@ -283,14 +283,23 @@ Live map eval-2874201674: coal retirement moved 2643 coal into the character (56
 ~1800 coal was ever inserted as fuel; the full inventory blocked construction pickups.
 
 ```
-allowance(i)   fuel (coal, wood): boiler_sizing target + FUEL_FETCH (one boiler fill + one burner fetch)
+allowance(i)   coal: boiler_sizing target + FUEL_FETCH (one boiler fill + one burner fetch)
+               wood: 0 (owner 2026-11-13: wood is burned in the power plant); threshold WOOD_BATCH (25),
+               in an idle pass only (no job acted), from WOOD_CARRY_CAP (100) in every upkeep;
+               a hand-fed boiler holds one slot of wood back (power_coal_feed.hand_fed_wood_reserve)
                ore (iron-ore, copper-ore): PLATE_BATCH; plates are construction stock (inventory_storage.KEEP)
 surplus(i)     carried(i) - allowance(i); acts once >= SURPLUS_STACKS (1) catalog stacks
 upkeep         CarriedSurplus.step, first in starter_upkeep and after the boiler in idle_action: one paid action
   a consumer   insert up to the slot: fuel -> boiler, burner drill, smelting furnace (nearest within rank);
                ore -> furnace_source of a fuelled furnace smelting that ore with no other product;
                never a retiring cell (StarterRetirement.cell_keys) or a stuck entity (STUCK statuses)
+               wood: boiler (slot empty or wood) -> wood feed chest -> burner drill -> furnace
   b depot      deposit into a paid storage chest registered by InventoryStorage (inventory-storage.json)
+wood/boiler    base boiler: ONE fuel slot (fuel_inventory_size=1, data/base entities.lua), one fuel kind;
+               hand-fed: boiler_fuel_action burns carried wood first (takes leftover coal out, then wood in);
+               belt-fed: capability wood_burner_feed (wood_burner_feed.py) puts a wooden chest -> burner arm ->
+               splitter in place of one straight feed belt, input priority on the wood side; the chest is
+               the wood sink; proposed once wood >= WOOD_BATCH is carried/in depots and splitters are enabled
 fetch          V2Bootstrap._take_output takes fuel from a depot before any other chest (depot_take);
                "collect produced coal" stays bounded by the requested count
 source         starter retirement coal: trip_room = allowance + consumer/depot room - carried

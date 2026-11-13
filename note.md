@@ -252156,3 +252156,9 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: industry.py `_closed_loop_topup`/`_cell_shortfall`/`_topup_funding` (`input_topups`, `topup_fund`, TOPUP_STALL_TICKS 1800, cap one more bill); funding_complete/production_complete wait for top-ups; docs BOOTSTRAP_RESEARCH.md; tests/test_v2_bootstrap_topup.py (3).
 - result: 19/20 split stall buys 1 Cu + 2 Fe once, then stops; satisfied target (pack in lab, whole craft in a machine, researched) gets nothing.
 - next action: fleet run; grep job-events for "top up stalled machine science inputs".
+
+## 2026-11-13 wood burned in the power plant (carried_surplus, power_coal_feed, wood_burner_feed)
+- goal: owner rule, carried wood is burned in the boilers; boiler has ONE fuel slot (Factorio 2.1.20 data/base entities.lua boiler fuel_inventory_size=1), so coal blocks wood.
+- actions: wood allowance 0, threshold WOOD_BATCH 25 in idle passes, WOOD_CARRY_CAP 100 in upkeep; hand-fed boiler takes leftover coal out and burns carried wood first (one wood slot reserved); new capability wood_burner_feed (owner's design): wooden chest -> burner arm -> splitter replacing one straight coal-feed belt, input priority wood side, output priority feed side; chest is the wood sink after boilers; proposed once when belt-fed, splitter enabled and >=25 wood carried/in depots. power_evidence counts every fuel by fuel_value.
+- metrics: tests test_v2_wood_burner_feed (7), carried_surplus +4, power_coal_feed +2.
+- next action: live fleet: confirm burner arm self-fuels from wood, splitter priority keeps coal as filler, and boiler proofs that count only coal (steam_expansion, base_coal_recovery) tolerate wood.
