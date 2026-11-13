@@ -1083,14 +1083,22 @@ return success{boiler_fuel=fuel(boiler),drill_fuel=fuel(drill),
         cutover = self.state.get("electric_coal_cutover")
         if cutover and _find(observation, cutover["old"]) is None:
             return _report("waiting", "electric coal cutover owns the coal drill site", cutover=cutover)
+        boiler = next(e for e in power["entities"] if e["name"] == "boiler")
+        # Start the coal drill as soon as it stands, before its belt is
+        # finished: it mines while the belt is laid and the belt fills as it
+        # grows (a full output simply pauses the drill, no fuel is wasted).
+        # The early seed has its own key, so the startup seed below can fuel
+        # the drill again if the first load ran out before the feed closed.
+        if _find(observation, coal["drill"]) is not None:
+            early = self._seed(observation, "coal_drill_early", coal["drill"], 8)
+            if early and early.get("type"):
+                return early
         result = self.ensure_plan(observation, coal)
         if result.get("status") != "succeeded":
             return result
-        # Seed only after the complete coal path exists, so construction cannot
-        # consume the seed while the eventual transport route remains unfinished.
         for key, entity, count in [
             ("coal_drill", coal["drill"], 8),
-            ("boiler", next(e for e in power["entities"] if e["name"] == "boiler"), 8),
+            ("boiler", boiler, 8),
         ]:
             seed = self._seed(observation, key, entity, count)
             if seed:
