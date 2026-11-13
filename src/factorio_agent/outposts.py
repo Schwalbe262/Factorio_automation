@@ -263,6 +263,14 @@ class MiningOutposts:
                 return other
         return dict(result, exit_sides_tried=tried)
 
+    def bank_powered(self, obs, plan) -> bool:
+        """Every drill of ``plan`` stands, is connected and has power (no ore evidence needed)."""
+        drills = [self.find(obs, e) for e in plan["entities"] if e["name"] == "electric-mining-drill"]
+        return bool(drills or plan.get("retired_drill_units")) and all(
+            e and e.get("electric_network_connected") and e.get("energy", 0) > 0 and e.get("status_name") != "no_power"
+            for e in drills
+        )
+
     def bank_proof(self, obs, bank):
         from .depleted_drill_retirement import effective_mining_plan, FILE as RETIREMENT_FILE
 
@@ -831,8 +839,12 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
                 return {"status": "blocked", "reason": "mining_retirement_active_plan_invalid", "detail": str(exc)}
             if bank.get("ready") and any(self.find(obs, e) is None for e in effective["entities"]):
                 return {"status": "blocked", "reason": "existing_outpost_damaged_requires_repair_before_expansion"}
-            if bank.get("ready") and self.bank_proof(obs, bank) is None:
-                return {"status": "waiting", "reason": "restore existing outpost power/output before adding capacity"}
+            # A proven bank only has to be powered to be extended. The full proof
+            # wants ore on both collector lanes, and a bank whose ore is eaten as
+            # fast as it is mined (the very case that needs more drills) shows an
+            # empty belt: the extension waited an hour and died (seed 2644599892).
+            if bank.get("ready") and self.bank_proof(obs, bank) is None and not self.bank_powered(obs, effective):
+                return {"status": "waiting", "reason": "restore existing outpost power before adding capacity"}
         active_proofs = [(b, self.bank_proof(obs, b)) for b in banks if b.get("ready")]
         active = [b for b, p in active_proofs if p]
         rate = sum(p["nominal_rate_per_minute"] for _, p in active_proofs if p)

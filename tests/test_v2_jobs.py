@@ -358,7 +358,13 @@ class JobBoundaryTests(unittest.TestCase):
         job = Ledger(self.root).data["jobs"]["test"]
         self.assertEqual(job["created_tick"], created)
         self.assertEqual(job["paused_ticks"], 150000)
-        self.game.observation["tick"] = 300000
+        from factorio_agent.jobs import JOB_DEADLINE_TICKS
+
+        # 50000 consumed before the block + the rest of the budget after the retry: just over the deadline.
+        self.game.observation["tick"] = 200000 + JOB_DEADLINE_TICKS - 50000 + 5000
+        job = Ledger(self.root)
+        job.data["jobs"]["test"]["progress_at_tick"] = self.game.observation["tick"]
+        job.save()
         result = run_slice(self.root, self.game, Executor({"status": "succeeded"}, {"native": True}), "test")
         self.assertEqual(result["reason"], "job_deadline_exceeded")
 

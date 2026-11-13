@@ -802,6 +802,12 @@ def progress_key(obs: dict, capability: str) -> str:
 
 
 SAVE_INTERVAL_SECONDS = 60
+# A job older than this (pauses and early-start time excluded) is blocked.
+# Thirty game minutes / one hour killed jobs that wait legitimately in a long
+# run (retirement waiting for cells to cool, research waiting for packs, a
+# growth step waiting for materials): seed 2644599892 lost nine jobs that way.
+JOB_DEADLINE_TICKS = 648000  # three game hours
+JOB_DEADLINE_SECONDS = 10800  # three hours of wall time
 # Exceptions that mean "this planner cannot read its inputs", never a game or connection failure.
 PLANNER_FAULTS = (FileNotFoundError, LookupError, TypeError, AttributeError, ValueError, StopIteration)
 UNKNOWN_BATCH_OUTCOMES = (
@@ -846,8 +852,9 @@ def _advance_job(
     early = runs_early(CAPABILITIES, job["capability"], succeeded, obs.get("technologies"))
     track_early_time(job, obs["tick"], time.time(), early)
     if (
-        obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) - job.get("early_ticks", 0) > 108000
-        or time.time() - job["created_at"] - job.get("paused_seconds", 0) - job.get("early_seconds", 0) > 3600
+        obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) - job.get("early_ticks", 0) > JOB_DEADLINE_TICKS
+        or time.time() - job["created_at"] - job.get("paused_seconds", 0) - job.get("early_seconds", 0)
+        > JOB_DEADLINE_SECONDS
     ):
         job.update(status="blocked", reason="job_deadline_exceeded")
         ledger.save()
