@@ -462,32 +462,82 @@ class _Footprints:
     _occupied_by_plan = FactoryBuilder._occupied_by_plan
 
 
-def starter_keepouts(root, obs) -> dict:
-    """What a new starter cell must not cover: ``{"areas": [[x1, y1, x2, y2]], "tiles": ["x,y"]}``.
+STARTER_CAPACITY_FILE = "starter-capacity.json"
 
-    Starter cells (``deterministic_bootstrap.discover_cell``,
-    ``mining.StarterCapacity.choose_site``) used to read only the live map, so a
-    cell could be placed on the reserved coal feed (board block
-    ``power_coal_feed``) or any other planned-but-unbuilt block. Areas are the
-    ``reserved_area`` of every board block; tiles (``floor`` corner keys) are
-    every planned-but-unbuilt entity (:func:`planned_unbuilt_hardware`).
-    Empty without a board of this world.
-    """
-    path = Path(root) / "pcb-board.json" if root is not None else None
+
+def _read_json(path):
     try:
-        board = json.loads(path.read_text(encoding="utf-8")) if path is not None and path.exists() else {}
+        value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except (OSError, ValueError):
-        board = {}
-    if board.get("world_id") != obs.get("world_id") or not isinstance(board.get("blocks"), dict):
-        return {"areas": [], "tiles": []}
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def pending_starter_cells(root, obs) -> dict:
+    """Board-shaped blocks of the starter capacity cells chosen but not fully built.
+
+    ``mining.StarterCapacity`` saves its chosen cell (``pending[resource]``:
+    receiver and drill) and builds the drill much later when materials are
+    short (seed 2212603376: chest at tick 15183, drill at 26392). The feed
+    planner chose that drill tile in between and blocked for good with
+    ``existing entity direction differs from reserved plan``. Built parts drop
+    out in :func:`planned_unbuilt_hardware`. Empty for another world.
+    """
+    state = _read_json(Path(root) / STARTER_CAPACITY_FILE) if root is not None else {}
+    if state.get("world_id") != obs.get("world_id") or not isinstance(state.get("pending"), dict):
+        return {}
+    blocks = {}
+    for resource, cell in sorted(state["pending"].items()):
+        if not isinstance(cell, dict):
+            continue
+        parts = [cell.get(k) for k in ("receiver", "drill")]
+        parts = [p for p in parts if isinstance(p, dict) and isinstance(p.get("position"), dict) and p.get("name")]
+        if parts:
+            blocks["starter_capacity:" + str(resource)] = {"entities": parts}
+    return blocks
+
+
+def starter_keepouts(root, obs, *, exclude=()) -> dict:
+    """What a site chosen from the live map must not cover: ``{"areas": [[x1, y1, x2, y2]], "tiles": ["x,y"]}``.
+
+    The one reservation rule for planners that search free land near power:
+    what is planned is on the board (or in the starter capacity state) and
+    every such planner reads it here. Starter cells
+    (``deterministic_bootstrap.discover_cell``, ``mining.StarterCapacity.choose_site``),
+    the starter lab (``research.StarterResearch``) and the coal feed
+    (``power_layout.V2FactoryBuilder._choose_coal_plan``) used to read only the
+    live map. Areas are the ``reserved_area`` of every board block; tiles
+    (``floor`` corner keys) are every planned-but-unbuilt entity
+    (:func:`planned_unbuilt_hardware`) of the board blocks and of the pending
+    starter capacity cells (:func:`pending_starter_cells`). Blocks named in
+    ``exclude`` (the caller's own) are skipped. Without a board of this world
+    only the pending starter cells count.
+    """
+    board = _read_json(Path(root) / "pcb-board.json") if root is not None else {}
+    blocks = board.get("blocks") if board.get("world_id") == obs.get("world_id") else None
+    blocks = {k: v for k, v in (blocks if isinstance(blocks, dict) else {}).items() if k not in exclude}
     areas = []
-    for block in board["blocks"].values():
+    for block in blocks.values():
         area = block.get("reserved_area") if isinstance(block, dict) else None
         if isinstance(area, list) and len(area) == 2 and all(isinstance(p, list) and len(p) == 2 for p in area):
             areas.append([area[0][0], area[0][1], area[1][0], area[1][1]])
-    tiles = planned_unbuilt_hardware(_Footprints(), obs, board["blocks"])
+    pending = {k: v for k, v in pending_starter_cells(root, obs).items() if k not in exclude}
+    tiles = planned_unbuilt_hardware(_Footprints(), obs, dict(blocks, **pending))
     keys = sorted({f"{math.floor(x)},{math.floor(y)}" for x, y in tiles})
     return {"areas": areas, "tiles": keys}
+
+
+def keepout_tiles(keepouts) -> set:
+    """Tile centres ``(x + 0.5, y + 0.5)`` covered by :func:`starter_keepouts` (areas and tiles)."""
+    cells = set()
+    for x1, y1, x2, y2 in keepouts.get("areas") or ():
+        for x in range(math.floor(x1 + 1e-6), math.ceil(x2 - 1e-6)):
+            for y in range(math.floor(y1 + 1e-6), math.ceil(y2 - 1e-6)):
+                cells.add((x + 0.5, y + 0.5))
+    for key in keepouts.get("tiles") or ():
+        x, y = key.split(",")
+        cells.add((int(x) + 0.5, int(y) + 0.5))
+    return cells
 
 
 # Lua: ``keepout_hit(left, top, right, bottom)`` for a box against ``keepouts``
@@ -722,6 +772,16 @@ class Board:
         reach = range(-STARTUP_SCIENCE_REACH, STARTUP_SCIENCE_REACH + 1)
         offsets = sorted(((16 * i, 16 * j) for i in reach for j in reach), key=lambda o: (math.hypot(*o), o))
         planned = planned_unbuilt_hardware(self.builder, obs, self.state["blocks"])
+        from .planning import overlap
+
+        # The cell needs only free land near power: it never takes another
+        # block's reserved area (a bank's growth columns and output access, the
+        # coal feed's electric drill site) even where nothing is planned yet.
+        others = [
+            b["reserved_area"]
+            for b in self.state["blocks"].values()
+            if isinstance(b, dict) and isinstance(b.get("reserved_area"), list) and len(b["reserved_area"]) == 2
+        ]
         candidates = []
         tx, ty = POWER_TARGET_OFFSETS[science_machines]
         for dx, dy in offsets:
@@ -750,6 +810,8 @@ class Board:
                     continue
                 # Other blocks may be planned but not built yet (concurrent jobs).
                 if hardware_conflicts(self.builder, plan["entities"], planned):
+                    continue
+                if any(overlap(plan["reserved_area"], area) for area in others):
                     continue
                 candidates.append(plan)
         surveys = []

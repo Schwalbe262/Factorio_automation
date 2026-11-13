@@ -219,7 +219,7 @@ local ignore={};for _,id in ipairs(args.ignore) do ignore[id]=true end
 local left=n.position.x-1.5;local top=n.position.y-1.5;local right=left+3;local bottom=top+3
 for _,e in pairs(s.find_entities_filtered{area={{left+.01,top+.01},{right-.01,bottom-.01}}}) do
  if e.type~="resource" and not (e.unit_number and ignore[e.unit_number]) and e~=a and not e.prototype.collision_mask.colliding_with_tiles_only then
-  return {ok=false,reason="electric_upgrade_footprint_obstructed"}
+  return {ok=false,reason="electric_upgrade_footprint_obstructed",entity=e.name,position={x=e.position.x,y=e.position.y}}
  end
 end
 for x=left,right-1 do for y=top,bottom-1 do
@@ -359,7 +359,12 @@ return {ok=true,drop=drop,remaining=amount}
         if not self.state:
             result = self.prepare(obs)
             if not result.get("ok"):
-                return {"status": "blocked", "reason": result.get("reason", "electric_upgrade_preflight_failed")}
+                evidence = {k: result[k] for k in ("entity", "position") if k in result}
+                return {
+                    "status": "blocked",
+                    "reason": result.get("reason", "electric_upgrade_preflight_failed"),
+                    **({"evidence": evidence} if evidence else {}),
+                }
         if self.state["world_id"] != obs["world_id"]:
             return {"status": "blocked", "reason": "electric_upgrade_world_changed"}
         new = self.state["replacement"]

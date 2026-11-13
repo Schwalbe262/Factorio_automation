@@ -797,14 +797,27 @@ def prepare_extension(game, builder, obs, bank, added_drills):
         return {"ok": False, "reason": "invalid_mining_extension_contract", "detail": str(exc)}
 
 
-def prepare_new_bank(game, builder, obs, resource, count, reservations, *, policy=None, site_exit=None):
+def prepare_new_bank(
+    game, builder, obs, resource, count, reservations, *, policy=None, site_exit=None, registered=(), planned=None
+):
     """Drop-in current paired-bank planner with policy decided before entities/power.
 
     ``site_exit`` (from :func:`mining_site.site_exit`) turns the bank so its
     collector flows toward the plan zone's output side and ranks sites by
     exit cost (see :func:`candidate_sites`); the record is stored as
     ``plan["site_exit"]``. Without it every bank is the historical EAST one.
+
+    ``registered`` (``[(block name, reserved area)]``) and ``planned``
+    (``board.planned_unbuilt_hardware`` tiles of other plans) make a candidate
+    fail, and the next one be tried, when its reserved area (growth, exit and
+    output access) meets another block's reserved area or any of its hardware
+    meets another plan's unbuilt tile. Before, such a bank was saved and its
+    board publish blocked (``paired_mining_reserved_area_conflicts_with_registered_block``,
+    seeds 2005199778 and 1590659659: the coal bank's exit and output access lay
+    on the reserved power coal feed).
     """
+    from .board import hardware_conflicts
+
     catalog = builder.catalog
     try:
         if resource not in RESOURCES or type(count) is not int or not 1 <= count <= 2 * MAX_PAIRS:
@@ -884,6 +897,10 @@ def prepare_new_bank(game, builder, obs, resource, count, reservations, *, polic
             if not full.get("ok"):
                 failures.append(full.get("reason"))
                 continue
+            clash = hardware_conflicts(builder, future_with_power, planned) if planned else []
+            if clash:
+                failures.append("bank_meets_planned_hardware_of:" + str(clash[0]["block"]))
+                continue
             live_resources = resource_survey(planning, core)
             if not live_resources.get("ok"):
                 failures.append(live_resources.get("reason"))
@@ -913,6 +930,10 @@ def prepare_new_bank(game, builder, obs, resource, count, reservations, *, polic
                 for axis, k in enumerate(("x", "y")):
                     area[0][axis] = min(area[0][axis], p[k] - 0.5)
                     area[1][axis] = max(area[1][axis], p[k] + 0.5)
+            met = [name for name, other in registered if overlap(area, other)]
+            if met:
+                failures.append("bank_reserved_area_meets_registered_block:" + str(met[0]))
+                continue
             plan.update(
                 mining_reserved_area=deepcopy(future["mining_footprint"]),
                 layout_contract=deepcopy(contract),

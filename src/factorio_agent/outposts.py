@@ -22,6 +22,11 @@ RESOURCES = {"iron-ore", "copper-ore", "coal", "stone"}
 OBSTRUCTED = "reserved block placement is obstructed"
 # A bank re-plans its power bridge around new obstructions at most this often.
 MAX_BRIDGE_REPLANS = 2
+# Other plans' unbuilt tiles a new bank avoids lie within this many tiles of
+# the patch seed (the bank survey spans 48 tiles each way, plus exit and bridge).
+PLANNED_TILE_REACH = 72
+# An unbuilt bank whose reservation meets a registered block is planned again this often.
+MAX_BANK_REPLANS = 2
 
 
 def _key(e):
@@ -105,7 +110,16 @@ class MiningOutposts:
     def find(obs, e):
         return next((a for a in obs["entities"] if a["name"] == e["name"] and a["position"] == e["position"]), None)
 
-    def publish_reservations(self, obs):
+    def publish_reservations(self, obs, resource=None):
+        """Publish every saved paired bank on the board as block ``<resource>_mining[_n]``.
+
+        A bank whose reserved area meets another registered block is not
+        published; the others still are (three lanes share this instance, and
+        one conflicting coal bank used to block the iron and copper lanes too,
+        seed 2005199778). Returns the blocked status for the first conflict of
+        ``resource`` (any resource when None) with ``block`` (the bank) and
+        ``conflicting_block``, else None.
+        """
         banks = [b for b in self.state.get("banks", []) if b["plan"].get("paired") and b.get("reserved_area")]
         if not banks:
             return None
@@ -116,26 +130,104 @@ class MiningOutposts:
         if board.get("world_id") != obs["world_id"]:
             return {"status": "blocked", "reason": "mining_reservation_board_world_changed"}
         counts = {}
+        conflict = None
         for bank in banks:
             declared = bank.get("pending_extension", bank)
-            resource = bank["plan"]["resource"]
-            index = counts.get(resource, 0)
-            counts[resource] = index + 1
-            name = resource + "_mining" + ("_" + str(index) if index else "")
+            owner = bank["plan"]["resource"]
+            index = counts.get(owner, 0)
+            counts[owner] = index + 1
+            name = owner + "_mining" + ("_" + str(index) if index else "")
             area = declared["reserved_area"]
-            if any(key != name and overlap(area, b["reserved_area"]) for key, b in board["blocks"].items()):
-                return {
-                    "status": "blocked",
-                    "reason": "paired_mining_reserved_area_conflicts_with_registered_block",
-                    "block": name,
-                }
+            met = next(
+                (key for key, b in board["blocks"].items() if key != name and overlap(area, b["reserved_area"])),
+                None,
+            )
+            if met is not None:
+                if conflict is None and resource in (None, owner):
+                    conflict = {
+                        "status": "blocked",
+                        "reason": "paired_mining_reserved_area_conflicts_with_registered_block",
+                        "block": name,
+                        "conflicting_block": met,
+                    }
+                continue
             extra = {}
             for field in ("mining_reserved_area", "layout_contract"):
                 if declared.get(field) is not None:
                     extra[field] = declared[field]
             board["blocks"][name] = dict(declared["plan"], reserved_area=area, **extra)
         _atomic_json(path, board)
-        return None
+        return conflict
+
+    def _replan_conflicting_bank(self, obs, resource, conflict):
+        """Drop an unbuilt ``resource`` bank that cannot be published, so the next step plans it again.
+
+        Only a pending bank (not ready, no pending extension) of which no plan
+        entity stands is dropped, at most ``MAX_BANK_REPLANS`` times per
+        resource (``bank_replans``); the new plan avoids registered blocks and
+        planned hardware (``planned_keepouts``). None keeps ``conflict``.
+        """
+        from .board import built_keys
+
+        banks = [b for b in self.state.get("banks", []) if b["plan"]["resource"] == resource and not b.get("ready")]
+        if len(banks) != 1 or banks[0].get("pending_extension"):
+            return None
+        bank = banks[0]
+        built = built_keys(obs)
+        if any((e["name"], e["position"]["x"], e["position"]["y"]) in built for e in bank["plan"]["entities"]):
+            return None
+        replans = self.state.setdefault("bank_replans", {})
+        if replans.get(resource, 0) >= MAX_BANK_REPLANS:
+            return None
+        replans[resource] = replans.get(resource, 0) + 1
+        self.state["banks"].remove(bank)
+        _atomic_json(self.path, self.state)
+        return {
+            "status": "waiting",
+            "reason": "unbuilt mining bank meets a registered block; planning it again",
+            "evidence": {k: conflict.get(k) for k in ("block", "conflicting_block")},
+        }
+
+    def planned_keepouts(self, obs, board, resource):
+        """What other plans hold that a new ``resource`` bank must not use.
+
+        The same rule as ``board.starter_keepouts``: what is planned is
+        published and every planner reads it. Returns
+
+        * ``registered``: ``[(name, reserved area)]`` of every board block and
+          every saved bank (banks of the three parallel lanes share this
+          instance; a bank saved but not yet published counts too);
+        * ``planned``: ``board.planned_unbuilt_hardware`` tiles of those blocks,
+          of every saved bank's plan (bridge poles outside its reserved area
+          included) and of pending starter cells (``board.pending_starter_cells``),
+          within ``PLANNED_TILE_REACH`` of the patch seed;
+        * ``tile_areas``: those tiles as one-tile areas, so the site search and
+          the exit search treat them like reservations (the coal bank's exit
+          and output access ran over the reserved feed belt, seed 2005199778).
+        """
+        from .board import _Footprints, pending_starter_cells, planned_unbuilt_hardware
+
+        blocks = {k: v for k, v in (board.get("blocks") or {}).items() if isinstance(v, dict)}
+        registered = [(k, v["reserved_area"]) for k, v in sorted(blocks.items()) if v.get("reserved_area")]
+        for index, bank in enumerate(self.state.get("banks", [])):
+            name = "mining_outposts:%s:%d" % (bank["plan"].get("resource"), index)
+            entities = list(bank["plan"].get("entities", []))
+            entities += list((bank.get("pending_extension") or {}).get("plan", {}).get("entities", []))
+            blocks[name] = {"entities": entities}
+            if bank.get("reserved_area"):
+                registered.append((name, bank["reserved_area"]))
+        blocks.update(pending_starter_cells(self.path.parent, obs))
+        planned = planned_unbuilt_hardware(_Footprints(), obs, blocks)
+        known = (obs.get("resources", {}).get(resource) or {}).get("position")
+        if isinstance(known, dict) and all(isinstance(known.get(k), (int, float)) for k in ("x", "y")):
+            reach = PLANNED_TILE_REACH
+            planned = {
+                t: row
+                for t, row in planned.items()
+                if abs(t[0] - known["x"]) <= reach and abs(t[1] - known["y"]) <= reach
+            }
+        tile_areas = [[[x - 0.5, y - 0.5], [x + 0.5, y + 0.5]] for x, y in sorted(planned)]
+        return {"registered": registered, "planned": planned, "tile_areas": tile_areas}
 
     def prepare(self, obs, resource, count, *, extra_reservations=()):
         from .paired_mining import prepare_new_bank
@@ -148,10 +240,15 @@ class MiningOutposts:
         reservations += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
         reservations += [b["reserved_area"] for b in self.state.get("banks", []) if b.get("reserved_area")]
         reservations += list(extra_reservations)
+        shared = self.planned_keepouts(obs, board, resource)
+        reservations += shared["tile_areas"]
+        options = {k: shared[k] for k in ("registered", "planned") if shared[k]}
         exit_record = site_exit(getattr(self, "site", None), obs.get("world_id"), resource)
         if exit_record is None:
-            return prepare_new_bank(self.game, self.builder, obs, resource, count, reservations)
-        result = prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record)
+            return prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, **options)
+        result = prepare_new_bank(
+            self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record, **options
+        )
         if result.get("ok") or not exit_record:
             return result
         # The planned side had no usable site; try the zone's other sides
@@ -159,7 +256,9 @@ class MiningOutposts:
         tried = [exit_record["side"]]
         for alternative in alternative_exits(exit_record):
             tried.append(alternative["side"])
-            other = prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, site_exit=alternative)
+            other = prepare_new_bank(
+                self.game, self.builder, obs, resource, count, reservations, site_exit=alternative, **options
+            )
             if other.get("ok"):
                 return other
         return dict(result, exit_sides_tried=tried)
@@ -629,7 +728,7 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             return dict(result, evidence=dict(evidence, power_bridge_replan=failure))
         bank["power_bridge_replans"] = count + 1
         _atomic_json(self.path, self.state)
-        reservation = self.publish_reservations(obs)
+        reservation = self.publish_reservations(obs, bank["plan"]["resource"])
         if reservation:
             return reservation
         return self.builder.ensure_plan(obs, bank["plan"], **({"defer": defer} if defer else {}))
@@ -718,10 +817,10 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             self.state = {"world_id": obs["world_id"], "banks": []}
         if self.state["world_id"] != obs["world_id"]:
             return {"status": "blocked", "reason": "outpost_world_changed"}
-        reservation = self.publish_reservations(obs)
-        if reservation:
-            return reservation
         resource, target = parameters["resource"], parameters["rate_per_minute"]
+        reservation = self.publish_reservations(obs, resource)
+        if reservation:
+            return self._replan_conflicting_bank(obs, resource, reservation) or reservation
         banks = [b for b in self.state["banks"] if b["plan"]["resource"] == resource]
         for bank in banks:
             from .depleted_drill_retirement import effective_mining_plan
@@ -765,7 +864,7 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
                     }
                 bank["pending_extension"] = extension
                 _atomic_json(self.path, self.state)
-            reservation = self.publish_reservations(obs)
+            reservation = self.publish_reservations(obs, resource)
             if reservation:
                 return reservation
             from .mining_layout_policy import validate_retained_units
@@ -798,12 +897,17 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             count = min(8, math.ceil((target - rate) / metadata["rate"]))
             pending = self.prepare(obs, resource, count)
             if not pending.get("ok"):
-                return {"status": "blocked", "reason": pending.get("reason", "mining_bank_preflight_failed")}
+                detail = {k: pending[k] for k in ("candidate_failures", "exit_sides_tried") if k in pending}
+                return {
+                    "status": "blocked",
+                    "reason": pending.get("reason", "mining_bank_preflight_failed"),
+                    **({"evidence": detail} if detail else {}),
+                }
             self.state["banks"].append(pending)
             _atomic_json(self.path, self.state)
-        reservation = self.publish_reservations(obs)
+        reservation = self.publish_reservations(obs, resource)
         if reservation:
-            return reservation
+            return self._replan_conflicting_bank(obs, resource, reservation) or reservation
         coverage = self._construction_coverage(obs, pending)
         if coverage is not None:
             return coverage
