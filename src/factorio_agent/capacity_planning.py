@@ -58,14 +58,15 @@ class CapacityConfig:
 
     # Most cells added by one decision, and the capability's absolute limit.
     max_step: int = 2
-    # Every burner cell is hand-fuelled by the one actor, a cost the time
-    # comparison does not see. On a live run the planner grew iron 1 -> 8
-    # cells in four steps, then fuelling them slowed everything else. The
-    # capability allows 8 (max_cells, still the cap for coal, which must fuel
-    # the rest); plate and stone cells stop at max_plate_cells because
-    # electric mining replaces them soon after.
+    # The capability allows 8 cells per resource (max_cells; also the coal cap).
     max_cells: int = 8
-    max_plate_cells: int = 4
+    # Plate and stone cells: at most max_plate_cells; how many below that is
+    # the time comparison against the lookahead demand. A fixed cap of 4
+    # starved the early game (seed 283895142: smelting finished at 48.8 min,
+    # the next steps needed 1000+ iron while 4 iron cells made 60/min). The
+    # fuel new cells burn is covered by the coal rule (extra_fuel_burn) and
+    # hand-fuelling by FUEL_BATCH; an earlier 1 -> 8 iron build-up predates both.
+    max_plate_cells: int = 8
     # Items/minute of one starter cell when the receipt has no measurement:
     # a burner mining drill mines 0.25 ore/s = 15/min.
     default_cell_rate: float = 15.0

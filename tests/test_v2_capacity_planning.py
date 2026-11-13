@@ -125,12 +125,20 @@ class TimeComparisonTests(unittest.TestCase):
         self.assertEqual(len(plan_capacity({"iron-plate": short}, {"iron-plate": 400})), 1)
 
     def test_max_cells_cap(self):
-        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=3)}, {})
-        self.assertEqual(decisions[0].target_cells, 4)
-        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=4)}, {}), [])
-        roomy = CapacityConfig(max_plate_cells=8)
-        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7)}, {}, config=roomy)
+        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7)}, {})
         self.assertEqual(decisions[0].target_cells, 8)
+        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=8)}, {}), [])
+        tight = CapacityConfig(max_plate_cells=4)
+        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=3)}, {}, config=tight)
+        self.assertEqual(decisions[0].target_cells, 4)
+
+    def test_plate_cells_follow_lookahead_demand_past_four(self):
+        """Seed 283895142: 4 iron cells at 60/min against 1000+ iron of upcoming steps."""
+        four = iron(
+            shortfall=0, installed_live_cells=4, productive_cells=4, produced_per_minute=60.0, net_per_minute=20.0
+        )
+        decisions = plan_capacity({"iron-plate": four}, {"iron-plate": 1200})
+        self.assertEqual((decisions[0].current_cells, decisions[0].target_cells), (4, 6))
 
     def test_build_seconds_from_evidence(self):
         decision = plan_capacity({"iron-plate": iron(shortfall=100, build_seconds=60)}, {})[0]
