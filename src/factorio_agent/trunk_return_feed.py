@@ -21,8 +21,12 @@ Rules (docs/v2/PLANNERS.md "Carried surplus", LAYOUT_PRINCIPLES.md "Return feed"
    trunk has spare belt capacity (``belt rate x built lanes > proven supply``)
    and splitters are enabled (logistics). Before that the carried surplus rule
    is unchanged (consumers with room, then depots).
-2. Site (:meth:`TrunkReturnFeed.prepare`): trunk row ``r >= 1`` of the first
-   straight run below every recorded tap / lane row, the
+2. Site (:meth:`TrunkReturnFeed.prepare`): trunk row ``r >= 1`` of a straight
+   run (``mine_trunk.trunk_segments``: the first run from the port, then the
+   runs after each turn; a consumer route often turns right after the port,
+   seeds 1188507449 / 4031765348 had a one-tile first run) below every recorded
+   tap / lane row of that run, runs past the first tapped run only under the
+   ``site:past_first_tap`` remedy; the
    nearest the head first; the elbow shape first (it stays beside the head),
    then the column; the side without taps first. Inserter: electric when a
    standing pole of the patch bank covers its tile (``blocks.params.pole_radius``),
@@ -161,7 +165,11 @@ def receipt(root, obs, catalog) -> dict | None:
             surplus=excess + stored,
             recent_trips=trips,
             spare_per_minute=round(capacity - supply, 3),
-            observed=bool(isinstance(obs.get("entities"), list) and mine_trunk.trace_trunk(obs, port)),
+            # A feed needs a straight run of three belts (behind, T, ahead) on some run of the trunk.
+            observed=bool(
+                isinstance(obs.get("entities"), list)
+                and any(len(run) >= 3 for _, run in mine_trunk.trunk_segments(obs, port))
+            ),
             built=entry.get("phase") in ("stock", "done"),
         )
         rows[item] = row
@@ -261,8 +269,8 @@ class TrunkReturnFeed:
         return return_feed.BURNER_ARM if item in FUELS else None
 
     def prepare(self, obs, item) -> dict:
-        from .board import blocks_without_bus, surface_conflict
-        from .planning import preflight
+        from . import plan_needs, remedy
+        from .board import blocks_without_bus
 
         mining = self._mining()
         if mining.get("world_id") != obs["world_id"]:
@@ -271,12 +279,22 @@ class TrunkReturnFeed:
         if bank is None:
             return {"ok": False, "reason": "return_feed_no_patch_bank"}
         key = mine_trunk.trunk_key(bank)
-        run = mine_trunk.trace_trunk(obs, bank["plan"]["ports"][0])
-        if len(run) < 3:
-            return {"ok": False, "reason": "return_feed_trunk_not_observed", "trunk": key}
+        segments = mine_trunk.trunk_segments(obs, bank["plan"]["ports"][0])
+        if not segments:
+            return {
+                "ok": False,
+                "reason": "return_feed_trunk_not_observed",
+                "trunk": key,
+                "plan_needs": plan_needs.make(
+                    "plan",
+                    "return_feed_trunk_not_observed",
+                    item=item,
+                    at=bank["plan"]["ports"][0]["position"],
+                    change=f"the {item} trunk belts from the bank port {key} observed",
+                ),
+            }
         others = [s for s in mine_trunk.stations(self.root, obs["world_id"], key) if s.get("kind") != "return"]
-        first = min((int(s["along"]) for s in others if s.get("segment", 0) == 0), default=len(run))
-        tapped = {s.get("side") for s in others if s.get("kind") != "lane"}
+        past_taps = bool(remedy.option("return_feed_past_taps", False))
         board = _read(self.root / "pcb-board.json")
         blocks = blocks_without_bus(board) if board.get("world_id") == obs["world_id"] else {}
         live = [e for e in obs.get("entities", []) if isinstance(e.get("position"), dict) and e.get("name")]
@@ -286,51 +304,85 @@ class TrunkReturnFeed:
             port = (s.get("port") or {}).get("position")
             if isinstance(port, dict):
                 occupied.add((math.floor(port["x"]) + 0.5, math.floor(port["y"]) + 0.5))
-        reasons, attempts = [], 0
-        # Row r of the first run: a trunk belt behind (r >= 1), r below every tap / lane row.
-        for r in range(1, min(first, len(run) - 1)):
-            ahead = None
-            if run[r + 1].get("name") == "splitter" and run[r].get("direction") in return_feed.VECTORS:
-                vx, vy = return_feed.VECTORS[run[r]["direction"]]  # the next tap's splitter, on tile T + v
-                ahead = {(_xy(run[r])[0] + vx, _xy(run[r])[1] + vy): run[r + 1]}
-            rows = return_feed.layouts(run[r - 1 : r + 2], taken=occupied, shapes=SHAPES, ahead=ahead)
-            rows = [x for x in rows if _xy(x["belt"]) == _xy(run[r])]
-            rows.sort(key=lambda x: (SHAPES.index(x.get("shape", "column")), self._side(x) in tapped))
-            for row in rows:
-                if attempts >= PREPARE_ATTEMPTS:
-                    break
-                sign = 1 if self._side(row) == "right" else -1
-                arm = self._arm(obs, bank, row, item)
-                if arm is None:
-                    reasons.append("return_feed_inserter_unpowered")
-                    continue
-                row = return_feed.layout_at(row["belt"], sign, row.get("shape", "column"), arm=arm)
-                hardware = [row["splitter"], *row["entities"]]
-                if surface_conflict(self.builder, obs, blocks, row["entities"]) is not None:
-                    reasons.append("return_feed_meets_planned_hardware")
-                    continue
-                attempts += 1
-                check = preflight(self.game, self.builder, obs, hardware, ignored_units=(run[r]["unit_number"],))
-                if not check.get("ok"):
-                    reasons.append(str(check.get("reason", "return_feed_preflight_failed")))
-                    continue
-                return {
-                    "ok": True,
-                    "world_id": obs["world_id"],
-                    "catalog_fingerprint": getattr(self.catalog, "fingerprint", None),
-                    "phase": "side",
-                    "trunk": key,
-                    "row": r,
-                    "layout": dict(row, belt_unit=run[r]["unit_number"]),
-                    "clear_obstacles": list(check.get("clear_obstacles") or []),
-                }
+        reasons, attempts, free_rows, runs_searched = [], 0, 0, 0
+        # Straight runs of the trunk in flow order (a consumer route often turns right after the
+        # port, so the first run can be one tile): row r of a run has a trunk belt behind (r >= 1)
+        # and lies below every tap / lane row of that run. The search ends at the first run that
+        # carries a tap (the feed stays upstream of every tap) unless the remedy relaxes that.
+        for index, (_head, run) in enumerate(segments):
+            own = [s for s in others if s.get("segment", 0) == index]
+            first = min((int(s["along"]) for s in own), default=len(run))
+            tapped = {s.get("side") for s in own if s.get("kind") != "lane"}
+            runs_searched += 1
+            free_rows += max(0, min(first, len(run) - 1) - 1)
+            for r in range(1, min(first, len(run) - 1)):
+                found = self._row_site(obs, bank, item, run, r, occupied, tapped, blocks, reasons, attempts)
+                attempts = found.pop("attempts")
+                if found.get("ok"):
+                    return dict(found, trunk=key, segment=index)
+            if own and not past_taps:
+                break
         return {
             "ok": False,
             "reason": "no_return_feed_site_at_the_trunk_head",
             "trunk": key,
-            "rows_before_first_tap": max(0, min(first - 1, len(run) - 1) - 1),
+            "rows_before_first_tap": free_rows,
+            "runs_searched": runs_searched,
             "rejected": sorted(set(reasons))[:8],
+            "plan_needs": plan_needs.make(
+                "site",
+                "no_return_feed_site_at_the_trunk_head",
+                item=item,
+                at=bank["plan"]["ports"][0]["position"],
+                tried=attempts,
+                rows=free_rows,
+                rejected_by={r: reasons.count(r) for r in set(reasons)},
+                change=f"a straight {item} trunk row (belt behind and ahead) before the first tap "
+                "with free tiles for the chest, the arm and the splitter's unused output",
+            ),
         }
+
+    def _row_site(self, obs, bank, item, run, r, occupied, tapped, blocks, reasons, attempts) -> dict:
+        """The first fitting feed layout on trunk row ``run[r]`` (``ok``), else ``{"attempts"}``."""
+        from .board import surface_conflict
+        from .planning import preflight
+
+        ahead = None
+        if run[r + 1].get("name") == "splitter" and run[r].get("direction") in return_feed.VECTORS:
+            vx, vy = return_feed.VECTORS[run[r]["direction"]]  # the next tap's splitter, on tile T + v
+            ahead = {(_xy(run[r])[0] + vx, _xy(run[r])[1] + vy): run[r + 1]}
+        rows = return_feed.layouts(run[r - 1 : r + 2], taken=occupied, shapes=SHAPES, ahead=ahead)
+        rows = [x for x in rows if _xy(x["belt"]) == _xy(run[r])]
+        rows.sort(key=lambda x: (SHAPES.index(x.get("shape", "column")), self._side(x) in tapped))
+        for row in rows:
+            if attempts >= PREPARE_ATTEMPTS:
+                break
+            sign = 1 if self._side(row) == "right" else -1
+            arm = self._arm(obs, bank, row, item)
+            if arm is None:
+                reasons.append("return_feed_inserter_unpowered")
+                continue
+            row = return_feed.layout_at(row["belt"], sign, row.get("shape", "column"), arm=arm)
+            hardware = [row["splitter"], *row["entities"]]
+            if surface_conflict(self.builder, obs, blocks, row["entities"]) is not None:
+                reasons.append("return_feed_meets_planned_hardware")
+                continue
+            attempts += 1
+            check = preflight(self.game, self.builder, obs, hardware, ignored_units=(run[r]["unit_number"],))
+            if not check.get("ok"):
+                reasons.append(str(check.get("reason", "return_feed_preflight_failed")))
+                continue
+            return {
+                "ok": True,
+                "attempts": attempts,
+                "world_id": obs["world_id"],
+                "catalog_fingerprint": getattr(self.catalog, "fingerprint", None),
+                "phase": "side",
+                "row": r,
+                "layout": dict(row, belt_unit=run[r]["unit_number"]),
+                "clear_obstacles": list(check.get("clear_obstacles") or []),
+            }
+        return {"attempts": attempts}
 
     @staticmethod
     def _side(layout) -> str:
@@ -348,7 +400,7 @@ class TrunkReturnFeed:
             "side": self._side(layout),
             "along": entry["row"] - STATION_BACK,
             "row": entry["row"],
-            "segment": 0,
+            "segment": int(entry.get("segment", 0)),
             "splitter": deepcopy(layout["splitter"]),
             "entities": deepcopy([layout["splitter"], *layout["entities"]]),
             "remove": [dict(layout["belt"]["position"])],
@@ -485,19 +537,21 @@ class TrunkReturnFeed:
         bank = mine_trunk.find_bank(self._mining().get("banks"), entry["trunk"])
         if bank is None:
             return None
-        run = mine_trunk.trace_trunk(obs, bank["plan"]["ports"][0])
-        r = entry["row"]
+        segments = mine_trunk.trunk_segments(obs, bank["plan"]["ports"][0])
+        index, r = int(entry.get("segment", 0)), entry["row"]
+        run = segments[index][1] if index < len(segments) else []
         if len(run) <= r + 1 or run[r].get("unit_number") != split.get("unit_number"):
             return None
         return {
             "tick": obs.get("tick"),
             "trunk": entry["trunk"],
             "row": r,
+            "segment": index,
             "splitter": dict(split["position"]),
             "input_priority": split.get("splitter_input_priority"),
             "arm": return_feed.arm_spec(layout)["name"],
             "chest": dict(entry["chest"]),
             "chest_stock": int((chest.get("inventory") or {}).get(item, 0) or 0),
-            "trunk_tiles_traced": len(run),
+            "trunk_tiles_traced": sum(len(s[1]) for s in segments),
             "scope": "feed as planned, trunk belt replaced, the trunk passes the splitter; no return rate",
         }

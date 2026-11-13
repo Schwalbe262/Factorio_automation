@@ -113,7 +113,15 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
         ROUTE_RELAX_2,
     ),
     "steam_expansion": (ROUTE_RELAX_1, ROUTE_RELAX_2),
-    "trunk_return_feed": (ROUTE_RELAX_1,),
+    "trunk_return_feed": (
+        Rung(
+            "site:past_first_tap",
+            "site",
+            {"return_feed_past_taps": True},
+            kinds=("site",),
+            note="trunk runs past the first tapped run (returned items reach only the later taps)",
+        ),
+    ),
     "smelting_district": (ROUTE_RELAX_1,),
     "planned_main_bus": (ROUTE_RELAX_1,),
     "brick_production": (ROUTE_RELAX_1, ROUTE_RELAX_2),
