@@ -383,6 +383,19 @@ class ConsumerTests(unittest.TestCase):
             state = dict(h.state, taps=[dict(t, built=False) for t in taps])
             staged = state["plan"]
             self.assertIs(pb.build_plan(state, staged), staged)  # not cut over yet: the belt stays
+            # aud-1114-0614 seed 375147794: the owner's cut-over has begun (splitter standing, or a
+            # recorded trunk belt mined) before it marks the tap built: the bus wants no belt back.
+            tap = state["taps"][0]
+            trunk = [
+                {"name": "transport-belt", "position": dict(p), "direction": 0, "unit_number": u}
+                for t in state["taps"]
+                for p, u in zip(t["remove"], t["remove_units"])
+            ]
+            self.assertIs(pb.build_plan(state, staged, {"entities": trunk}), staged)
+            mined = {"entities": trunk[len(tap["remove"]) :]}
+            self.assertIn(xy(tap["splitter"]), {xy(e) for e in pb.build_plan(state, staged, mined)["entities"]})
+            standing = {"entities": trunk + [dict(tap["splitter"])]}
+            self.assertIsNot(pb.build_plan(state, staged, standing), staged)
             state["taps"][0]["built"] = True
             plan = pb.build_plan(state, staged)
             names = {xy(e): e["name"] for e in plan["entities"]}

@@ -348,7 +348,7 @@ def effective_plan(state: dict) -> dict:
     return _tapped(plan, taps, ports)
 
 
-def build_plan(state: dict, plan: dict) -> dict:
+def build_plan(state: dict, plan: dict, obs: dict | None = None) -> dict:
     """``plan`` (staged or full) with every built tap applied, for the bus's own build and splice.
 
     A consumer may cut its tap into a built trunk while the bus is still
@@ -356,9 +356,28 @@ def build_plan(state: dict, plan: dict) -> dict:
     trunk belt back under that splitter (pace1 seeds 1634401926, 1193005910:
     "reserved block placement is obstructed" for 15 minutes, no bus, no red science).
     A recorded tap that is not built yet keeps the belt until its owner cuts it over.
+    With ``obs``, a tap whose cut-over has started counts too: its splitter stands, or one of
+    the trunk belts it recorded (``remove_units``) is gone. The owner marks the tap built only
+    on its next step; in between the bus wanted its belt back under the splitter (aud-1114-0614
+    seed 375147794: the transport-belt row mined (-82.5,52.5) and built its splitter; the bus
+    blocked "reserved block placement is obstructed" for the rest of the run).
     """
-    taps = [tap for tap in state.get("taps", []) if tap.get("built")]
+    taps = [tap for tap in state.get("taps", []) if tap.get("built") or (obs is not None and _cutting(obs, tap))]
     return _tapped(plan, taps, plan["ports"]) if taps else plan
+
+
+def _cutting(obs: dict, tap: dict) -> bool:
+    """The tap's owner has begun its cut-over: its splitter stands, or a recorded trunk belt unit is gone."""
+    live = {(e["name"], *xy(e)): e for e in obs.get("entities", ())}
+    splitter = tap.get("splitter")
+    if isinstance(splitter, dict) and ("splitter", *xy(splitter)) in live:
+        return True
+    units = tap.get("remove_units") or ()
+    for position, unit in zip(tap.get("remove") or (), units):
+        old = live.get(("transport-belt", *xy({"position": position})))
+        if unit is not None and (old is None or old.get("unit_number") != unit):
+            return True
+    return False
 
 
 def publication(state: dict) -> dict:
@@ -800,7 +819,7 @@ class PlannedBus:
             # Early start: trunks and feed routes are built while the district is
             # still building; entities waiting for coming research or contested plates wait.
             defer = deferral(self.root, obs, self.catalog, "planned_main_bus")
-            staged = build_plan(self.state, self.state["staged_plan"])
+            staged = build_plan(self.state, self.state["staged_plan"], obs)
             result = self.builder.ensure_plan(obs, staged, **({"defer": defer} if defer else {}))
             if result.get("status") != "succeeded":
                 return result
@@ -818,7 +837,7 @@ class PlannedBus:
             for action in (self._splice_district(obs), self._cut_over(obs)):
                 if action is not None:
                     return action
-            result = self.builder.ensure_plan(obs, build_plan(self.state, self.state["plan"]))
+            result = self.builder.ensure_plan(obs, build_plan(self.state, self.state["plan"], obs))
             if result.get("status") != "succeeded":
                 return result
             self.state["phase"] = "commission"
