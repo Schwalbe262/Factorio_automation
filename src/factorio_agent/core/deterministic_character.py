@@ -26,6 +26,7 @@ _PROCESSES: dict[str, Any] = {}
 
 BIND_CRAFTING_PLAYER_LUA = r"""
 local name=d and d.crafting_player_name or"FactoryAutomaton"
+if d and d.detached_actor~=nil then return {status="blocked",reason="actor_detached_server_only",player_name=name} end
 local p=nil
 if d and d.crafting_player_index then
  p=game.get_player(d.crafting_player_index)

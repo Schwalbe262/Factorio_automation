@@ -18,6 +18,7 @@ from typing import Any
 import uuid
 
 from .config import AppConfig, load_config
+from ..actor_client import TRIGGER_CRAFT_BEFORE_LUA, TRIGGER_CRAFT_RECORD_LUA
 from .factorio import (
     build_create_no_mod_save_command,
     build_start_no_mod_server_command,
@@ -269,7 +270,7 @@ def start_world(cfg: AppConfig, *, seed: int, new_world: bool = False, backend: 
 _HELPERS = r"""
 local d=storage.deterministic_player
 local a=d and d.actor
-if d and d.crafting_player_index and (not a or not a.valid) then
+if d and d.crafting_player_index and d.detached_actor==nil and (not a or not a.valid) then
  local owner=game.get_player(d.crafting_player_index)
  if owner and owner.name=="FactoryAutomaton" and owner.connected and owner.character and owner.character.valid
     and d.crafting_actor_unit_number and owner.character.unit_number==d.crafting_actor_unit_number then
@@ -571,8 +572,14 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
 local recipe=f.recipes[x.recipe]
 if not recipe or not recipe.enabled then return failure("recipe_locked") end
 if a.crafting_queue_size>=CRAFT_QUEUE_ENTRIES then return success{status="waiting",reason="crafting_queue_busy"} end
+"""
+            body += TRIGGER_CRAFT_BEFORE_LUA
+            body += """
 local n=a.begin_crafting{count=x.count or 1,recipe=x.recipe}
 if n<=0 then return failure("not_craftable") end
+"""
+            body += TRIGGER_CRAFT_RECORD_LUA
+            body += """
 return success{status="running",started=n}
 """
         elif kind == "move":

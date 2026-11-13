@@ -13,15 +13,19 @@ import time
 import uuid
 
 from .deterministic_state import stop_requested
+from ..actor_client import DETACHED_ACTOR_LUA
 
 
 MAX_REPAIR_TICKS = 120
 MAX_REPAIR_PULSES = 20
 
-REPAIR_COMMON_LUA = r"""
+REPAIR_COMMON_LUA = (
+    DETACHED_ACTOR_LUA
+    + r"""
 local function repair_owner(x)
  if not d or d.world_id~=x.expected_world_id or not a or not a.valid
   or a.unit_number~=x.expected_actor_unit or a.force~=f or a.surface~=s then return false end
+ if detached_actor() then return true end
  local p=a.player
  return p and p.connected and p.name=="FactoryAutomaton" and p.character==a
   and d.crafting_player_index==p.index and d.crafting_actor_unit_number==a.unit_number
@@ -78,6 +82,7 @@ local function finish_repair(request)
  return success(result)
 end
 """
+)
 
 BEGIN_REPAIR_LUA = (
     REPAIR_COMMON_LUA
@@ -101,9 +106,11 @@ local count,durability=repair_stock()
  The pulse deadline bounds issued inputs; it is not an autonomous engine timer. ]]
 if count~=1 then return failure("native_repair_single_carried_pack_required") end
 local player=a.player
-if player.controller_type==defines.controllers.remote then player.exit_remote_view()end
-if player.controller_type~=defines.controllers.character or player.character~=a then
- return failure("native_repair_character_controller_required")end
+if player then
+ if player.controller_type==defines.controllers.remote then player.exit_remote_view()end
+ if player.controller_type~=defines.controllers.character or player.character~=a then
+  return failure("native_repair_character_controller_required")end
+elseif not detached_actor() then return failure("native_repair_character_controller_required")end
 local job={request=x.request,world_id=d.world_id,actor_unit=a.unit_number,entity_unit=e.unit_number,
  name=e.name,position=pos(e.position),started_tick=game.tick,deadline=game.tick+120,
  previous_selected=a.selected,last_selected=a.selected,quality=stack.quality.name,health=e.health,
@@ -125,7 +132,7 @@ local job=d.native_repair
 if not job or job.request~=x.request then return failure("native_repair_request_changed") end
 local e=repair_target(job);local cursor=a.cursor_stack
 if game.tick<job.started_tick then job.reason="native_repair_tick_rollback"
-elseif a.player.controller_type~=defines.controllers.character then job.reason="native_repair_controller_changed"
+elseif (a.player and a.player.controller_type~=defines.controllers.character) or (not a.player and not detached_actor()) then job.reason="native_repair_controller_changed"
 elseif not e then job.reason="native_repair_target_changed"
 elseif e.health>=e.max_health then job.reason="native_repair_target_restored"
 elseif game.tick>=job.deadline then job.reason="native_repair_tick_budget_reached"

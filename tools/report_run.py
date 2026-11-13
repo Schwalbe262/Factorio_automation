@@ -144,7 +144,22 @@ def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=Non
         "kernel_totals": kernel,
         "per_job": per_job,
         **incident_report(root, controller),
+        **test_mode_label(root),
     }
+
+
+def test_mode_label(root):
+    """Client-free test runs (actor_client mode none): every claim is a test-mode claim."""
+    from factorio_agent.actor_client import test_mode
+
+    label = test_mode(root)
+    if not label:
+        return {}
+    return dict(
+        label,
+        claims_scope="TEST MODE client_free: hand-craft trigger technologies were script-credited after the "
+        "real craft; milestones are test-mode results, not proof-run results",
+    )
 
 
 def incident_report(root, controller):
@@ -205,9 +220,11 @@ def main(argv=None):
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=1))
         return
+    if data.get("test_mode"):
+        print("TEST MODE " + data["test_mode"] + ": " + json.dumps(data.get("script_credited_triggers")))
     for key, value in data.items():
         if key == "milestones":
-            print("milestones:")
+            print("milestones (TEST MODE):" if data.get("test_mode") else "milestones:")
             for row in value:
                 print("  {minute:6.1f} min  {capability}  ({reason})".format(**row))
         elif key == "per_job":

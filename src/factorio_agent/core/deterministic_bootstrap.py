@@ -99,7 +99,25 @@ class DeterministicBootstrap:
         ):
             return self.ensure_item(observation, "lab", 1)
         if not techs.get("automation-science-pack"):
-            actor = self.game.query("return {ok=true,associated=a.player~=nil}")
+            # The client detach (actor_client) happens only after this trigger
+            # fired; past it a hand craft needs no credit. A detached actor
+            # here means the transition rule was broken: never craft uncredited.
+            actor = self.game.query(
+                "local r=d.detached_actor;local c=nil;for i=#(d.trigger_crafts or {}),1,-1 do "
+                'local q=d.trigger_crafts[i];if q.technology=="automation-science-pack" and q.item=="lab" then c=q;break end end '
+                "local queued=false;for _,q in pairs(a.crafting_queue or {}) do if c and q.recipe==c.recipe then queued=true end end "
+                "return {ok=true,associated=a.player~=nil,detached=r~=nil,client_free=r~=nil and r.mode=='none',"
+                "craft=c and {tick=c.tick,min_craft_ticks=c.min_craft_ticks,item_count_before=c.item_count_before,"
+                "consumed_any=c.consumed_any} or nil,queued=queued,tick=game.tick}"
+            )
+            if actor.get("client_free"):
+                return self._client_free_lab_trigger(observation, actor)
+            if actor.get("detached"):
+                return _report(
+                    "blocked",
+                    "actor detached before the lab trigger: hand crafts are no longer credited",
+                    dependency="crafting_player",
+                )
             if not actor.get("associated"):
                 return _report(
                     "blocked",
@@ -117,6 +135,27 @@ class DeterministicBootstrap:
             technologies=["steam-power", "electronics", "automation-science-pack"],
             lab_count=self._count(observation, "lab"),
         )
+
+    def _client_free_lab_trigger(self, observation: dict[str, Any], actor: dict[str, Any]) -> dict[str, Any]:
+        """Client-free test mode (actor_client ``none``): the one script-credited trigger.
+
+        The lab is crafted for real by the normal craft action (recorded in the
+        world with what it consumed); once it is finished and in the inventory
+        the trigger the engine would have fired for a connected player is
+        credited by ``credit_hand_craft_trigger``. Nothing else is granted."""
+        craft = actor.get("craft") or {}
+        have = self._count(observation, "lab")
+        if not craft or not craft.get("consumed_any") or have < craft.get("item_count_before", 0) + 1:
+            # No recorded real craft of a lab that is still in hand: craft one.
+            return self.ensure_item(observation, "lab", have + 1)
+        if actor.get("queued") or actor.get("tick", 0) < craft["tick"] + craft.get("min_craft_ticks", 0):
+            return _report("waiting", "waiting for the real lab hand craft to finish", craft_tick=craft["tick"])
+        return {
+            "type": "credit_hand_craft_trigger",
+            "technology": "automation-science-pack",
+            "item": "lab",
+            "reason": "test mode client_free: credit the craft-1-lab trigger after the real craft",
+        }
 
     @staticmethod
     def _count(observation: dict[str, Any], item: str) -> int:

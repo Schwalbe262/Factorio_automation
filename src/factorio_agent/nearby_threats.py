@@ -8,6 +8,8 @@ import json
 import math
 from pathlib import Path
 
+from .actor_client import DETACHED_ACTOR_LUA
+
 
 PRODUCTIVE_NAMES = frozenset(
     {
@@ -165,6 +167,7 @@ def attack_contract(report, catalog):
     if not (
         report.get("actor", {}).get("character_controller")
         or report.get("actor", {}).get("remote_character_controller")
+        or report.get("actor", {}).get("detached_character")
     ):
         reasons.append("ordinary_owned_character_required_before_combat")
     # The site planner and actual-combat executor are intentionally not part of
@@ -343,7 +346,9 @@ class NearbyThreats:
         return self.game.query(body)
 
 
-NEARBY_THREATS_SURVEY_LUA = r"""
+NEARBY_THREATS_SURVEY_LUA = (
+    DETACHED_ACTOR_LUA
+    + r"""
 local args=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=args.world_id then return {ok=false,reason="nearby_threats_native_world_changed"}end
 if s.name~="nauvis"then return {ok=false,reason="nearby_threats_charted_nauvis_only"}end
@@ -461,7 +466,8 @@ local actor={};if a and a.valid then
   controller_type=a.player and a.player.controller_type,character_controller=a.player and a.player.controller_type==defines.controllers.character,
   remote_character_controller=a.player and a.player.controller_type==defines.controllers.remote and a.player.connected
    and a.player.name=="FactoryAutomaton"and a.player.character==a and d.crafting_player_index==a.player.index
-   and d.crafting_actor_unit_number==a.unit_number}
+   and d.crafting_actor_unit_number==a.unit_number,
+  detached_character=detached_actor()}
 end
 return {ok=true,tick=game.tick,world_id=d.world_id,surface_name=s.name,surface_index=s.index,
  force_index=f.index,force_name=f.name,enemy_force_index=enemy.index,enemy_force_name=enemy.name,hostile=hostile,
@@ -469,6 +475,7 @@ return {ok=true,tick=game.tick,world_id=d.world_id,surface_name=s.name,surface_i
  candidate_chunks=#chunk_list,charted_chunks=charted,truncated=truncated,targets=targets,friendly_guns=guns,
  gun=gun,ammo=ammo,ammo_options={ammo,ammunition("piercing-rounds-magazine")},recipes_enabled=recipes,force_modifiers=modifiers,actor=actor}
 """
+)
 
 
 BASTION_PREFLIGHT_LUA = r"""
