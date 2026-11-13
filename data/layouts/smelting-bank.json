@@ -1,0 +1,682 @@
+{
+ "catalog_fingerprint": "284d4776bc3ab0b4cab69291afd367fac84c46ea17689a20010eb68de609f26d",
+ "entries": {
+  "12x1/outer/steel-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 2,
+     "single_lane_feed": 2
+    },
+    "buildable": false,
+    "coal_per_min_full": 32.4,
+    "counts": {
+     "belts": 72,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     48,
+     12
+    ],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 900.0,
+     "slots": 20
+    },
+    "id": "smelt-12x1-steel",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 16.0,
+    "power_kw": 117.6,
+    "power_kw_full": 705.6,
+    "rate_full": 900.0,
+    "rate_now": 150.0,
+    "raw_full": 893.5,
+    "raw_total": 243.5,
+    "saturates_belt": true,
+    "slots": 12,
+    "units": 1
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 12,
+    "units": 1
+   },
+   "scores": {
+    "entities_full": 229,
+    "raw_full": 893.5
+   }
+  },
+  "12x1/outer/stone-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 2,
+     "single_lane_feed": 2
+    },
+    "buildable": true,
+    "coal_per_min_full": 32.4,
+    "counts": {
+     "belts": 72,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     48,
+     12
+    ],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 450.0,
+     "slots": 20
+    },
+    "id": "smelt-12x1-stone",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 8.0,
+    "power_kw": 117.6,
+    "power_kw_full": 705.6,
+    "rate_full": 450.0,
+    "rate_now": 75.0,
+    "raw_full": 629.5,
+    "raw_total": 199.5,
+    "saturates_belt": false,
+    "slots": 12,
+    "units": 1
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 12,
+    "units": 1
+   },
+   "scores": {
+    "entities_full": 229,
+    "raw_full": 629.5
+   }
+  },
+  "12x2/outer/steel-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 4,
+     "single_lane_feed": 4
+    },
+    "buildable": false,
+    "coal_per_min_full": 64.8,
+    "counts": {
+     "belts": 132,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     48,
+     24
+    ],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 1800.0,
+     "slots": 44
+    },
+    "id": "smelt-12x2-steel",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 16.0,
+    "power_kw": 117.6,
+    "power_kw_full": 1411.2,
+    "rate_full": 1800.0,
+    "rate_now": 150.0,
+    "raw_full": 1787.0,
+    "raw_total": 357.0,
+    "saturates_belt": true,
+    "slots": 12,
+    "units": 2
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 12,
+    "units": 2
+   },
+   "scores": {
+    "entities_full": 458,
+    "raw_full": 1787.0
+   }
+  },
+  "12x2/outer/stone-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 4,
+     "single_lane_feed": 4
+    },
+    "buildable": true,
+    "coal_per_min_full": 64.8,
+    "counts": {
+     "belts": 132,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     48,
+     24
+    ],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 900.0,
+     "slots": 44
+    },
+    "id": "smelt-12x2-stone",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 8.0,
+    "power_kw": 117.6,
+    "power_kw_full": 1411.2,
+    "rate_full": 900.0,
+    "rate_now": 75.0,
+    "raw_full": 1259.0,
+    "raw_total": 313.0,
+    "saturates_belt": false,
+    "slots": 12,
+    "units": 2
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 12,
+    "units": 2
+   },
+   "scores": {
+    "entities_full": 458,
+    "raw_full": 1259.0
+   }
+  },
+  "24x1/outer/steel-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "capacity_shortfall": 2,
+     "side_load_before_splitter": 2
+    },
+    "buildable": false,
+    "coal_per_min_full": 64.8,
+    "counts": {
+     "belts": 108,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     84,
+     12
+    ],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "belt_lanes",
+     "max_rate_in_place": 900.0,
+     "slots": 44
+    },
+    "id": "smelt-24x1-steel",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 16.0,
+    "power_kw": 117.6,
+    "power_kw_full": 1411.2,
+    "rate_full": 900.0,
+    "rate_now": 150.0,
+    "raw_full": 1727.5,
+    "raw_total": 297.5,
+    "saturates_belt": true,
+    "slots": 24,
+    "units": 1
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 24,
+    "units": 1
+   },
+   "scores": {
+    "entities_full": 433,
+    "raw_full": 1727.5
+   }
+  },
+  "24x1/outer/stone-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 2,
+     "single_lane_feed": 2
+    },
+    "buildable": true,
+    "coal_per_min_full": 64.8,
+    "counts": {
+     "belts": 108,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     84,
+     12
+    ],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 900.0,
+     "slots": 44
+    },
+    "id": "smelt-24x1-stone",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 8.0,
+    "power_kw": 117.6,
+    "power_kw_full": 1411.2,
+    "rate_full": 900.0,
+    "rate_now": 75.0,
+    "raw_full": 1199.5,
+    "raw_total": 253.5,
+    "saturates_belt": true,
+    "slots": 24,
+    "units": 1
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 24,
+    "units": 1
+   },
+   "scores": {
+    "entities_full": 433,
+    "raw_full": 1199.5
+   }
+  },
+  "24x2/outer/steel-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "capacity_shortfall": 4,
+     "side_load_before_splitter": 4
+    },
+    "buildable": false,
+    "coal_per_min_full": 129.6,
+    "counts": {
+     "belts": 204,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     84,
+     24
+    ],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "belt_lanes",
+     "max_rate_in_place": 1800.0,
+     "slots": 92
+    },
+    "id": "smelt-24x2-steel",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 16.0,
+    "power_kw": 117.6,
+    "power_kw_full": 2822.4,
+    "rate_full": 1800.0,
+    "rate_now": 150.0,
+    "raw_full": 3455.0,
+    "raw_total": 465.0,
+    "saturates_belt": true,
+    "slots": 24,
+    "units": 2
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 24,
+    "units": 2
+   },
+   "scores": {
+    "entities_full": 866,
+    "raw_full": 3455.0
+   }
+  },
+  "24x2/outer/stone-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 4,
+     "single_lane_feed": 4
+    },
+    "buildable": true,
+    "coal_per_min_full": 129.6,
+    "counts": {
+     "belts": 204,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     84,
+     24
+    ],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 1800.0,
+     "slots": 92
+    },
+    "id": "smelt-24x2-stone",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 8.0,
+    "power_kw": 117.6,
+    "power_kw_full": 2822.4,
+    "rate_full": 1800.0,
+    "rate_now": 75.0,
+    "raw_full": 2399.0,
+    "raw_total": 421.0,
+    "saturates_belt": true,
+    "slots": 24,
+    "units": 2
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 24,
+    "units": 2
+   },
+   "scores": {
+    "entities_full": 866,
+    "raw_full": 2399.0
+   }
+  },
+  "6x1/outer/steel-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 2,
+     "single_lane_feed": 2
+    },
+    "buildable": false,
+    "coal_per_min_full": 16.2,
+    "counts": {
+     "belts": 54,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     30,
+     12
+    ],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 450.0,
+     "slots": 8
+    },
+    "id": "smelt-6x1-steel",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 16.0,
+    "power_kw": 117.6,
+    "power_kw_full": 352.8,
+    "rate_full": 450.0,
+    "rate_now": 150.0,
+    "raw_full": 476.5,
+    "raw_total": 216.5,
+    "saturates_belt": false,
+    "slots": 6,
+    "units": 1
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 6,
+    "units": 1
+   },
+   "scores": {
+    "entities_full": 127,
+    "raw_full": 476.5
+   }
+  },
+  "6x1/outer/stone-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 2
+    },
+    "buildable": true,
+    "coal_per_min_full": 16.2,
+    "counts": {
+     "belts": 54,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     30,
+     12
+    ],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 225.0,
+     "slots": 8
+    },
+    "id": "smelt-6x1-stone",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 8.0,
+    "power_kw": 117.6,
+    "power_kw_full": 352.8,
+    "rate_full": 225.0,
+    "rate_now": 75.0,
+    "raw_full": 344.5,
+    "raw_total": 172.5,
+    "saturates_belt": false,
+    "slots": 6,
+    "units": 1
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 6,
+    "units": 1
+   },
+   "scores": {
+    "entities_full": 127,
+    "raw_full": 344.5
+   }
+  },
+  "6x2/outer/steel-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 4,
+     "single_lane_feed": 4
+    },
+    "buildable": false,
+    "coal_per_min_full": 32.4,
+    "counts": {
+     "belts": 96,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     30,
+     24
+    ],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 900.0,
+     "slots": 20
+    },
+    "id": "smelt-6x2-steel",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 16.0,
+    "power_kw": 117.6,
+    "power_kw_full": 705.6,
+    "rate_full": 900.0,
+    "rate_now": 150.0,
+    "raw_full": 953.0,
+    "raw_total": 303.0,
+    "saturates_belt": false,
+    "slots": 6,
+    "units": 2
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "steel-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 6,
+    "units": 2
+   },
+   "scores": {
+    "entities_full": 254,
+    "raw_full": 953.0
+   }
+  },
+  "6x2/outer/stone-furnace": {
+   "descriptor": {
+    "bandwidth_findings": {
+     "side_load_before_splitter": 4
+    },
+    "buildable": true,
+    "coal_per_min_full": 32.4,
+    "counts": {
+     "belts": 96,
+     "furnaces": 4,
+     "inserters": 8,
+     "poles": 4
+    },
+    "footprint": [
+     30,
+     24
+    ],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 450.0,
+     "slots": 20
+    },
+    "id": "smelt-6x2-stone",
+    "input_side": "outer",
+    "output": "shared_centre",
+    "pollution_per_min": 8.0,
+    "power_kw": 117.6,
+    "power_kw_full": 705.6,
+    "rate_full": 450.0,
+    "rate_now": 75.0,
+    "raw_full": 689.0,
+    "raw_total": 259.0,
+    "saturates_belt": false,
+    "slots": 6,
+    "units": 2
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "smelting_bank",
+    "furnace": "stone-furnace",
+    "input_side": "outer",
+    "modules": {},
+    "output": "shared_centre",
+    "slots": 6,
+    "units": 2
+   },
+   "scores": {
+    "entities_full": 254,
+    "raw_full": 689.0
+   }
+  }
+ },
+ "format": "factorio-agent-layout-library",
+ "generator": "smelting-bank-v1",
+ "item": "smelting-bank",
+ "request": {
+  "resource": "iron-ore",
+  "start_per_row": 2
+ }
+}

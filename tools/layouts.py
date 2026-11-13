@@ -4,6 +4,7 @@ Usage:
     python -B tools/layouts.py show <item> [--rate R] [--catalog PATH] [--no-pictures]
     python -B tools/layouts.py show science-block [--frame N] [--rate R]   (the red science block family)
     python -B tools/layouts.py show mining-patch   (the mining patch family on a reference patch)
+    python -B tools/layouts.py show smelting-bank  (the smelting bank shape family)
     python -B tools/layouts.py build [<item> ...] [--catalog PATH]
     python -B tools/layouts.py evidence <runtime dir> [...]   (merge fleet results into the library)
 
@@ -290,8 +291,61 @@ def show_mine(catalog, *, ragged: bool = True, pictures: bool = True, out=print)
     return cands
 
 
+BANK = "smelting-bank"  # ``show smelting-bank``: the smelting bank shape family (smelting_layout)
+BANK_REQUEST = {"resource": "iron-ore", "start_per_row": 2}
+
+
+def describe_bank(d: dict) -> str:
+    c, f = d["counts"], d["counts_full"]
+    pollution = "-" if d["pollution_per_min"] is None else f"{d['pollution_per_min']:g}"
+    return (
+        f"{d['footprint'][0]}x{d['footprint'][1]} tiles, {d['units']} unit(s) x {d['slots']} slots per row; "
+        f"start {c['furnaces']} furnaces, {c['entities']} entities / {f['entities']} full; raw {d['raw_total']:g} now / "
+        f"{d['raw_full']:g} full; rate {d['rate_now']:g}/min now, {d['rate_full']:g} full"
+        f"{' (saturates a belt per unit)' if d['saturates_belt'] else ''}; coal {d['coal_per_min_full']:g}/min full; "
+        f"power {d['power_kw']:g} kW now / {d['power_kw_full']:g} full; pollution {pollution}/min; "
+        f"flow findings at full frame {d['bandwidth_findings'] or 'none'}; "
+        f"{'buildable' if d['buildable'] else 'needs ' + str(d['research'])}"
+    )
+
+
+def show_bank(catalog, *, out=print) -> list[dict]:
+    from factorio_agent import smelting_layout as bank
+
+    found = bank.candidates(catalog, BANK_REQUEST)
+    cands = found["candidates"]
+    out(
+        f"smelting bank shapes (iron, start 2 per row): {len(cands)} candidates from {found['generated']} genomes; "
+        f"library {found['library'] or '-'}; skipped {len(found['skipped'])}"
+    )
+    for why in sorted({s["why"] for s in found["skipped"]}):
+        out(f"  skipped: {why}")
+    for c in cands:
+        out(f"\n[{c['descriptor']['id']}] niche {c['niche']} ({c['source']})")
+        out("  " + describe_bank(c["descriptor"]))
+    for label, demand in (
+        ("default demand 75/min (layout_selection.demand_for)", selection.demand_for(75, tick=0)),
+        ("75/min now, 600/min horizon", selection.Demand(75, 600)),
+    ):
+        out(f"\nselection, {label}:")
+        for ctx in bank.contexts():
+            ranked = bank.rank(cands, demand, ctx)
+            top = ", ".join(f"{o['id']} {o['score']:g}" for o in ranked[:3]) or "nothing fits"
+            out(f"  {ctx.name.ljust(40)} {top}")
+    return cands
+
+
 def build(catalog, items: list[str], directory: Path | None = None, out=print) -> None:
     for item in items:
+        if item == BANK:
+            from factorio_agent import smelting_layout as bank
+
+            path = bank.library_path(directory)
+            doc = bank.build_library(catalog, BANK_REQUEST, previous=bank.load_library(directory))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+            out(f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}: {len(doc['entries'])} entries")
+            continue
         if item == MINE:
             from factorio_agent import mine_layout as mine
 
@@ -393,10 +447,12 @@ def main(argv=None) -> int:
         show_science(catalog, args.rate or 6, args.frame or SCIENCE_FRAME, pictures=not args.no_pictures)
     elif args.command == "show" and args.item == MINE:
         show_mine(catalog, pictures=not args.no_pictures)
+    elif args.command == "show" and args.item == BANK:
+        show_bank(catalog)
     elif args.command == "show":
         show(catalog, args.item, args.rate or TYPICAL_RATES.get(args.item, 10), pictures=not args.no_pictures)
     else:
-        build(catalog, args.items or sorted(TYPICAL_RATES) + [MINE])
+        build(catalog, args.items or sorted(TYPICAL_RATES) + [MINE, BANK])
     return 0
 
 

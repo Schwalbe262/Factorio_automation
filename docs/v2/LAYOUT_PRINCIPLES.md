@@ -211,9 +211,45 @@ stored as entities.
 
 Used by `produce` (and through it the planned `ammo_production` and
 `engine_production` rows), by red science (`science_layout`) and green science
-(`green_layout`), both below. Smelting banks are still a single-variant generator; giving them genomes needs
-the same three things: parameters on the generator (bank length / pairing), a descriptor,
-and their own place loop calling `layout_selection.score`.
+(`green_layout`), both below. Mines (`mine_layout`, "Mine output trunk" below) and smelting bank
+shapes (`smelting_layout`, next) are families too.
+
+### Smelting bank shapes (`smelting_layout.py`)
+
+A wrapper around `smelting.paired_furnace_bank`; the generator, its feed head and its row
+arrangement are not touched (the feed-head work owns them, and a new head lands in every
+candidate). Reference (owner, a saturated early stone furnace setup, principles only): two rows
+facing one shared centre output belt, each row filling its near lane, inputs on the two outer
+belts (ore and coal on their own lanes), units stacked side by side; 24 stone furnaces per row x
+18.75 plates/min = one lane, so 2 x 24 saturate one yellow belt. The district bank is that shape.
+
+* Genome `BankGenome`: `slots` per row (6 / 12 / 24: the reserved row frame), `units` (1 long bank
+  or 2 shorter ones side by side), `input_side` / `output` (`outer` / `shared_centre`, the
+  generator's form; `centre` inputs with outer outputs are enumerated and reported
+  `does_not_generate` until a head exists), `furnace` (stone; steel in the same 2 x 2 slots,
+  needs its research; electric fails the slot audit until a 3 x 3 slot exists).
+* Audit (hard): no shared tiles, every inserter between a belt and a furnace and inside a pole's
+  supply area, each unit's poles one chain. Descriptor: rate now / full (each row capped at its
+  lane, a unit at one belt), counts now / full, raw now / full, coal per minute, kW, pollution,
+  footprint, `saturates_belt`, and the lane flow model's findings at the full frame
+  (`bandwidth_audit.furnace_bank`: the shared head's `side_load_before_splitter` /
+  `single_lane_feed` stay visible).
+* Library `data/layouts/smelting-bank.json` (12 entries), `python -B tools/layouts.py show
+  smelting-bank`. Selection (`rank`): the room per resource (length x depth) and the furnace's
+  research filter the options, `layout_selection.score` ranks them. Real catalog, iron, start 2
+  per row (75/min):
+
+| context | default demand (horizon 150) | horizon 600/min |
+|---|---|---|
+| district: 48 long, 16 deep per resource | `smelt-6x1-stone` 88 | `smelt-12x1-stone` 1313 (today's bank; the 6-slot ceiling 225 costs more) |
+| long zone 96 x 16 | `smelt-6x1-stone` 88 | `smelt-24x1-stone` 164 (the saturated reference) |
+| 48 x 32, steel researched | `smelt-6x1-stone` 88 | `smelt-12x1-steel` 122 |
+
+Runtime: record only. A district bank's `layout` record is derived from its plan
+(`smelting_layout.record_for`: `capacity_slots`, furnace) for the fleet report; the district keeps
+its zone contract (48 x 32, 12 slots) and its generator call. Not yet: the district choosing the
+shape (slots, units) through `rank` in its own place loop, which needs the district geometry to
+take a bank length other than 48 (after the feed-head change lands).
 
 ### Science blocks (`science_layout.py`)
 
