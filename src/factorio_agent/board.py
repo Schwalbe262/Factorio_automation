@@ -454,6 +454,9 @@ def hardware_conflicts(builder, entities, planned):
     return conflicts
 
 
+STARTUP_SCIENCE_REACH = 3  # 16-tile cells searched each way around the powered pole
+
+
 class Board:
     def __init__(self, game, builder, catalog):
         self.game, self.builder, self.catalog = game, builder, catalog
@@ -550,7 +553,10 @@ class Board:
         reference = poles[0]["position"]
         bx = math.floor((reference["x"] - 8) / 8) * 8 + 0.5
         by = math.floor(reference["y"] / 8) * 8 + 0.5
-        offsets = [(0, 0), (-16, 0), (0, 16), (-16, 16), (0, -16), (-16, -16), (-32, 0), (-32, 16), (16, 0), (16, 16)]
+        # Every 16-tile cell within three cells of the powered pole, nearest first.
+        # A fixed list leaning one way put all ten candidates in a lake on seed 283895142.
+        reach = range(-STARTUP_SCIENCE_REACH, STARTUP_SCIENCE_REACH + 1)
+        offsets = sorted(((16 * i, 16 * j) for i in reach for j in reach), key=lambda o: (math.hypot(*o), o))
         planned = planned_unbuilt_hardware(self.builder, obs, self.state["blocks"])
         candidates = []
         tx, ty = POWER_TARGET_OFFSETS[science_machines]
@@ -587,12 +593,13 @@ class Board:
             slots = lab_slot_entities(plan)
             slot_entities = (slots[0]["poles"] if slots else []) + [slot["lab"] for slot in slots]
             surveys.append(dict(plan, slots=slot_entities))
+        # Trees and rocks are cleared, not avoided: a site is "clearable" when only nature is in the way.
         payload = json.dumps(json.dumps(surveys, separators=(",", ":")))
         surveyed = self.game.query(
             """
 local plans=helpers.json_to_table("""
             + payload
-            + """);local out={};local roomy={}
+            + """);local out={};local roomy={};local clearable={}
 for i,p in ipairs(plans) do
  local legal=true
  if s.count_entities_filtered{area=p.reserved_area,type="resource"}>0 then legal=false end
@@ -602,12 +609,18 @@ for i,p in ipairs(plans) do
    if e.type~="character" and e.type~="electric-pole" and q.x>lo[1]+.5 and q.x<hi[1]-.5 and q.y>lo[2]+.5 and q.y<hi[2]-.5 then legal=false;break end
   end
  end
+ local natural=false
  if legal then for _,e in ipairs(p.entities) do
   local old=target(e.position,e.name)
   if not (old and old.force==f and old.type=="electric-pole")
-   and not s.can_place_entity{name=e.name,position=e.position,direction=e.direction,force=f} then legal=false;break end
+   and not s.can_place_entity{name=e.name,position=e.position,direction=e.direction,force=f} then
+   if s.can_place_entity{name=e.name,position=e.position,direction=e.direction,force=f,
+    build_check_type=defines.build_check_type.manual_ghost,forced=true} then natural=true
+   else legal=false;break end
+  end
  end end
- if legal then
+ if legal and natural then clearable[#clearable+1]=i
+ elseif legal then
   out[#out+1]=i
   local free=true
   for _,e in ipairs(p.slots or {}) do
@@ -616,16 +629,25 @@ for i,p in ipairs(plans) do
   if free then roomy[#roomy+1]=i end
  end
 end
-return {ok=true,legal=out,roomy=roomy}
+return {ok=true,legal=out,roomy=roomy,clearable=clearable}
 """
         )
         if not surveyed.get("ok"):
             return {"ok": False, "reason": surveyed.get("reason", "block_survey_failed")}
-        indices = surveyed.get("legal", [])
-        if not indices:
-            return {"ok": False, "reason": "no_clear_reserved_science_slot"}
+        indices = surveyed.get("legal") or []
         roomy = [i for i in surveyed.get("roomy") or [] if i in indices]
-        plan = candidates[(roomy or indices)[0] - 1]
+        plan = candidates[(roomy or indices)[0] - 1] if indices else None
+        if plan is None:
+            from .planning import preflight
+
+            for index in surveyed.get("clearable") or []:
+                candidate = candidates[index - 1]
+                check = preflight(self.game, self.builder, obs, candidate["entities"])
+                if check.get("ok"):
+                    plan = dict(candidate, clear_obstacles=check["clear_obstacles"], clearance_world_id=obs["world_id"])
+                    break
+        if plan is None:
+            return {"ok": False, "reason": "no_clear_reserved_science_slot", "candidates": len(candidates)}
         self.state["blocks"]["startup_science"] = plan
         _atomic_json(self.path, self.state)
         self._stamp = self._file_stamp()
