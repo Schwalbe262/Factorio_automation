@@ -227,6 +227,25 @@ character; a player-less character does neither. `mining_layout_policy.
 survey_patch` reads only charted chunks, gets an empty tile list and every
 mining outpost blocks. That gap is what exception (b) closes.
 
+### Problem runs after a round (post-mortem, keep-alive)
+
+At the target minute a client-free run is safe-stopped and paused, triaged,
+and, when it is not healthy, snapshotted read-only into `<run>/postmortem/`
+(DEBUGGING_A_STALL.md "Post-mortem of a fleet run"). `fleet.py start
+--keep-problem N` (default 1) keeps the N worst problem runs paused with their
+server up for `--keep-timeout` minutes (default 60). Cost: a paused client-free
+run is its dedicated server only, ~0.37-0.45 GB and ~0.01 cores (no ticks, no
+supervisor), the memory it already used while playing; the default 1 adds
+under 4 % to a 12-run round and the next `start` releases it first when its
+capacity check would fail. `--keep-problem 0` stops every run as before;
+`--no-postmortem` skips the snapshot. A kept run is never joined by a client
+(a connected player would change the client-free world); `fleet.py inspect
+--gui` opens a copy of its save in a separate visible client instead.
+`fleet.py revive` restarts a stopped run's server from its save (`runtime.start`,
+which rewrites `server.json`/`world-settings.json` and saves the same paused
+world), checks `game.tick_paused` and pauses it through the lifecycle marker if
+the save was not paused; no supervisor, no client.
+
 ## Cheapest honest alternatives
 
 1. **Client only for the lab craft (proven by the probe, not implemented).**

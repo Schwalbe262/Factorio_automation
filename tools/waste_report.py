@@ -119,6 +119,21 @@ class Waste:
         return out
 
 
+def postmortem_cause(root, key) -> dict:
+    """``cause`` (+ ``cause_file``) of job ``key`` from the run's newest post-mortem probe, or {}.
+
+    A blocked row then names the tile, entity or constraint the dry-run planner
+    met (``factorio_agent.postmortem.cause_of``) instead of only its reason."""
+    try:
+        from factorio_agent.postmortem import probe_cause
+    except ImportError:
+        return {}
+    found = probe_cause(root, key)
+    if not found or not found.get("summary"):
+        return {}
+    return {"cause": str(found["summary"])[:200], "cause_file": found.get("file")}
+
+
 def _shape(reason) -> str:
     """A reason without numbers and positions, so equal causes group across runs."""
     text = re.sub(r"\(.*?\)", "()", str(reason))
@@ -332,7 +347,9 @@ def analyse(root: Path) -> dict:
             start = max([t for t in [tick] + retries if t] or [end])
             seconds = (end - start) / TICKS
             if seconds > 0:
-                w.add("blocked_unretried", seconds, {"tick": start, "job": cap(key), "reason": last[3][:110]})
+                item = {"tick": start, "job": cap(key), "reason": last[3][:110]}
+                item.update(postmortem_cause(root, key))
+                w.add("blocked_unretried", seconds, item)
         reasons = [r[3] for r in blocks]
         for reason in set(reasons):
             n = reasons.count(reason)
@@ -473,6 +490,8 @@ def main(argv=None) -> int:
             f"{row['runs']:>4d} {row['count']:>6d}  {ex.get('seed')}@{round((ex.get('tick') or 0) / 3600, 1)}m "
             f"{ex.get('job')}: {str(ex.get('reason'))[:90]}"
         )
+        if ex.get("cause"):
+            print(f"{'':34s}cause (post-mortem): {ex['cause'][:120]}")
         for cause in row["causes"][:3]:
             print(
                 f"{'':34s}{cause['seconds']:>6}s {cause['runs']:>2} runs x{cause['count']:<4} {cause['job']}: {cause['reason']}"
@@ -486,6 +505,8 @@ def main(argv=None) -> int:
             print(
                 f"      {item['seconds']:>5}s @{round((item.get('tick') or 0) / 3600, 1)}m {item['job']}: {str(item['reason'])[:110]}"
             )
+            if item.get("cause"):
+                print(f"             cause (post-mortem): {item['cause'][:150]}")
     return 0
 
 

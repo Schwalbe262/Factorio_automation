@@ -5,6 +5,17 @@ Usage: python -B tools/fleet.py start --count N [--seeds a,b,c | random] [--minu
        python -B tools/fleet.py report [--name NAME] [--window 0-30] [--json]
        python -B tools/fleet.py stop [--name NAME]
        python -B tools/fleet.py cost
+       python -B tools/fleet.py inspect --name NAME --seed SEED [--gui]
+       python -B tools/fleet.py revive --name NAME --seed SEED [--keep-timeout MIN]
+       python -B tools/fleet.py postmortem --name NAME --seed SEED
+
+Post-mortem (docs/v2/DEBUGGING_A_STALL.md "Post-mortem of a fleet run"): at the
+target minute the watcher safe-stops the supervisor and pauses the world, then
+triages the run (``fleet_triage``); a problem run gets a read-only snapshot in
+``<run>/postmortem/`` (``factorio_agent.postmortem``) while its server is up.
+``--keep-problem N`` (default 1) leaves the N worst problem runs paused with
+their server up (``kept``) until ``--keep-timeout`` minutes or until a new
+``start`` needs the capacity; every other run's server is stopped as before.
 
 Each run is a new folder ``runtime/v2/<name>-<seed>`` with its own seed and its
 own server/RCON port pair (allocated above the interactive range). By default
@@ -32,6 +43,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shutil
 import socket
 import statistics
 import subprocess
@@ -72,6 +84,14 @@ COLUMNS = (
     ("bus", "main_bus"),
     ("red", "automation_science"),
 )
+
+# Problem runs kept alive for inspection (post-mortem). A paused client-free run is its
+# server only: ~0.37-0.45 GB and ~0.01 cores (tick paused, supervisor stopped).
+KEEP_PROBLEM = 1
+KEEP_TIMEOUT_MINUTES = 60.0
+PAUSED_PROBLEM, KEPT, REVIVED = "paused_problem", "kept", "revived"
+HELD = (PAUSED_PROBLEM, KEPT, REVIVED)
+RELEASE_SETTLE_SECONDS = 2.0
 
 
 # ---------------------------------------------------------------- pure parts
@@ -404,7 +424,88 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     failed = [r for r in runs if r.get("launch_error")]
     for r in failed[:4]:
         lines.append(f"launch failed {r['seed']}: {r['launch_error'][:100]}")
+    lines += problem_lines(runs)
     return lines
+
+
+def problem_lines(runs, top=12):
+    """The "problem runs" section: class, blocking job and reason, kept ports, postmortem folder."""
+    rows = [r for r in runs if (r.get("problem") or {}).get("class") not in (None, "healthy")]
+    if not rows:
+        return []
+    lines = ["problem runs (class: blocking job reason | cause from the post-mortem | folder):"]
+    for r in sorted(rows, key=lambda r: -((r["problem"].get("score")) or 0))[:top]:
+        p = r["problem"]
+        block = p.get("blocking") or {}
+        text = f"  {str(r['seed']).ljust(11)} {p['class']:<8}"
+        text += (
+            f" {block.get('capability')}: {str(block.get('reason'))[:70]}"
+            if block
+            else f" {'; '.join(p.get('reasons') or [])[:80]}"
+        )
+        if p.get("state") in HELD:
+            text += f" [{p['state']} udp {p.get('server_port')} rcon {p.get('rcon_port')}"
+            text += f" until {time.strftime('%H:%M', time.localtime(p['keep_until']))}]" if p.get("keep_until") else "]"
+        lines.append(text)
+        if p.get("cause"):
+            lines.append(f"      cause: {p['cause'][:150]}")
+        if p.get("folder"):
+            lines.append(f"      {p['folder']}")
+    return lines
+
+
+def problem_row(run, root):
+    """A run's triage verdict (manifest summary, else ``postmortem/triage.json``) plus its post-mortem."""
+    from factorio_agent import postmortem
+
+    verdict = run.get("triage") or _read(Path(root) / "postmortem" / "triage.json")
+    if not isinstance(verdict, dict):
+        return None
+    latest = postmortem.latest(root) or {}
+    probes = latest.get("probes") or []
+    return {
+        "class": verdict.get("class"),
+        "reasons": (verdict.get("reasons") or [])[:3],
+        "blocking": verdict.get("blocking"),
+        "score": verdict.get("score"),
+        "state": run.get("status"),
+        "server_port": run.get("server_port"),
+        "rcon_port": run.get("rcon_port"),
+        "keep_until": run.get("keep_until"),
+        "folder": run.get("postmortem") or latest.get("folder"),
+        "cause": probes[0].get("cause") if probes else None,
+    }
+
+
+def layout_svg(root):
+    """The dashboard's layout map of a runtime (read-only), for the post-mortem folder."""
+    import dashboard
+
+    return dashboard.Dashboard(root).layout_svg()
+
+
+def gui_command(cfg, gui_dir, save):
+    """A visible client command on ``save`` (single player) with its own profile under ``gui_dir``."""
+    from factorio_agent.core.deterministic_character import prepare_client
+
+    command, client_root = prepare_client(replace(cfg, runtime_dir=Path(gui_dir)))
+    out, skip = [], 0
+    for part in command:
+        if skip:
+            skip -= 1
+        elif part in ("--mp-connect", "--port", "--password", "--window-size"):
+            skip = 1
+        else:
+            out.append(part)
+    return out + ["--window-size", "1600x900", "--load-game", str(save)], client_root
+
+
+def _spawn_visible(command, cwd):
+    from factorio_agent.core.process_launch import independent_process_options
+
+    options = independent_process_options()
+    child = subprocess.Popen(command, cwd=str(cwd), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
+    return child.pid
 
 
 # ---------------------------------------------------------------- processes
@@ -535,6 +636,12 @@ class Fleet:
         # a hidden client for the whole run, "until_lab_trigger" = client until
         # the lab trigger fired (docs/v2/HEADLESS.md).
         self.client = "none"
+        # Post-mortem: problem runs get a read-only snapshot before their server stops;
+        # the keep_problem worst stay paused with the server up for keep_timeout minutes.
+        self.postmortem = True
+        self.keep_problem = KEEP_PROBLEM
+        self.keep_timeout = KEEP_TIMEOUT_MINUTES
+        self._milestone_cache = {}
 
     # manifest ----------------------------------------------------------
     def manifest_path(self, name):
@@ -626,8 +733,8 @@ class Fleet:
         path = self.manifest_path(name)
         if path.exists():
             raise FileExistsError("fleet manifest exists: " + str(path))
-        cost, host = self.cost(), machine()
-        fits, why = capacity(host["free_mb"], host["cores"], cost["per_run_mb"], cost["per_run_cores"])
+        cost = self.cost()
+        fits, why, host = self.release_for_capacity(len(seeds), cost, out=out)
         out(
             f"machine: {host['free_mb']} MB free of {host['total_mb']}, {host['cores']} logical cpus; one run "
             f"~{cost['per_run_mb']} MB, ~{cost['per_run_cores']} cores ({cost['source']}); fits {fits} more "
@@ -652,6 +759,9 @@ class Fleet:
             planner=self.planner,
             client=self.client,
             explore=bool(explore),
+            postmortem=self.postmortem,
+            keep_problem=self.keep_problem,
+            keep_timeout_minutes=self.keep_timeout,
             runs=[
                 dict(seed=s, runtime=str(r), server_port=u, rcon_port=t, status="planned")
                 for s, r, (u, t) in zip(seeds, roots, pairs)
@@ -718,7 +828,7 @@ class Fleet:
                     "--name",
                     name,
                 ],
-                cwd=str(self.code),
+                cwd=str(self.base),  # not the code snapshot: the fleet loop removes it after the round
                 stdout=output,
                 stderr=subprocess.STDOUT,
                 **independent_process_options(),
@@ -730,6 +840,7 @@ class Fleet:
         fleet = self.load(name)
         if enforce and fleet.get("target_minutes") and not alive(fleet.get("watcher")):
             self.enforce(fleet["name"], out=out)
+            self.release_expired(fleet["name"], out=out)
             fleet = self.load(fleet["name"])
         rows, measured = [], []
         for run in fleet["runs"]:
@@ -772,8 +883,10 @@ class Fleet:
             name=fleet["name"], target_minutes=fleet.get("target_minutes"), explore=fleet.get("explore"), runs=rows
         )
 
-    def enforce(self, name, out=print):
-        """Stop every running run that reached the fleet's target game minutes."""
+    def enforce(self, name, out=print, *, postmortem=False):
+        """Stop every running run that reached the fleet's target game minutes.
+
+        ``postmortem`` (the watcher): triage each run first and snapshot problem runs (``finish_run``)."""
         fleet = self.load(name)
         target = fleet.get("target_minutes")
         if not target:
@@ -783,9 +896,14 @@ class Fleet:
             tick = run_tick(run["runtime"]) if run["status"] == "running" else None
             if tick is not None and tick >= target * TICKS_PER_MINUTE:
                 due.append(run)
-        return [self.stop_run(name, run, reason=f"reached {target} game min", out=out) for run in due]
+        reason = f"reached {target} game min"
+        if postmortem and (fleet.get("postmortem", True) or fleet.get("keep_problem")):
+            return self.finish_runs(name, due, reason=reason, out=out)
+        return [self.stop_run(name, run, reason=reason, out=out) for run in due]
 
     def stop_run(self, name, run, *, reason="stop requested", out=print):
+        if run.get("status") in HELD:  # paused problem run: shut down without a second safe stop
+            return self.release_run(name, run, why=reason, out=out)
         root = Path(run["runtime"])
         if not (root / "run.json").exists():
             self._set_run(name, run["seed"], status="stopped", stop_result="no runtime created")
@@ -830,13 +948,346 @@ class Fleet:
             results = list(pool.map(lambda r: self.stop_run(fleet["name"], r, out=out), runs))
         return dict(name=fleet["name"], results=results)
 
-    def watch(self, name):
+    def watch(self, name, *, sleep=time.sleep):
+        # Load what the stop and release paths import now: the fleet loop removes this code
+        # snapshot after the round while kept runs may still wait here for their timeout.
+        import fleet_triage  # noqa: F401
+        import waste_report  # noqa: F401
+        from factorio_agent import postmortem  # noqa: F401
+
+        self.lifecycle()
         while True:
-            self.enforce(name)
+            self.enforce(name, postmortem=True)
             fleet = self.load(name)
             if not any(r["status"] in ("planned", "creating", "starting", "running") for r in fleet["runs"]):
-                return 0
-            time.sleep(WATCH_SECONDS)
+                self.settle_kept(name)
+                self.release_expired(name)
+                if not any(r["status"] in HELD for r in self.load(name)["runs"]):
+                    return 0
+            sleep(WATCH_SECONDS)
+
+    # post-mortem (docs/v2/DEBUGGING_A_STALL.md "Post-mortem of a fleet run") ------
+    def finish_runs(self, name, due, *, reason, out=print):
+        """Pause every due run (supervisor safe stop, world paused and saved), then triage each, snapshot
+        problem runs while their server is up, and shut down the healthy ones; problem runs stay
+        ``paused_problem`` when the fleet keeps any (``settle_kept`` picks the worst at the round end)."""
+        paused = [(run, self._pause_run(name, run, out=out)) for run in due]
+        return [self._after_pause(name, run, state, reason=reason, out=out) for run, state in paused]
+
+    def _pause_run(self, name, run, *, out=print):
+        root = Path(run["runtime"])
+        records = run_records(root)
+        if not (root / "run.json").exists() or not any(alive(v) for v in records.values()):
+            return None
+        was_alive = run_alive(root, records)
+        try:
+            lock = RunLock(root / "fleet-stop.lock").acquire()
+        except RuntimeError:
+            return {"error": "stop_in_progress"}
+        try:
+            return dict(stopped=self.lifecycle()._stop(root), alive=was_alive)
+        except Exception as exc:  # preserved for inspection; the plain stop below records it
+            return {"error": str(exc)[:300]}
+        finally:
+            lock.release()
+
+    def _after_pause(self, name, run, state, *, reason, out=print):
+        import fleet_triage
+
+        if not state or state.get("error"):
+            return self.stop_run(name, run, reason=reason, out=out)
+        root, seed = Path(run["runtime"]), run["seed"]
+        fleet = self.load(name)
+        try:
+            verdict = self.triage_run(fleet, run, alive_before=state["alive"])
+        except Exception as exc:  # the run is still stopped; the verdict says why it has no triage
+            verdict = dict(flags=["errored"], reasons=[f"triage failed: {exc}"[:200]], jobs=[], score=1.0)
+            verdict["class"] = "errored"
+        folder = error = None
+        if verdict["class"] != "healthy" and fleet.get("postmortem", True):
+            folder, error = self.snapshot_run(run, verdict)
+        fields = dict(
+            stopped_at=time.time(),
+            stop_reason=reason,
+            stop_result={k: state["stopped"].get(k) for k in ("status", "game_paused", "note")},
+            final_tick=run_tick(root),
+            triage=fleet_triage.summary(verdict),
+            postmortem=folder,
+            postmortem_error=error,
+        )
+        if verdict["class"] != "healthy" and (fleet.get("keep_problem") or 0) > 0:
+            self._set_run(name, seed, status=PAUSED_PROBLEM, paused_at=time.time(), **fields)
+            out(f"  {seed}: paused ({verdict['class']}), server kept up until the round ends")
+            return dict(seed=seed, status=PAUSED_PROBLEM)
+        out(f"  {seed}: {verdict['class']}" + (f", post-mortem {folder}" if folder else ""))
+        return self.release_run(name, run, why=reason, fields=fields, out=out)
+
+    def _milestones_of(self, run):
+        import critical_path as cp_tool
+        from factorio_agent.progression import ROADMAP, _same
+
+        root = Path(run["runtime"])
+        events = root / "job-events.jsonl"
+        if not (root / "jobs.json").exists() or not events.exists():
+            return {}
+        key = (str(root), events.stat().st_size, (root / "jobs.json").stat().st_mtime_ns)
+        if key not in self._milestone_cache:
+            timeline = cp_tool.Run(root)
+            self._milestone_cache[key] = milestones(timeline.jobs, timeline.end, ROADMAP, _same)[0]
+        return self._milestone_cache[key]
+
+    def triage_run(self, fleet, run, *, alive_before=True):
+        """``fleet_triage.classify`` against the fleet's current milestone medians; writes postmortem/triage.json."""
+        import fleet_triage
+
+        root = Path(run["runtime"])
+        maps = {}
+        for other in fleet["runs"]:
+            try:
+                maps[other["seed"]] = self._milestones_of(other)
+            except Exception:  # a half-written run must not hide the others
+                maps[other["seed"]] = {}
+        medians = fleet_triage.fleet_medians(list(maps.values()), [step for _, step in COLUMNS])
+        verdict = fleet_triage.classify(
+            fleet_triage.run_facts(root),
+            milestones=maps.get(run["seed"]) or {},
+            medians=medians,
+            alive=alive_before,
+            waste=fleet_triage.waste_evidence(root),
+        )
+        verdict.update(seed=run["seed"], fleet=fleet["name"], triaged_at=time.time(), medians=medians)
+        (root / "postmortem").mkdir(parents=True, exist_ok=True)
+        _atomic_json(root / "postmortem" / "triage.json", verdict)
+        return verdict
+
+    def snapshot_run(self, run, verdict):
+        """(folder, error) of a read-only post-mortem snapshot of the paused run."""
+        from factorio_agent import postmortem
+
+        try:
+            manifest = postmortem.snapshot(Path(run["runtime"]), triage=verdict, layout=layout_svg)
+        except Exception as exc:  # the stop goes on; the error is recorded on the run
+            return None, f"{type(exc).__name__}: {exc}"[:300]
+        errors = "; ".join(f"{k}: {v}" for k, v in manifest["errors"].items())[:300]
+        return manifest["folder"], errors or None
+
+    def release_run(self, name, run, *, why, fields=None, out=print):
+        """Shut down a paused (held) run's server without a second safe stop; the save stays."""
+        root, seed = Path(run["runtime"]), run["seed"]
+        try:
+            lock = RunLock(root / "fleet-stop.lock").acquire()
+        except RuntimeError:
+            return dict(seed=seed, status="stop_in_progress")
+        try:
+            records = run_records(root)
+            control = self.lifecycle()
+            if alive(records.get("supervisor")):
+                control._shutdown(root)  # not paused by us: the ordinary safe stop first
+            elif alive(records.get("server")) or alive(records.get("client")):
+                control._shutdown(root, dict(status="stopped", game_paused=True, note="paused before the stop"))
+            self._set_run(name, seed, status="stopped", released_at=time.time(), release_reason=why, **(fields or {}))
+            out(f"  {seed}: stopped ({why})")
+            return dict(seed=seed, status="stopped")
+        except Exception as exc:  # preserved for inspection; never killed blindly
+            self._set_run(name, seed, stop_error=str(exc)[:300])
+            out(f"  {seed}: stop failed, processes preserved: {str(exc)[:200]}")
+            return dict(seed=seed, status="stop_failed", reason=str(exc)[:300])
+        finally:
+            lock.release()
+
+    def settle_kept(self, name, out=print):
+        """Round over: keep the ``keep_problem`` worst paused problem runs, shut the other ones down."""
+        import fleet_triage
+
+        fleet = self.load(name)
+        if any(r["status"] in ("planned", "creating", "starting", "running") for r in fleet["runs"]):
+            return []
+        paused = [r for r in fleet["runs"] if r["status"] == PAUSED_PROBLEM]
+        keep = set(
+            fleet_triage.select_kept([(r["seed"], r.get("triage")) for r in paused], fleet.get("keep_problem") or 0)
+        )
+        until = time.time() + 60 * float(fleet.get("keep_timeout_minutes") or KEEP_TIMEOUT_MINUTES)
+        results = []
+        for run in paused:
+            if run["seed"] in keep:
+                self._set_run(name, run["seed"], status=KEPT, keep_until=until)
+                out(f"  {run['seed']}: kept for inspection (udp {run.get('server_port')}, rcon {run.get('rcon_port')})")
+                results.append(dict(seed=run["seed"], status=KEPT))
+            else:
+                results.append(self.release_run(name, run, why="not among the worst problem runs", out=out))
+        return results
+
+    def release_expired(self, name, *, now=None, out=print):
+        """Shut down held runs past their keep deadline; mark held runs whose server is gone as stopped."""
+        fleet = self.load(name)
+        now = time.time() if now is None else now
+        timeout = 60 * float(fleet.get("keep_timeout_minutes") or KEEP_TIMEOUT_MINUTES)
+        results = []
+        for run in fleet["runs"]:
+            if run["status"] not in HELD:
+                continue
+            if not any(alive(v) for v in run_records(run["runtime"]).values()):
+                self._set_run(name, run["seed"], status="stopped", release_reason="server already down")
+                continue
+            deadline = run.get("keep_until") or (run.get("paused_at") or run.get("revived_at") or now) + timeout
+            if now >= deadline:
+                results.append(self.release_run(name, run, why="keep timeout", out=out))
+        return results
+
+    def held_runs(self):
+        """(fleet name, run) of every paused/kept/revived run in any manifest."""
+        rows = []
+        for path in sorted(self.dir.glob("*.json")) if self.dir.exists() else []:
+            value = _read(path)
+            if path.name == "cost.json" or not isinstance(value, dict) or value.get("kind") != "factorio-fleet-v1":
+                continue
+            rows += [(value["name"], r) for r in value.get("runs", []) if r.get("status") in HELD]
+        return rows
+
+    def release_for_capacity(self, count, cost, *, out=print):
+        """Capacity for ``count`` new runs: expired held runs go first, then the oldest held runs as needed."""
+        for name in dict.fromkeys(n for n, _ in self.held_runs()):
+            self.settle_kept(name, out=out)  # a finished round whose watcher has not settled yet
+            self.release_expired(name, out=out)
+        host = machine()
+        fits, why = capacity(host["free_mb"], host["cores"], cost["per_run_mb"], cost["per_run_cores"])
+        # Unselected paused runs first, then the least interesting, then the oldest.
+        held = sorted(
+            self.held_runs(),
+            key=lambda nr: (
+                nr[1]["status"] != PAUSED_PROBLEM,
+                (nr[1].get("triage") or {}).get("score") or 0,
+                nr[1].get("paused_at") or nr[1].get("revived_at") or 0,
+            ),
+        )
+        while count > fits and held:
+            name, run = held.pop(0)
+            self.release_run(name, run, why="capacity for a new fleet", out=out)
+            time.sleep(RELEASE_SETTLE_SECONDS)  # the server's memory is returned after its exit
+            host = machine()
+            fits, why = capacity(host["free_mb"], host["cores"], cost["per_run_mb"], cost["per_run_cores"])
+        return fits, why, host
+
+    def find_run(self, name, seed):
+        fleet = self.load(name)
+        for run in fleet["runs"]:
+            if str(run["seed"]) == str(seed):
+                return fleet, run
+        raise LookupError(f"no run {seed} in fleet {fleet['name']}")
+
+    def revive(self, name, seed, *, timeout_minutes=None, out=print):
+        """Start a stopped run's server again from its save, paused, without supervisor or client."""
+        from factorio_agent import runtime
+
+        fleet, run = self.find_run(name, seed)
+        root = Path(run["runtime"])
+        records = run_records(root)
+        if alive(records.get("supervisor")) or alive(records.get("server")):
+            raise RuntimeError(f"run {seed} still has a live server or supervisor (status {run['status']})")
+        control = self.lifecycle()
+        with RunLock(root / "fleet-stop.lock"):
+            control._ensure_server(root)  # runtime.start: the run's own save, ports and world identity
+            world = runtime.game_for(root).query("return {ok=true,tick=game.tick,paused=game.tick_paused}")
+            if not world.get("paused"):
+                with RunLock(root / "writer.lock"):
+                    world = control._game_pause(root, True)
+        minutes = float(timeout_minutes or fleet.get("keep_timeout_minutes") or KEEP_TIMEOUT_MINUTES)
+        self._set_run(
+            name,
+            run["seed"],
+            status=REVIVED,
+            revived_at=time.time(),
+            keep_until=time.time() + 60 * minutes,
+            revived_tick=world.get("tick"),
+        )
+        if not alive(self.load(name).get("watcher")):
+            self.spawn_watcher(fleet["name"])  # releases it at keep_until
+        out(f"  {seed}: server up and paused at tick {world.get('tick')} for {minutes:g} min")
+        return dict(seed=run["seed"], status=REVIVED, tick=world.get("tick"))
+
+    def postmortem_run(self, name, seed, *, out=print):
+        """A new snapshot of a held (paused, server up, supervisor stopped) run."""
+        fleet, run = self.find_run(name, seed)
+        root = Path(run["runtime"])
+        records = run_records(root)
+        if not alive(records.get("server")):
+            raise RuntimeError(f"run {seed} has no live server; revive it first (fleet.py revive)")
+        if alive(records.get("supervisor")):
+            raise RuntimeError(f"run {seed} is still playing; a post-mortem needs the paused world")
+        verdict = self.triage_run(fleet, run)
+        folder, error = self.snapshot_run(run, verdict)
+        self._set_run(name, run["seed"], postmortem=folder, postmortem_error=error)
+        out(f"  {seed}: post-mortem {folder or 'failed: ' + str(error)}")
+        return dict(seed=run["seed"], folder=folder, error=error)
+
+    def inspect_lines(self, name, seed):
+        """How to look at one run read-only (and how the owner opens it in a GUI)."""
+        from factorio_agent import postmortem
+
+        fleet, run = self.find_run(name, seed)
+        root = Path(run["runtime"])
+        up = {k: alive(v) for k, v in run_records(root).items()}
+        n, s = fleet["name"], run["seed"]
+        lines = [
+            f"run {s} of fleet {n}: status {run['status']}; server {'up' if up.get('server') else 'down'},"
+            f" supervisor {'up' if up.get('supervisor') else 'stopped'}",
+            f"runtime {root}",
+            f"ports: game udp {run.get('server_port')}, rcon 127.0.0.1:{run.get('rcon_port')}"
+            " (password: runtime.configuration(root).rcon_password)",
+        ]
+        if run.get("keep_until") and run["status"] in HELD:
+            lines.append("held until " + time.strftime("%Y-%m-%d %H:%M", time.localtime(run["keep_until"])))
+        verdict = run.get("triage") or _read(root / "postmortem" / "triage.json") or {}
+        if verdict:
+            lines.append(
+                f"triage: {verdict.get('class')} {verdict.get('flags')}: "
+                + "; ".join(verdict.get("reasons") or [])[:300]
+            )
+        latest = postmortem.latest(root) or {}
+        if latest:
+            lines.append(f"post-mortem: {latest.get('folder')} (manifest.json, observe.json, layout.svg, probes/)")
+            lines += [
+                f"  {p.get('capability')} {p.get('key')}: {p.get('cause')}"[:220] for p in latest.get("probes") or []
+            ]
+        if up.get("server") and not up.get("supervisor"):
+            lines += [
+                "read-only access (the world is paused; queries only, never game.act):",
+                "  python -B -c \"import sys; sys.path.insert(0, 'src'); from pathlib import Path;"
+                " from factorio_agent import runtime; g = runtime.game_for(Path(r'" + str(root) + "'));"
+                " print(g.query('return {ok=true,tick=game.tick,paused=game.tick_paused}'))\"",
+                f"new snapshot: python -B tools/fleet.py postmortem --name {n} --seed {s}",
+            ]
+        elif up.get("supervisor"):
+            lines.append("the run is still playing: read-only queries only (DEBUGGING_A_STALL.md section 3)")
+        else:
+            lines.append(
+                f"server is down: python -B tools/fleet.py revive --name {n} --seed {s}  (paused, from its save)"
+            )
+        lines.append(
+            f"owner GUI: python -B tools/fleet.py inspect --name {n} --seed {s} --gui  (a visible single-player client"
+            " on a COPY of the run's save; the run's server and files are not touched; do not join the server)"
+        )
+        return lines
+
+    def open_gui(self, name, seed, *, spawn=None, out=print):
+        """Open a copy of the run's save in a visible client (own profile under postmortem/gui)."""
+        from factorio_agent import runtime
+        from factorio_agent.core.factorio import no_mod_save_path
+
+        _fleet, run = self.find_run(name, seed)
+        root = Path(run["runtime"])
+        cfg = runtime.configuration(root)
+        save = no_mod_save_path(cfg)
+        if not save.exists():
+            raise FileNotFoundError("no save of this run: " + str(save))
+        gui = root / "postmortem" / "gui"
+        gui.mkdir(parents=True, exist_ok=True)
+        copy = gui / f"inspect-{run['seed']}-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+        shutil.copy2(save, copy)
+        command, cwd = gui_command(cfg, gui, copy)
+        pid = (spawn or _spawn_visible)(command, cwd)
+        out(f"  {run['seed']}: GUI client pid {pid} on {copy} (single player; unpause with the console if needed)")
+        return dict(pid=pid, save=str(copy), command=command)
 
     # report --------------------------------------------------------------
     def run_report(self, run, lo, hi):
@@ -861,6 +1312,7 @@ class Fleet:
         label = actor_client.test_mode(root) if root.exists() else None
         if label:
             row.update(label)
+        row["problem"] = problem_row(run, root) if root.exists() else None
         if not (root / "jobs.json").exists():
             return row
         from factorio_agent.layout_selection import run_layouts
@@ -899,6 +1351,7 @@ class Fleet:
         fleet = self.load(name)
         if enforce and fleet.get("target_minutes") and not alive(fleet.get("watcher")):
             self.enforce(fleet["name"], out=out)
+            self.release_expired(fleet["name"], out=out)
             fleet = self.load(fleet["name"])
         runs = [self.run_report(run, lo, hi) for run in fleet["runs"]]
         return fleet, runs, aggregate(runs)
@@ -963,6 +1416,22 @@ def main(argv=None):
         help="explore layout candidates: each run writes layout-settings.json {explore: true}; a seed from"
         " (world id, block) picks among the best candidates within the margin (recorded in the manifest)",
     )
+    start.add_argument(
+        "--keep-problem",
+        type=int,
+        default=KEEP_PROBLEM,
+        help="the N worst problem runs stay paused with their server up after the round (default 1, ~0.45 GB each)",
+    )
+    start.add_argument("--keep-timeout", type=float, default=KEEP_TIMEOUT_MINUTES, help="minutes a kept run stays up")
+    start.add_argument("--no-postmortem", action="store_true", help="no triage snapshot of problem runs at the stop")
+    for command in ("inspect", "revive", "postmortem"):
+        one = sub.add_parser(command)
+        one.add_argument("--name", required=True)
+        one.add_argument("--seed", required=True)
+        if command == "inspect":
+            one.add_argument("--gui", action="store_true", help="open a copy of the save in a visible client")
+        if command == "revive":
+            one.add_argument("--keep-timeout", type=float, help="minutes the revived server stays up")
     for command in ("status", "report", "stop", "watch"):
         one = sub.add_parser(command)
         one.add_argument("--name")
@@ -977,6 +1446,9 @@ def main(argv=None):
     if args.command == "start":
         fleet.planner = args.planner
         fleet.client = actor_client.ALWAYS if args.keep_client else args.client
+        fleet.keep_problem = max(0, args.keep_problem)
+        fleet.keep_timeout = args.keep_timeout
+        fleet.postmortem = not args.no_postmortem
         value = fleet.start(
             args.count,
             args.seeds,
@@ -1010,6 +1482,16 @@ def main(argv=None):
         return 0 if all(r["status"] == "stopped" for r in value["results"]) else 1
     if args.command == "watch":
         return fleet.watch(args.name)
+    if args.command == "inspect":
+        print("\n".join(fleet.inspect_lines(args.name, args.seed)))
+        if args.gui:
+            fleet.open_gui(args.name, args.seed)
+        return 0
+    if args.command == "revive":
+        fleet.revive(args.name, args.seed, timeout_minutes=args.keep_timeout)
+        return 0
+    if args.command == "postmortem":
+        return 0 if fleet.postmortem_run(args.name, args.seed).get("folder") else 1
     if args.command == "cost":
         print(json.dumps(dict(machine=machine(), **fleet.cost()), indent=1))
         return 0
