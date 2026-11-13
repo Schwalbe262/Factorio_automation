@@ -252141,3 +252141,9 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: new site/nature.py (ranked/tiebreak, CLEARANCE_BATCH, batches); free_sites drops MAX_CLEARABLE and the per-tree distance penalty; search_bus drops clear_weight from the score (tie-break only); caps removed in planning.preflight (96), transport corridor (64), starter coal corridor (128); V2FactoryBuilder clears clear_obstacles in 96-obstacle batches, one paid mine per step, cleared batches memoised per world.
 - metrics: tests/test_v2_site_nature.py (8); bus/strips identical with a dense forest on the bus (old code moved the bus 24 tiles).
 - next action: live fleet in a forested seed to confirm clearing time and inventory (wood) headroom.
+## 2026-11-13 research: closed-loop input top-up for the startup science cell
+- goal: logistics one-pack stall (fleet auto-1113-1758, seed 1298193051: 19 of 20 packs, smelting waited 24 game min on the splitter).
+- evidence: EMD + prewarmed logistics funded 45 Cu / 90 Fe into the shared hub cell (exact bills 25+20); red machines finished 40 (EMD terminal) + 4 = 44; diversion recovery never fired (a gear sat in a red machine). Only stable state: one copper in one hub-fed machine, one gear in the other.
+- actions: industry.py `_closed_loop_topup`/`_cell_shortfall`/`_topup_funding` (`input_topups`, `topup_fund`, TOPUP_STALL_TICKS 1800, cap one more bill); funding_complete/production_complete wait for top-ups; docs BOOTSTRAP_RESEARCH.md; tests/test_v2_bootstrap_topup.py (3).
+- result: 19/20 split stall buys 1 Cu + 2 Fe once, then stops; satisfied target (pack in lab, whole craft in a machine, researched) gets nothing.
+- next action: fleet run; grep job-events for "top up stalled machine science inputs".

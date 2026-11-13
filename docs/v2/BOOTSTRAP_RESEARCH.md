@@ -51,6 +51,21 @@ and item allocation"), so slack jobs leave those plates alone. The audited
 diversion recovery only runs once the batch is fully funded (an empty cell while
 plates trickle in is the plate wait, not a diversion).
 
+The fixed bill is only the first feed; supply is closed-loop on what the cell can
+still deliver (`_closed_loop_topup`, `_cell_shortfall`). Once the bill and every
+audited repair are funded and the target researches, the job compares packs still
+needed (bill minus packs collected or waiting in an output; never more than the
+units `research_progress` has left minus packs in labs, in hand or in an output)
+with packs deliverable as complete crafts (each science machine on its own
+contents, plus free plates and gears in the cell's chests and gear machine). An
+ingredient stranded in one machine without its partner is not deliverable: seed
+1298193051 stopped logistics at 19 of 20 with one copper plate in one hub-fed
+machine and one gear in the other. A shortfall that holds with the cell and labs
+unchanged for `TOPUP_STALL_TICKS = 1800` (inserter hands are not observed) buys
+whole crafts for the missing packs only (`input_topups`, `topup_fund` receipts);
+the fixed `required_inputs` never change, a satisfied target gets nothing, and the
+total top-up is capped at one more bill (`bootstrap_research_topup_cap_reached`).
+
 Proof requires the target natively researched, sufficient new production on the
 same red machine and positive native science consumption since the baseline.
 Historical cell production cannot satisfy a new target. If research completes
