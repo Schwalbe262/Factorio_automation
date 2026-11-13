@@ -146,6 +146,12 @@ class StarterExecutors:
         from .inventory_storage import InventoryStorage
 
         self.storage = InventoryStorage(game, catalog)
+        from .carried_surplus import CarriedSurplus
+
+        # Carried fuel/ore beyond known demand goes into consumers, then storage chests (depots).
+        self.carried_surplus = CarriedSurplus(catalog, storage=self.storage, retirement=self.starter_retirement)
+        self.starter_retirement.surplus = self.carried_surplus
+        self.bootstrap.fuel_depot = self.carried_surplus.depot_take
         from .science_retirement import StartupScienceRetirement
 
         # Obsolete startup science cell: dismantled once the permanent row researches (obsolete.py).
@@ -699,6 +705,10 @@ class StarterExecutors:
         boiler = boiler_upkeep(self, obs)
         if isinstance(boiler, dict) and boiler.get("type"):
             return boiler
+        surplus = getattr(self, "carried_surplus", None)
+        disposal = surplus.step(obs) if surplus is not None else None
+        if disposal:
+            return disposal
         if bootstrap is not None:
             fuel = bootstrap.maintain_fuel(self.starter_observation(obs))
             if isinstance(fuel, dict) and fuel.get("type"):
@@ -784,6 +794,10 @@ class StarterExecutors:
         return result if result and (result.get("type") or result.get("status") != "succeeded") else None
 
     def starter_upkeep(self, obs):
+        surplus = getattr(self, "carried_surplus", None)
+        disposal = surplus.step(obs) if surplus is not None else None
+        if disposal:  # carried surplus into its consumers before storage deposits it (carried_surplus.py)
+            return disposal
         if getattr(self, "storage", None):
             storage = self.storage.step(obs)
             if storage:

@@ -17,7 +17,9 @@ stood (43% of 818 actions hauling). Rules (PLANNERS.md "Starter retirement"):
    ``RETIRE_PRIORITY``): final collection of the remaining stock in large
    trips, then paid guarded ``mine`` of every cold, empty, unlinked cell (drill
    first); contents and fuel return to the inventory, the tiles are free.
-   A cell an inserter serves is kept (and keeps its fuel).
+   A cell an inserter serves is kept (and keeps its fuel). Coal chest stock moves
+   in trips no larger than ``carried_surplus.CarriedSurplus.trip_room``: the
+   excess over the carry allowance goes into consumers or a depot first.
 
 Construction collection point (``collection_points``): once the planned bus
 is published, the trunk tiles past the last tap window of each lane hold only
@@ -58,6 +60,7 @@ TAKE_LIMIT = 50  # take_many / take envelope
 MAX_SOURCES = 16
 LINK_RADIUS = 4  # inserters searched around a cell entity
 FUELS = ("coal", "wood")
+CARRY_BOUNDED = frozenset({"coal"})  # chest stock moved within carried_surplus.trip_room
 SURPLUS_GAP = 1  # trunk rows kept free behind the last tap window
 
 
@@ -433,15 +436,39 @@ class StarterRetirement:
                 "sources": sources,
                 "reason": f"collect retiring {resource} starter cell stock",
             }
+        surplus = getattr(self, "surplus", None)  # carried_surplus.CarriedSurplus
+        bounded = surplus is not None and resource in CARRY_BOUNDED
+        if bounded:
+            from .carried_surplus import allowance, carried
+
+            excess = carried(obs, resource) - allowance(resource, surplus.catalog)
+            if excess > 0:  # the previous trip goes straight into consumers or a depot
+                action = surplus.sink_action(obs, resource, excess, f"put retiring {resource} starter stock to use")
+                if action is not None:
+                    return action
         for stock, stopped, chest in rows:
             if stock >= COLLECT_BATCH or stopped:
+                count = min(TAKE_LIMIT, stock)
+                reason = f"collect retiring {resource} starter cell stock"
+                if bounded:
+                    room = surplus.trip_room(obs, resource)
+                    if room > 0:
+                        count = min(count, room)
+                    elif not obs.get("inventory_empty_slots"):
+                        return {
+                            "status": "waiting",
+                            "reason": "starter_retirement_waits_for_a_stock_sink",
+                            "evidence": {"resource": resource, "carried": carried(obs, resource), "stock": stock},
+                        }
+                    else:  # nothing accepts it: inventory storage turns the overflow into a depot chest
+                        reason += " (no consumer or depot room)"
                 return {
                     "type": "take",
                     "name": chest["name"],
                     "position": dict(chest["position"]),
                     "item": resource,
-                    "count": min(TAKE_LIMIT, stock),
-                    "reason": f"collect retiring {resource} starter cell stock",
+                    "count": count,
+                    "reason": reason,
                 }
         return None
 

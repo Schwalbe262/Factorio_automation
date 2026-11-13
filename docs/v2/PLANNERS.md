@@ -257,7 +257,11 @@ upkeep         retired(r): unlinked cells(r) get no fuel (V2Bootstrap.maintain_f
                no starter_capacity node (progression.capacity_nodes)
 node           auto_starter_retirement_<r> once per retired r, priority RETIRE_PRIORITY (-1000), order RESOURCES
 job step       collect: plates take_many from the cells' furnaces (<= 16 sources, <= 50) when >= COLLECT_BATCH (50)
-                        are waiting or every drill stopped; chests: take <= 50 when >= 50 or the drill stopped
+                        are waiting or every drill stopped; chests: take <= 50 when >= 50 or the drill stopped;
+                        coal chests (CARRY_BOUNDED): carried excess over the allowance first goes to a consumer
+                        or depot, a take is <= carried_surplus.trip_room; no room and a full inventory waits
+                        (starter_retirement_waits_for_a_stock_sink), no room with free slots takes as before
+                        (inventory storage then builds the depot chest)
                mine:    a drill with no fuel item and not working first, then a receiver that is not working
                         and holds no output (furnace) / no r (chest); guarded mine (unit + world), contents and
                         fuel return to the inventory; an inserter found just before mining keeps the cell
@@ -272,6 +276,28 @@ for their plate, `_take_output` ranks them before every other plate source and t
 haul batch (`max(missing, haul_batch)`, <= 50) in one guarded `take_many`. No new hardware: a
 chest tap would need a site, power and an inserter (~50 plates/min) for what a backed-up trunk
 already holds (8 plates a tile; 33 tiles on the live iron lane). Pinned by `tests/test_v2_starter_retirement.py`.
+
+## Carried surplus (`carried_surplus.py`)
+
+Live map eval-2874201674: coal retirement moved 2643 coal into the character (56 takes) while
+~1800 coal was ever inserted as fuel; the full inventory blocked construction pickups.
+
+```
+allowance(i)   fuel (coal, wood): boiler_sizing target + FUEL_FETCH (one boiler fill + one burner fetch)
+               ore (iron-ore, copper-ore): PLATE_BATCH; plates are construction stock (inventory_storage.KEEP)
+surplus(i)     carried(i) - allowance(i); acts once >= SURPLUS_STACKS (1) catalog stacks
+upkeep         CarriedSurplus.step, first in starter_upkeep and after the boiler in idle_action: one paid action
+  a consumer   insert up to the slot: fuel -> boiler, burner drill, smelting furnace (nearest within rank);
+               ore -> furnace_source of a fuelled furnace smelting that ore with no other product;
+               never a retiring cell (StarterRetirement.cell_keys) or a stuck entity (STUCK statuses)
+  b depot      deposit into a paid storage chest registered by InventoryStorage (inventory-storage.json)
+fetch          V2Bootstrap._take_output takes fuel from a depot before any other chest (depot_take);
+               "collect produced coal" stays bounded by the requested count
+source         starter retirement coal: trip_room = allowance + consumer/depot room - carried
+```
+
+Not built: a new depot chest on a SiteService spot; the existing InventoryStorage chest (built when
+the inventory nears full) is the depot. Pinned by `tests/test_v2_carried_surplus.py`.
 
 ## Obsolete blocks (`obsolete.py`; startup science: `science_retirement.py`, capability `startup_science_retirement`)
 
