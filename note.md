@@ -252319,3 +252319,8 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: acid iron + advanced-circuit plates from planned-bus taps (block_sites.bus_taps, publish/cutover before ensure_plan); SiteService siting for chemical_production / chemical_science; in-place growth (block_sites.extended) for advanced circuits and blue, blue in PACK_STATES; gas/fluid headers checked against unbuilt plans with plan_needs site; dry runs + remedy rungs (site:more_blocks, waypoints); test_v2_planned_world_tail.
 - result: offline only (fake router/survey); gate passed. failure reason: none offline; live proof pending.
 - next: rocket_plan tail ordering (engine belt row after chemical_science deadlocks blue on a planned world); fleet on a fresh map.
+
+## 2026-11-14 eval-1575138435 after restart on 1ff10d3 (worker agent-a951cbaf78dc76a93)
+- live: engine_production (steel 8) and oil_gathering (steel 5, past scouting) blocked "required item needs a production machine"; the steel furnaces were idle no_ingredients (no recipe observed) holding 85/78 steel, and the slack view hid claimed output.
+- fixes: idle furnace holding the item counts as producer; no producer at all -> evidence producer (rocket_plan.producer_for) and Supervisor._missing_producers queues it (produce rows at MISSING_PRODUCER_RATE); basic_petroleum DryRun + plan_needs (_petroleum_needs) + rungs incl. relax:waypoint_route (two crude pipe legs).
+- gate OK (3277). open: pump segments, clear rung, refinery site rung (6 fixed anchors around refinery_origin).

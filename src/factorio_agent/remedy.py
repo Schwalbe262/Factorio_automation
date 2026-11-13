@@ -197,6 +197,8 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     ),
     # rocket_feed.RocketParts.prepare_feed routes with transport.plan_connection (route_relax).
     "rocket_parts": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    # petroleum.plan_crude_connection: the crude pipe reads route_relax and route_waypoints.
+    "basic_petroleum": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     # Late fluids: their typed pipe routes (chemical_production.plan_typed_fluid_connection) read route_relax.
     "advanced_petroleum": (SITE_MORE_BLOCKS, ROUTE_RELAX_1, ROUTE_RELAX_2),
     # The acid cell's iron belt from its planned-bus tap is a transport.plan_connection route (waypoints apply).

@@ -278,6 +278,37 @@ def _survey_strips(bounds):
 
 
 def plan_crude_connection(game, builder, obs, source, destination, core):
+    """The crude pipe from ``source`` to ``destination``; under the ``relax:waypoint_route`` rung
+    (option ``route_waypoints``) a failed direct route is tried as two legs through a waypoint
+    (``transport.waypoints``), the second leg starting on the first leg's last tile."""
+    direct = _plan_crude_leg(game, builder, obs, source, destination, core)
+    if direct.get("ok") or not remedy.option("route_waypoints"):
+        return direct
+    from .transport import WAYPOINT_LIMIT, waypoints
+
+    for x, y, facing in waypoints(source, destination)[:WAYPOINT_LIMIT]:
+        point = {"x": x, "y": y}
+        first = _plan_crude_leg(game, builder, obs, source, dict(destination, position=point, facing=facing), core)
+        if not first.get("ok"):
+            continue
+        joined = {**core, "entities": list(core["entities"]) + list(first["entities"])}
+        second = _plan_crude_leg(game, builder, obs, dict(source, position=point, facing=facing), destination, joined)
+        if not second.get("ok"):
+            continue
+        entities = list(first["entities"]) + [e for e in second["entities"] if xy(e) != (x, y)]
+        if not any(xy(e) == (x, y) for e in entities):
+            entities.append(entity("pipe", x, y))
+        return dict(
+            second,
+            entities=entities,
+            underground_pairs=list(first.get("underground_pairs", [])) + list(second.get("underground_pairs", [])),
+            ports=[deepcopy(source), deepcopy(destination)],
+            waypoint={"x": x, "y": y, "facing": facing},
+        )
+    return direct
+
+
+def _plan_crude_leg(game, builder, obs, source, destination, core):
     a, b = source["position"], destination["position"]
     bounds = {
         "min_x": min(a["x"], b["x"]) - 12,
@@ -446,6 +477,42 @@ def _fluid_edges(nodes, pairs, core, source):
     return edges
 
 
+def _petroleum_needs(failures, source, origin) -> dict:
+    """The needs of a refinery site search that found nothing (``plan_needs``): the most common stage."""
+    from collections import Counter
+
+    from . import plan_needs
+
+    stages = Counter(str(f.get("stage")) for f in failures if isinstance(f, dict))
+    rejected = dict(stages)
+    to = {"x": origin[0], "y": origin[1]}
+    if stages.get("crude_route"):
+        detail = next(f["detail"] for f in failures if f.get("stage") == "crude_route")
+        return plan_needs.make(
+            "route",
+            str(detail.get("reason") or "crude_route_failed"),
+            item="crude-oil",
+            **{"from": source.get("position"), "to": to},
+            tried=len(failures),
+            rejected_by=rejected,
+            change="a clean crude pipe corridor from the well to the refinery site (longer, or through a waypoint)",
+        )
+    if stages.get("pipeline_extent"):
+        return plan_needs.make(
+            "plan",
+            "pipeline_requires_explicit_pump_segment",
+            item="crude-oil",
+            at=source.get("position"),
+            rejected_by=rejected,
+            change="a refinery site within one native pipeline extent of the well, or a pump segment",
+        )
+    if stages.get("power"):
+        return plan_needs.make("power", "petroleum_power_failed", rejected_by=rejected)
+    return plan_needs.make(
+        "site", "no_refinery_site", at=to, tried=len(failures), rejected_by=rejected, item="crude-oil"
+    )
+
+
 class BasicPetroleum:
     def __init__(self, game, builder, catalog, perimeter):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
@@ -601,6 +668,7 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
         return {
             "ok": False,
             "reason": "no_bounded_basic_petroleum_site_with_complete_native_connections",
+            "plan_needs": _petroleum_needs(failures, source["source"], refinery_origin(board)),
             "evidence": {
                 "attempts": attempts,
                 "planning_budget_seconds": 20,

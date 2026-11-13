@@ -175,6 +175,12 @@ def item(result, name):
 
 
 class RocketBillTests(unittest.TestCase):
+    def test_producer_for_names_the_declared_block_or_a_generic_row(self):
+        catalog = space_age_catalog()
+        self.assertEqual(rp.producer_for(catalog, "steel-plate")["capability"], "steel_production")
+        self.assertEqual(rp.producer_for(catalog, "electronic-circuit")["parameters"], {"item": "electronic-circuit"})
+        self.assertIsNone(rp.producer_for(catalog, "no-such-item"))
+
     def test_silo_part_count_and_recipes_come_from_the_catalog(self):
         result = bill()
         self.assertEqual(result["parts_per_rocket"], 50)

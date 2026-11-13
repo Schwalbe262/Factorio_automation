@@ -64,6 +64,25 @@ class MachineOnlyWaitTests(unittest.TestCase):
         ev = result["evidence"]
         self.assertEqual((ev["item"], ev["producers"], ev["need"]), ("steel-plate", 2, 8))
 
+    def test_an_idle_furnace_holding_claimed_steel_is_a_producer(self):
+        # 330 min: furnaces no_ingredients (no recipe observed), 85 steel inside, the slack view
+        # (critical_path.slack_view) hid the claimed output; the job blocked again.
+        from factorio_agent.critical_path import slack_view
+
+        obs = observation("no_ingredients")
+        for e in obs["entities"]:
+            e.pop("recipe")
+            e["inventory"] = {"coal": 5, "steel-plate": 85}
+            e["output_inventory"] = {"steel-plate": 85}
+        view = slack_view(obs, {"steel-plate": {"units": 8}})
+        result = self.bootstrap().ensure_item(view, "steel-chest", 1)
+        self.assertEqual((result["status"], result["evidence"]["producers"]), ("waiting", 2))
+        # An assembler that only holds the item as an ingredient is no producer.
+        obs["entities"] = [dict(obs["entities"][0], type="assembling-machine", recipe="engine-unit")]
+        self.assertEqual(
+            self.bootstrap().ensure_item(slack_view(obs, {"steel-plate": {}}), "steel-chest", 1)["status"], "blocked"
+        )
+
     def test_no_producer_on_the_map_still_blocks(self):
         obs = observation()
         obs["entities"] = []
