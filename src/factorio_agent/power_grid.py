@@ -93,8 +93,26 @@ def plan_connection(game, builder, obs, destination, reserved=()):
     return _connect(game, builder, obs, destination, reserved, sources, outside)
 
 
+HOP_GRID_PITCHES = (4, 2, 1)  # candidate pole tiles every N tiles around the goal, coarse first
+
+
 def _connect(game, builder, obs, destination, reserved, sources, anchors):
-    """Pole hops from supplied ``sources`` to ``destination``; the search box spans the nearest of ``anchors``."""
+    """Pole hops from supplied ``sources`` to ``destination``; the search box spans the nearest of ``anchors``.
+
+    Candidate tiles lie on a grid around the goal. A coarse grid can miss the
+    few free tiles beside an ore patch (seed 4176033748: a coal bank 8 tiles
+    from a powered pole had every 4-tile grid point on ore), so a finer grid
+    is tried before giving up.
+    """
+    result = None
+    for pitch in HOP_GRID_PITCHES:
+        result = _connect_on_grid(game, builder, obs, destination, reserved, sources, anchors, pitch)
+        if result.get("reason") not in ("no_bounded_pole_hop_connection", "power_connection_survey_budget_exceeded"):
+            return result
+    return result
+
+
+def _connect_on_grid(game, builder, obs, destination, reserved, sources, anchors, pitch):
     goal = (destination["x"], destination["y"])
     mining_goal = None
     for spec in reserved:
@@ -124,9 +142,9 @@ def _connect(game, builder, obs, destination, reserved, sources, anchors):
         max(start[1], goal[1]) + 12,
     )
     points = {
-        (goal[0] + x * 4, goal[1] + y * 4)
-        for x in range(math.ceil((bounds[0] - goal[0]) / 4), math.floor((bounds[1] - goal[0]) / 4) + 1)
-        for y in range(math.ceil((bounds[2] - goal[1]) / 4), math.floor((bounds[3] - goal[1]) / 4) + 1)
+        (goal[0] + x * pitch, goal[1] + y * pitch)
+        for x in range(math.ceil((bounds[0] - goal[0]) / pitch), math.floor((bounds[1] - goal[0]) / pitch) + 1)
+        for y in range(math.ceil((bounds[2] - goal[1]) / pitch), math.floor((bounds[3] - goal[1]) / pitch) + 1)
     }
     starts = {
         (e["position"]["x"], e["position"]["y"]): e
