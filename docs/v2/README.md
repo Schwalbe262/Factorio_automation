@@ -11,6 +11,7 @@
 | [SUPERVISOR.md](SUPERVISOR.md) | supervisor flags, planner none/luna, incident replay |
 | [LIFECYCLE.md](LIFECYCLE.md) | BAT menu and `lifecycle` commands; parallel measurement runs: "Fleet runs" below |
 | [AUTOMATION_CONFIG.md](AUTOMATION_CONFIG.md) | `automation_config.json` fields and ranges |
+| [HEADLESS.md](HEADLESS.md) | probe: what works without a connected client, why red science needs one |
 
 ## Dashboard (read-only run view)
 
@@ -64,6 +65,9 @@ hand crafts must run through a player for the engine's research trigger
 (`deterministic_bootstrap`: "engine crafting requires an associated player"),
 and `supervisor.actor_binding` refuses a character without its pinned player.
 Factorio has no headless client, so "no GUI" means one hidden client per run.
+A player-less actor was probed on a headless server: everything works except
+the hand-crafted lab that triggers `automation-science-pack`
+([HEADLESS.md](HEADLESS.md)).
 
 Cost measured on this machine (Ryzen 9 7950X3D, 32 logical cpus, 64 GB):
 a fresh run is server ~350 MB + client ~690 MB + supervisor ~50 MB, ~0.4
