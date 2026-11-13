@@ -120,7 +120,7 @@ def _slot_entities(x0, y0, slot, row, furnace_name):
 
 
 def paired_furnace_bank(
-    x0, y0, per_row, resource, *, slots=BANK_SLOTS, length=BANK_LENGTH, furnace_name="stone-furnace"
+    x0, y0, per_row, resource, *, slots=BANK_SLOTS, length=BANK_LENGTH, furnace_name="stone-furnace", product=None
 ):
     """Two furnace rows around one shared eastbound output, ``slots`` furnace slots each.
 
@@ -142,8 +142,12 @@ def paired_furnace_bank(
     of both rows are built; the others are the bank's reserved growth
     (``growth_slots``/``growth_entities``, inside ``growth_area``), added in
     place by ``SmeltingDistrict.capacity_step`` without rerouting anything.
+
+    ``product`` defaults to the ore's plate; another single-input furnace
+    recipe (iron plate -> steel, stone -> brick: ``planned_furnaces``) uses
+    the same bank with ``resource`` as its raw input item.
     """
-    product = {"iron-ore": "iron-plate", "copper-ore": "copper-plate"}[resource]
+    product = product or {"iron-ore": "iron-plate", "copper-ore": "copper-plate"}[resource]
     if not 1 <= per_row <= slots or 9 + SLOT_PITCH * (slots - 1) + 2 > length - 4:
         raise ValueError("paired bank slots do not fit its length")
     fixed = [entity("transport-belt", x0 + dx + 0.5, y0 + 0.5, 4) for dx in range(4)]
@@ -357,6 +361,49 @@ def feed_lane_positions(bank):
         if e["name"] == "transport-belt" and p["y"] == first["y"] - 2.5 and p["x"] >= first["x"] + 0.5:
             picked.append(original["position"])
     return picked
+
+
+def native_feed_lanes(game, banks) -> dict:
+    """One query: item counts on both lanes of every bank's built shared input belts.
+
+    ``{"ok": True, "banks": [{"resource", "lanes": [left, right]}]}``; a bank's
+    ``resource`` is its raw input item (ore, iron plate for steel, stone for bricks).
+    """
+    payload = json.dumps(
+        json.dumps(
+            [{"resource": b["resource"], "positions": feed_lane_positions(b)} for b in banks],
+            separators=(",", ":"),
+        )
+    )
+    return game.query(
+        """
+local banks=helpers.json_to_table("""
+        + payload
+        + """);local result={}
+for _,bank in ipairs(banks) do
+ local counts={{},{}}
+ for _,p in ipairs(bank.positions) do
+  local belt=target(p,"transport-belt");if not belt then return {ok=false,reason="feed_belt_missing"} end
+  for lane=1,2 do for _,item in pairs(belt.get_transport_line(lane).get_contents()) do
+   counts[lane][item.name]=(counts[lane][item.name] or 0)+item.count
+  end end
+ end
+ result[#result+1]={resource=bank.resource,lanes=counts}
+end
+return {ok=true,banks=result}
+"""
+    )
+
+
+def feed_lanes_ok(lanes) -> bool:
+    """Every bank's input belt carries one item per lane: its raw item on one, coal on the other."""
+    if not isinstance(lanes, dict) or not lanes.get("ok"):
+        return False
+    for row in lanes["banks"]:
+        kinds = [set(lane) for lane in row["lanes"]]
+        if any(len(k) != 1 for k in kinds) or kinds[0] & kinds[1] or set.union(*kinds) != {row["resource"], "coal"}:
+            return False
+    return True
 
 
 class SmeltingDistrict:
@@ -915,36 +962,9 @@ return {ok=true,legal=legal}
                     "plates_on_belts": plate_count,
                 }
             )
-        payload = json.dumps(
-            json.dumps(
-                [{"resource": b["resource"], "positions": feed_lane_positions(b)} for b in self.state["banks"]],
-                separators=(",", ":"),
-            )
-        )
-        lanes = self.game.query(
-            """
-local banks=helpers.json_to_table("""
-            + payload
-            + """);local result={}
-for _,bank in ipairs(banks) do
- local counts={{},{}}
- for _,p in ipairs(bank.positions) do
-  local belt=target(p,"transport-belt");if not belt then return {ok=false,reason="feed_belt_missing"} end
-  for lane=1,2 do for _,item in pairs(belt.get_transport_line(lane).get_contents()) do
-   counts[lane][item.name]=(counts[lane][item.name] or 0)+item.count
-  end end
- end
- result[#result+1]={resource=bank.resource,lanes=counts}
-end
-return {ok=true,banks=result}
-"""
-        )
-        if not lanes.get("ok"):
+        lanes = native_feed_lanes(self.game, self.state["banks"])
+        if not feed_lanes_ok(lanes):
             return None
-        for row in lanes["banks"]:
-            kinds = [set(lane) for lane in row["lanes"]]
-            if any(len(k) != 1 for k in kinds) or kinds[0] & kinds[1] or set.union(*kinds) != {row["resource"], "coal"}:
-                return None
         return {
             "tick": obs["tick"],
             "automatic_feed_baseline": self.state["automatic_feed_baseline"],

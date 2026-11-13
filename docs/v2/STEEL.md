@@ -1,5 +1,33 @@
 # Automatic steel preparation
 
+## Fresh maps: site-planned furnace block (`planned_furnaces.py`)
+
+On a world with a site service and a published planned bus,
+`IndustrialOperations.steel_supply`/`steel_production` and
+`SharedCoalTap` (`steel_coal_supply`) delegate to `PlannedFurnaces(kind="steel")`;
+`brick_production` delegates to `kind="brick"`. The block is the smelting
+district's paired bank (`smelting.paired_furnace_bank`, `product=` argument)
+with 6 reserved slots per row (30 x 12 tiles), 1 built per row (2 furnaces,
+7.5 steel/min nameplate for 37.5 iron/min). Site: one `SiteService` district
+block (`returns_to_bus=True`), turned by `site.fit.orientations` so iron faces
+the tap band, coal faces the dedicated `coal` outlet and steel leaves on the
+bus-edge side. Iron: a planned-bus tap planned with the block
+(`planned_tap.connect_inputs`); coal: a route from `material-sources.json`
+`coal` (bricks: `stone` and `brick-coal`), recorded in board `connections`.
+Growth tiles are hard for every route and the power bridge. The whole plan is
+published on board block `steel_production` (`brick_production`) and the tap in
+the bus state before anything is built.
+
+Phases: `steel_supply` = plan, tap cut-over, iron route, proof iron at the raw
+port; `steel_production` (needs the steel-plate recipe) = whole plan, proof:
+every built furnace finished steel with pure raw/coal/fuel (idle furnaces get
+the native witness), steel on the product port, one item per feed lane
+(`smelting.native_feed_lanes`); `steel_coal_supply` = proof that the registered
+coal outlet (same unit) feeds the block's coal port, no shared header. The
+steel port is a free board output port, so `produce` rows can take it.
+`grown`/`growth_evidence` add reserved slots in place (not wired to a planner
+yet). The sections below are the development-map path (no planned bus).
+
 `steel_production.py` provides `steel_rates(catalog)`, `steel_core(catalog,x,y)`,
 `audit_steel_core(plan,catalog)` and `SteelProduction(game,builder,catalog,
 iron_source=...,coal_source=...)` with `prepare(obs)`, `step(obs)` and `proof(obs)`.

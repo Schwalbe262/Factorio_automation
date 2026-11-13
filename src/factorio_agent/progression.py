@@ -231,14 +231,22 @@ ROADMAP: tuple[Step, ...] = (
     _research("oil-gathering"),
     Step("dedicated_materials_coal", "dedicated_materials", {"resource": "coal"}, after=("main_bus",)),
     Step("dedicated_materials_stone", "dedicated_materials", {"resource": "stone"}, after=("main_bus",)),
-    Step("steel_supply", "steel_supply", {}),
+    # On a planned world steel and bricks are site-planned furnace blocks
+    # (planned_furnaces.py): the steel block routes the dedicated "coal"
+    # outlet and taps bus iron, the brick block routes "stone" and "brick-coal".
+    Step("steel_supply", "steel_supply", {}, after=("dedicated_materials_coal",)),
     Step(
         "steel_production",
         "steel_production",
         {},
         after=("research_steel_processing", "dedicated_materials_coal"),
     ),
-    Step("brick_production", "brick_production", {}, after=("dedicated_materials_stone",)),
+    Step(
+        "brick_production",
+        "brick_production",
+        {},
+        after=("dedicated_materials_stone", "dedicated_materials_coal"),
+    ),
     _research("electric-energy-distribution-1"),
     Step("steel_coal_supply", "steel_coal_supply", {}),
     Step("oil_gathering", "oil_gathering", {}, after=("research_oil_gathering",)),
