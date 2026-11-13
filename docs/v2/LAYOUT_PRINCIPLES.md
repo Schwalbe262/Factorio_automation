@@ -171,8 +171,19 @@ the belt, inserter and magazine stock rows and engines (G -> E <- P).
 ## Where it is used
 
 * `produce` (`production_layout.design_line`): a row line first; when no row
-  can carry the tree (three solids, a two-level intermediate such as the
-  inserter), a cluster line ending in a stock chest (`cluster_line`).
+  can carry the tree (a two-level intermediate such as the inserter), a cluster
+  line ending in a stock chest (`cluster_line`). Three belt-fed solids (low
+  density structure: copper, steel, plastic) are a row with a **lane-merge
+  adapter** (genome `merge: lane_merge`): the heaviest item has the near belt to
+  itself, the two lighter ones arrive on two full routed belts that side-load
+  from opposite sides onto the start of the far belt, one item per lane (never
+  a mixed lane, no sushi); `audit_line` checks the lanes and
+  `production_site` rejects a placement whose routes feed an adapter tile
+  (`adapter_intrusions`). Output mode `stock_chest` (default, construction
+  stock) or `belt`: the row's output belt end is published as a free belt port
+  (`belt_tail`), so a row that cannot make an input in-line (a processing unit
+  needs circuits, which need cable) routes from it; `rocket_plan` makes a row a
+  belt row exactly when such a consumer exists.
 * `logistic_science` on a planned world: the cluster (or the split row, see "Green
   science" below) on iron and copper bus taps, packs routed to the lab entry; no district branch (blocked
   `green_science_needs_planned_bus` without a published bus). `green_core`
@@ -191,7 +202,7 @@ stored as entities.
 * Genome (`layout_variants.Genome`): `form` (`row`: intermediates on internal belt
   lanes / sub-rows; `cluster`: every intermediate by direct insertion), `machine`,
   row `spare` (`none` | `default` = as many slots again | `max` = up to 3x the built
-  count within the lane budget), cluster `grid`, `turned` (input belt on one side or
+  count within the lane budget), row `merge` (`lane_merge` for three belt-fed solids), cluster `grid`, `turned` (input belt on one side or
   turning down a second side), `cells` (which machine in which cell), `output_side`.
   `modules` / `beacons` are reserved and empty; `layout_variants.effects` is the one
   place their effects will enter the metrics.

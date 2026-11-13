@@ -363,8 +363,11 @@ CAPABILITIES = {
     "produce": {
         "parameters": {
             "item": "product of an unlocked solid assembler recipe with at most two solid ingredients "
-            "(three when two are in-line intermediates of one shared input)",
+            "(three when all three are belt-fed through a lane merge, or two are in-line intermediates "
+            "of one shared input)",
             "rate_per_minute": "finite number (0,600], absolute nominal target",
+            "output": "optional: stock_chest (default, construction stock) or belt (a published belt "
+            "output port other rows route from)",
         },
         "requires": ["smelting_district", "power"],
         "native_recipes": ["assembling-machine-1"],
