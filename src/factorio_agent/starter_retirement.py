@@ -30,12 +30,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from . import obsolete
 from .core.deterministic_state import _atomic_json
 
 CAPABILITY = "starter_retirement"
 STATE_FILE = "starter-retirement.json"
 NODE_PREFIX = "auto_starter_retirement_"
-RETIRE_PRIORITY = -1000  # below every roadmap step: background demolition
+RETIRE_PRIORITY = obsolete.RETIRE_PRIORITY  # below every roadmap step: background demolition
 RESOURCES = ("iron-ore", "copper-ore", "stone", "coal")
 PLATE_OF = {"iron-ore": "iron-plate", "copper-ore": "copper-plate"}
 RECEIVERS = {
@@ -158,14 +159,13 @@ def starter_retirement_nodes(jobs, queue_nodes, observation, capabilities) -> li
     for resource in RESOURCES:
         if resource in retired and resource not in taken:
             return [
-                {
-                    "id": NODE_PREFIX + resource,
-                    "capability": CAPABILITY,
-                    "parameters": {"resource": resource},
-                    "priority": RETIRE_PRIORITY,
-                    "depends_on": [],
-                    "reason": f"{resource} has a permanent source: collect the starter cells' stock and mine them",
-                }
+                obsolete.retire_node(
+                    NODE_PREFIX + resource,
+                    CAPABILITY,
+                    {"resource": resource},
+                    f"{resource} has a permanent source: collect the starter cells' stock and mine them",
+                    RETIRE_PRIORITY,
+                )
             ]
     return []
 
@@ -344,9 +344,7 @@ class StarterRetirement:
             if drill is not None or receiver is not None:
                 live.append((c, drill, receiver))
         if not live:
-            if entry.get("phase") != "retired":
-                entry["phase"] = "retired"
-                entry["retired_tick"] = obs.get("tick")
+            if obsolete.mark_retired(entry, obs.get("tick")):
                 _atomic_json(self.path, state)
             return {
                 "status": "succeeded",
@@ -374,17 +372,10 @@ class StarterRetirement:
                     "reason": "starter_retirement_kept_a_linked_cell",
                     "evidence": _key(entity),
                 }
-            if type(entity.get("unit_number")) is not int:
+            action = obsolete.guarded_mine(entity, world, f"retire cold {resource} starter cell")
+            if action is None:
                 continue
-            return {
-                "type": "mine",
-                "name": entity["name"],
-                "position": dict(entity["position"]),
-                "count": 1,
-                "expected_entity_unit": entity["unit_number"],
-                "expected_entity_world_id": world,
-                "reason": f"retire cold {resource} starter cell",
-            }
+            return action
         return {
             "status": "waiting",
             "reason": "starter_retirement_waits_for_cells_to_cool",

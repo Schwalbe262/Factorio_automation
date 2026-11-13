@@ -62,6 +62,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Space | `smelting_site.py`, `mining_site.py` | smelting district on the plan zone; mining bank exit side from the plan |
 | Space | `production_rows.py`, `production_layout.py`, `production_site.py`, `production_sources.py` | `produce` capability: design, place, route, power, preflight, stock chest |
 | Space | `supply_cell.py` | `supply_cell` capability: temporary hand-fed assembler cell (belts, ...) before the bus; recipe tree -> cell, ring site, feeding upkeep, `machine_stock` hook (`chain_stock`), planner `supply_cell_nodes`, retirement by mining (PLANNERS.md) |
+| Plan | `obsolete.py`, `science_retirement.py` | shared obsolete-block rule (trigger, guards, guarded mine, board release, retired record, one-shot node) and its registry; `startup_science_retirement`: dismantle the startup science cell once the permanent row researches, labs reused by growth (PLANNERS.md) |
 | Space | `planned_bus.py` | `planned_main_bus`: iron/copper trunks on the plan's bus lanes, fed by a splitter beside each district plate port; publishes `board["shared_main_bus"]` (template `planned_main_bus`) |
 | Space | `planned_tap.py` | taps on the planned bus (any direction, either side): splitter + branch to a port outside the band, built trunks dive, reserved lanes tunnelled, trunk extension; planned with the consumer's block (`connect_inputs`), built first (`cutover`), supply rule `tap_budget` |
 | Space | `planned_furnaces.py` | steel/brick furnace blocks on a planned world: paired bank with another recipe on a `SiteService` block, iron from a planned tap, coal/stone from dedicated material ports, reserved growth slots; `steel_supply`/`steel_production`/`steel_coal_supply`/`brick_production` delegate here (`industrial.IndustrialOperations.planned`) |
@@ -93,7 +94,7 @@ All other top-level modules are capability controllers constructed in
 | `logs/incidents.jsonl` | `Supervisor._record_incident` | incident documents (also with planner none) |
 | `logs/actions.jsonl` | `DeterministicGame._record_action` | every act and its receipt |
 | `logs/profile-run.txt` | `kernel.Session._write_profile` | only with `FACTORIO_AGENT_PROFILE=1` |
-| controller state, e.g. `factory-builder.json`, `smelting-district.json`, `mining-outposts.json`, `automation-science.json`, `production-row-<item>.json`, `startup-science-capacity.json` | the controller | its plan, phase, world_id |
+| controller state, e.g. `factory-builder.json`, `smelting-district.json`, `mining-outposts.json`, `automation-science.json`, `production-row-<item>.json`, `startup-science-capacity.json`, `supply-cell.json`, `starter-retirement.json`, `startup-science-retirement.json` | the controller | its plan, phase, world_id |
 | `stop.json` / `supervisor-stop.json` | `stop-worker` command / lifecycle stop | stop markers; `writer.lock`, `controller.lock` are `RunLock` files |
 
 ## Decision layers (in cycle order)
@@ -103,6 +104,7 @@ All other top-level modules are capability controllers constructed in
 | Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps, priority `-100 - index` | propose a step whose job is blocked/failed; touch the world |
 | Capacity planner | `progression.capacity_nodes` -> `capacity_planning.plan_capacity` | add `starter_capacity` nodes at priority -50 | expand without measured production and known cell cost; before `starter` succeeded; after that resource's `mining_outpost` succeeded |
 | Produce planner | `progression.produce_nodes` | add `produce` nodes at priority -51 | propose without positive measured plate net rate |
+| Obsolete blocks | `obsolete.py`; `supply_cell_nodes`, `starter_retirement_nodes`, `science_retirement_nodes` | one retire node per obsolete block at -1000 (startup science: -599 while growth wants hardware) | retire before the successor is verified, while a dependent job is open or a bootstrap batch is funded; propose twice |
 | Supply cell planner | `supply_cell.supply_cell_nodes` (from `autopilot_nodes`) | add one `supply_cell` build node (-52) and later one retire node (-1000) | propose twice per map; retire while demand remains and no `produce` row took over |
 | Research planners | `research_capacity` (observe receipt, `industry.py` startup cell), `research_policy.choose_research` (`StarterExecutors.idle_action`) | size science rate/labs; start lab research when no job acts | start research while a job owns research or any job has an unresolved world effect |
 | Auto-retry | `Supervisor._auto_retry` | `retry` a blocked job after a new success, <= 3 times | retry unknown outcomes, rollbacks, deadlines |

@@ -327,6 +327,11 @@ CAPABILITIES = {
         "requires": ["starter"],
         "effect": "collect the remaining stock of a retired resource's burner starter cells in large trips, then mine the cold, empty, unlinked cells (paid, guarded) to free their tiles",
     },
+    "startup_science_retirement": {
+        "parameters": {},
+        "requires": ["automation_science"],
+        "effect": "dismantle the obsolete startup science cell, its slot labs and the starter lab once the permanent red science row researches from machine packs (paid, guarded mining; board block released; labs and assemblers carried for science_growth; leftover packs to the permanent labs)",
+    },
     "research": {
         "parameters": {"technology": "catalog technology name"},
         "requires": ["automation_science"],

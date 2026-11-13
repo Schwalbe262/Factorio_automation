@@ -102,6 +102,10 @@ def science_growth_step(ex, obs, parameters):
     result = ex.builder.ensure_power(obs)
     if result.get("status") != "succeeded":
         return result
+    retirement = getattr(ex, "science_retirement", None)  # move the startup cell's labs, do not craft new ones
+    held = retirement.holds_for_growth(obs) if retirement is not None else None
+    if held is not None:
+        return held
     return ex.science.grow(obs, parameters or {})
 
 
@@ -113,6 +117,23 @@ def validate_science_growth(parameters):
     from ..science import validate_growth
 
     validate_growth(parameters)
+
+
+def startup_science_retirement_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "startup_science_retirement")
+    if early is not None:
+        return early
+    return ex.science_retirement.step(obs, parameters or {})
+
+
+def startup_science_retirement_proof(ex, obs, result, parameters):
+    return ex.science_retirement.proof(obs, parameters)
+
+
+def validate_startup_science_retirement(parameters):
+    from ..science_retirement import validate_parameters
+
+    validate_parameters(parameters)
 
 
 def logistic_science_step(ex, obs, parameters):
@@ -154,6 +175,12 @@ register(
     validate=validate_automation_science,
 )
 register("science_growth", step=science_growth_step, proof=science_growth_proof, validate=validate_science_growth)
+register(
+    "startup_science_retirement",
+    step=startup_science_retirement_step,
+    proof=startup_science_retirement_proof,
+    validate=validate_startup_science_retirement,
+)
 register(
     "logistic_science", step=logistic_science_step, proof=logistic_science_proof, validate=validate_logistic_science
 )

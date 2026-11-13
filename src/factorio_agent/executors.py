@@ -146,6 +146,10 @@ class StarterExecutors:
         from .inventory_storage import InventoryStorage
 
         self.storage = InventoryStorage(game, catalog)
+        from .science_retirement import StartupScienceRetirement
+
+        # Obsolete startup science cell: dismantled once the permanent row researches (obsolete.py).
+        self.science_retirement = StartupScienceRetirement(game, catalog, self.storage)
         from .material_supply import DedicatedMaterials
 
         self.material_supply = DedicatedMaterials(game, self.builder, catalog, self.outposts, perimeter=self.perimeter)
