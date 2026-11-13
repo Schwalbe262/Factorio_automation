@@ -282,7 +282,8 @@ class LiveCaseTests(unittest.TestCase):
         )
         self.assertEqual(b["lost_seconds_per_minute"], 480.0)
         self.assertEqual((b["proposal"]["gate"], b["proposal"]["provider"]), ("science_wait", "science"))
-        self.assertIn("science_growth.growth_options", b["proposal"]["reason"])
+        # The science hook exists now (pack_growth); with no pack_growth receipt in this scene it waits and says so.
+        self.assertIn("no growth receipt for logistic-science-pack", b["proposal"]["reason"])
 
     def test_a_science_growth_options_hook_takes_every_pack(self):
         scene = (
