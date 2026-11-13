@@ -195,7 +195,10 @@ stored as entities.
   `top_k` feasible candidates within the margin, so one map always explores the same way;
   produce rows, red science and green science all use it. `fleet.py status` / `report`
   headers say "layout EXPLORATION on". The report's "layout variants used" section lists the
-  variants of each block side by side: runs, proofs, proof rate, median build game-seconds
+  variants of each block side by side (blocks `produce:<item>`, the science blocks,
+  `mining:<resource>` from the banks' `layout` record, proof = bank `ready` at its
+  `output_evidence` tick, and `smelting:<resource>` from each district bank's shape variant,
+  proof = the `smelting_district` milestone): runs, proofs, proof rate, median build game-seconds
   (chosen -> verified), median game-seconds from the block's proof to its next milestone
   (science blocks: the next `research_*` milestone; produce rows: any), explored, kW,
   pollution; with two or more variants of a block, `-> leading:` names the one the data
