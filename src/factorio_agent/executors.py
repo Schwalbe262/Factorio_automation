@@ -656,7 +656,9 @@ class StarterExecutors:
         if "advanced_petroleum" not in cache:
             from .advanced_petroleum import AdvancedPetroleum
 
-            cache["advanced_petroleum"] = AdvancedPetroleum(self.game, self.builder, self.catalog, self.perimeter)
+            cache["advanced_petroleum"] = AdvancedPetroleum(
+                self.game, self.builder, self.catalog, self.perimeter, site=getattr(self, "site", None)
+            )
         return cache["advanced_petroleum"]
 
     def _fluid_products(self):

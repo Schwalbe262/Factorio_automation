@@ -32,6 +32,8 @@ INPUT_KEYS = {"crude-oil": "advanced-crude", "water": "advanced-water"}
 OUTPUT_KEYS = {"heavy-oil": "heavy-oil", "light-oil": "light-oil", "petroleum-gas": "advanced-petroleum-gas"}
 RECIPES = ("advanced-oil-processing", "heavy-oil-cracking", "light-oil-cracking")
 OWNER = "advanced-petroleum"
+# Development map without a site service: candidate offsets beside the basic refinery.
+LEGACY_OFFSETS = ((0, 0), (48, 0), (0, -48), (48, -48), (0, 48), (48, 48), (96, 0), (96, -48))
 
 
 def _key(e):
@@ -422,8 +424,9 @@ return {ok=true,segments=out}
 
 
 class AdvancedPetroleum:
-    def __init__(self, game, builder, catalog, perimeter):
+    def __init__(self, game, builder, catalog, perimeter, *, site=None):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
+        self.site = site  # planned world: anchors from the master plan (block_sites)
         self.path = Path(game.cfg.runtime_dir) / "advanced-petroleum.json"
         self.sources_path = self.path.parent / "fluid-sources.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
@@ -530,9 +533,16 @@ class AdvancedPetroleum:
         by = math.floor(reference[0][1] / 16) * 16 + 0.5
         future_hard = unbuilt_external_keepouts(self.builder, obs, board["blocks"])
         candidates = []
+        from . import block_sites
+
+        sited = block_sites.anchors(self.site, obs, OWNER, lambda x, y: advanced_refinery_core(self.catalog, x, y))
+        self._allocations = {anchor: name for anchor, name in sited or ()}
+        points = list(self._allocations) if sited is not None else [(bx + dx, by + dy) for dx, dy in LEGACY_OFFSETS]
+        if sited == []:
+            return {"ok": False, "reason": "advanced_no_site_allocation", "candidate_failures": []}
         try:
-            for dx, dy in ((0, 0), (48, 0), (0, -48), (48, -48), (0, 48), (48, 48), (96, 0), (96, -48)):
-                core = advanced_refinery_core(self.catalog, bx + dx, by + dy)
+            for x, y in points:
+                core = advanced_refinery_core(self.catalog, x, y)
                 audit = audit_advanced_core(core, self.catalog, self.builder)
                 if not audit["ok"]:
                     return {"ok": False, "reason": "advanced_core_audit_failed", "audit": audit}
@@ -719,6 +729,7 @@ end;return {ok=true}"""
                 defense_preview=defense,
                 pipeline_extents=extents,
                 prepared_tick=obs.get("tick"),
+                site_allocation=getattr(self, "_allocations", {}).get((core["anchor"]["x"], core["anchor"]["y"])),
             )
         return budget.failure("advanced_no_whole_native_refinery_site", failures=failures[-4:])
 
@@ -773,11 +784,15 @@ end;return {ok=true}"""
         if self.state and not _same(obs, self.state, self.catalog):
             return {"status": "blocked", "reason": "advanced_world_or_catalog_changed"}
         if not self.state:
+            from . import block_sites
+
             prepared = self.prepare(obs)
             if not prepared.get("ok"):
+                block_sites.keep(self.site, obs, OWNER, None)
                 return {"status": "blocked", **prepared}
             self.state = prepared
             self._save()
+            block_sites.keep(self.site, obs, OWNER, prepared.get("site_allocation"))
         gate = self._prerequisites(obs)
         if gate:
             return {"status": "blocked", **gate}

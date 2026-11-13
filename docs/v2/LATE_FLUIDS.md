@@ -93,6 +93,18 @@ lane per missing belt of every shared non-raw bill item (`bus_lane_order`, keepi
 keeps its saved `site-plan.json`; there is no bus-lane extension capability yet, so
 `tools/rocket_plan.py <run>` reports the shortfall against that map's lanes (`short`).
 
+## Sites from the master plan (`block_sites`)
+
+Fixed-shape oil/chemistry cores take their anchor from `SiteService`: `block_sites.anchors`
+probes the core's footprint, allocates district blocks of that size and returns one anchor per
+block (core reserved area on the block corner); the controller keeps its audits, routes and
+land checks per anchor and `block_sites.keep` settles the chosen block (or releases all on a
+failed prepare). Without a site service the legacy relative anchors stay (development map).
+Done: `advanced_petroleum` (`site_allocation` in its state; `advanced_no_site_allocation`
+when the plan has no block). Still relative anchors + `survey_slots`: `fluid_distribution`,
+`gas_distribution`, `fluid_products`, `chemical_production`, `advanced_circuits`,
+`chemical_science`.
+
 ## Known limits
 
 * `fluid_product` sulfuric acid takes iron from the development-map bus tap (`bus-factory.json`,
