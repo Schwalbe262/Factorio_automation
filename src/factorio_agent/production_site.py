@@ -30,7 +30,7 @@ from .manufacturing import connect_power_groups
 from .planning import overlap, preflight
 from . import planned_tap, remedy
 from .production_layout import adapter_intrusions, audit_line, design_line, input_demand, rows
-from .production_sources import resolve
+from .production_sources import ROUTE_TAP, resolve, route_tap_sites
 from .site.fit import orientations
 from .site.placement import block_wants, settle
 from .site.transform import apply as apply_transform
@@ -140,8 +140,21 @@ def _routes(game, builder, obs, board, line, owner, product, block=None, catalog
     ]
     sources = [{"item": p["item"], "kind": "planned_bus_tap", "block": "shared_main_bus"} for p in tapped]
     extra = {"ignored_units": tuple(taps["ignored_units"])} if taps["ignored_units"] else {}
+    ignored = list(taps["ignored_units"])
+    route_taps = []
     for port, found in found_by_port:
         if found["kind"] == "planned_bus_tap":
+            continue
+        if found["kind"] == ROUTE_TAP:
+            tapped = _route_tap(game, builder, obs, owner, found, port, entities, catalog, line)
+            if not tapped["ok"]:
+                return tapped
+            routes.append(tapped["route"])
+            entities = merge_entities(entities, tapped["tap"]["entities"] + tapped["route"]["entities"])
+            route_taps.append(tapped["tap"])
+            ignored += tapped["tap"]["remove_units"]
+            sources.append({"item": port["item"], "kind": ROUTE_TAP, "block": found["block"]})
+            connections.append(tapped["connection"])
             continue
         route = plan_connection(game, builder, obs, found["source"], port, entities, **extra)
         if not route.get("ok"):
@@ -166,7 +179,50 @@ def _routes(game, builder, obs, board, line, owner, product, block=None, catalog
         "connections": connections,
         "sources": sources,
         "taps": taps["taps"],
-        "ignored_units": taps["ignored_units"],
+        "route_taps": route_taps,
+        "ignored_units": ignored,
+    }
+
+
+def _route_tap(game, builder, obs, owner, found, port, entities, catalog, line) -> dict:
+    """A splitter tap on the taken port's route and the belt from its branch to ``port``.
+
+    ``{"ok", "tap", "route", "connection"}`` or a failure naming the sites tried. Sites come from
+    the observed route (``production_sources.route_tap_sites``); a site whose tiles meet this
+    plan's entities is skipped; the first site with a clean route wins.
+    """
+    item = port["item"]
+    sites = route_tap_sites(obs, found["source"], item=item, name=f"{owner}:{item}")
+    occupied = {xy(e) for e in entities}
+    failures = []
+    for tap in sites:
+        if any(xy(p) in occupied for p in [tap["port"]] + [{"position": tap["splitter"]["position"]}]):
+            failures.append("route_tap_site_meets_the_row")
+            continue
+        route = plan_connection(
+            game, builder, obs, tap["port"], port, list(entities) + tap["entities"], ignored_units=tap["remove_units"]
+        )
+        if not route.get("ok"):
+            failures.append(route.get("reason", "route_failed"))
+            continue
+        connection = {
+            "item": item,
+            "source": dict(tap["port"]["position"]),
+            "destination": port["position"],
+            "owner": owner,
+            "tapped_connection": {k: found["tapped_connection"].get(k) for k in ("owner", "source", "destination")},
+        }
+        if catalog is not None:
+            connection["demand_per_minute"] = round(input_demand(catalog, line, item), 3)
+        tap["tapped_connection"] = connection["tapped_connection"]
+        return {"ok": True, "tap": tap, "route": route, "connection": connection}
+    return {
+        "ok": False,
+        "reason": "production_row_route_tap_unavailable",
+        "item": item,
+        "tapped_port": found["source"].get("position"),
+        "sites": len(sites),
+        "failures": failures[-6:],
     }
 
 
@@ -350,6 +406,7 @@ def _place_one(game, builder, obs, catalog, site, board, design: dict, *, owner:
                 "connections": routed["connections"],
                 "sources": routed["sources"],
                 "taps": routed["taps"],
+                "route_taps": routed.get("route_taps", []),
                 "route_metrics": [r.get("route_metrics") for r in routed["routes"]],
                 "fluid_handoff": fluid.get("handoff"),
             }
