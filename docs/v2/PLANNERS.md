@@ -40,8 +40,12 @@ coal: also +1 cell when produced < fuel_margin * (consumed + new cells' burn)
 | `fuel_per_cell_per_minute` / `fuel_per_drill_per_minute` | 3.6 / 2.25 | coal burned by a new smelting / drill-only cell |
 | `build_seconds_per_cell` | 15.0 | unless evidence has `build_seconds` |
 | `min_saving_seconds` / `max_ratio` | 60.0 / 0.85 | expansion must clearly beat waiting |
+| `hand_gathered_seconds` | `{"wood": 2.0}` | fund seconds per item of a cell input with no supply row (the wooden chest of coal/stone cells); any other unknown input makes the option impossible |
 
-Unmeasured production or unknown cell cost means wait. Sorted by `T(0)`
+Unmeasured production or unknown cell cost means wait. Before `hand_gathered_seconds`
+existed, every coal option was infinite because the coal cell's 2 wood had no
+supply row, so coal never expanded (seed 283895142: one coal cell for ~10
+burners, cold new cells, `power` waited 6 min for "automated coal output"). Sorted by `T(0)`
 descending; a decision whose cell cost uses an item already being expanded is
 dropped; a resource is skipped once its `mining_outpost` succeeded. Pinned by
 `tests/test_v2_capacity_planning.py`, `tests/test_v2_progression.py`.
@@ -102,6 +106,21 @@ Pinned by `tests/test_v2_research_policy.py`, `tests/test_v2_idle_research.py`.
 | `machine_stock.STALL_TICKS` | 3600 | a row without products for this long is `stalled` (hand crafting resumes) | `test_v2_machine_stock` |
 | `industry.SCIENCE_COURIER_BATCH` | 5 | bootstrap science carried per lab per trip | `test_v2_research_capacity` |
 | `DEDICATED_COAL_MINIMUM` | 4000 | coal under a dedicated power drill | none yet |
+
+## Build ahead (`core/deterministic_builder.FactoryBuilder.ensure_plan`)
+
+```
+for entity in plan order:
+  existing -> continue
+  item missing -> result = ensure_item(item)
+    if result is a plain "waiting" status (no action):
+      build the first later entity whose item is carried and whose footprint is free
+      (not a mining drill or inserter: they keep plan order; <= BUILD_AHEAD_CHECKS = 4 placement checks)
+    else return result
+```
+
+A job waiting for one item no longer holds back what it can already place.
+Pinned by `tests/test_v2_build_ahead.py`.
 
 ## Supervisor and incidents (`supervisor.py`, `incidents.py`, `IncidentConfig`)
 
