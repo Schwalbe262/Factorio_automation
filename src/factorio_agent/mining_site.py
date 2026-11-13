@@ -132,6 +132,47 @@ def other_patches(site, world_id, resource):
     ]
 
 
+def planned_patch(site, world_id, resource):
+    """The plan's primary patch of ``resource`` (its mining zone's patch) as ``{"centroid", "bbox", "distance"}``, or None."""
+    if site is None:
+        return None
+    try:
+        row = site.plan(world_id).resource(resource)
+    except Exception:  # noqa: BLE001 - the plan is preferred, never a new failure mode
+        return None
+    p = getattr(row, "primary", None)
+    if p is None:
+        return None
+    return {"centroid": [float(p.centroid[0]), float(p.centroid[1])], "bbox": p.bbox.to_list(), "distance": p.distance}
+
+
+ZONE_MARGIN = 6  # SiteConfig.mining_margin: a patch's zone is its bounding box plus this margin
+
+
+def seed_in_zone(record, seed, margin=ZONE_MARGIN) -> bool:
+    """True when the patch seed ``{"x", "y"}`` lies in the exit record's zone (``margin`` tiles of slack)."""
+    x0, y0, x1, y1 = record["zone_rect"]
+    return x0 - margin <= seed["x"] <= x1 + margin and y0 - margin <= seed["y"] <= y1 + margin
+
+
+def patch_exits(record, bbox, margin=ZONE_MARGIN):
+    """Exit records for every side of a patch the plan has no zone for, nearest the consumer first.
+
+    ``record`` is the resource's :func:`plan_exit` (it names the consumer's entry port); the
+    patch's zone is its ``bbox`` [x0, y0, x1, y1] plus ``margin``. Fleet all-1113-2155 seed
+    1541632234: the plan's copper zone was a patch 298 tiles out (the near patch overlapped the
+    iron zone), the bank surveyed the near one, the far zone dropped every site on all four
+    sides and the near patch was then tried only with the historical east flow, which faced
+    the iron patch. [] without a record.
+    """
+    if not record:
+        return []
+    x0, y0, x1, y1 = bbox
+    zone = [x0 - margin, y0 - margin, x1 + margin, y1 + margin]
+    base = dict(record, zone="patch", zone_rect=zone, side=None, corridor=None, guide=None)
+    return [dict(option, planned_side=record["side"]) for option in alternative_exits(base)]
+
+
 def plan_zone_areas(site, world_id, *, exclude_prefix=""):
     """``[(owner, [[x0, y0], [x1, y1]])]`` of every reserved plan zone, owners with ``exclude_prefix`` left out."""
     if site is None:

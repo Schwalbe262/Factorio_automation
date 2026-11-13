@@ -9,15 +9,17 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
-from .board import built_keys, entity, hardware_conflicts, planned_unbuilt_hardware
+from .board import built_keys, entity, hardware_conflicts, planned_unbuilt_hardware, unboarded_plans
 from .power_grid import plan_connection as power_connection
 from .transport import plan_connection as belt_connection, underground_proof, xy
 from .planning import preflight
 from .site.transform import apply as apply_transform
 from .smelting_site import (
     DISTRICT_SIZE,
+    ROUTE_DETOUR,
     bus_header_tiles,
     canonical_bank,
+    corridor_detour,
     corridor_guide,
     district_candidate,
     district_head_choice,
@@ -506,6 +508,31 @@ def _bank_for(mining, port):
     return next((b for b in mining.get("banks", []) if (b.get("plan", {}).get("ports") or [None])[0] == port), {})
 
 
+def _preflight_evidence(native) -> dict:
+    """Scalar evidence of a failed growth preflight: the reason and the first blockers (name, position, reason).
+
+    The job ledger keeps only ``evidence``; fleet all-1113-2107 seed 2616807070 blocked with
+    ``expanded_row_native_preflight_failed`` and ``evidence: {}``, so nobody could tell what stood
+    in the reserved furnace slots.
+    """
+    rows = []
+    for b in (native.get("blocked") or [])[:4]:
+        if isinstance(b, dict):
+            rows.append({k: b.get(k) for k in ("name", "position", "reason") if k in b})
+    return {"native_reason": native.get("reason"), "blockers": rows} if rows or native.get("reason") else {}
+
+
+def _unbuilt_entities(obs, blocks):
+    """The planned entities of ``blocks`` that no observed entity of the same name stands on yet."""
+    built = built_keys(obs)
+    return [
+        e
+        for block in blocks.values()
+        for e in block.get("entities", [])
+        if (e["name"], e["position"]["x"], e["position"]["y"]) not in built
+    ]
+
+
 def _foreign_unbuilt_conflicts(builder, obs, blocks, entities):
     """Plan entities on a tile of another block's planned-but-unbuilt hardware, unless it is that same entity."""
     planned = planned_unbuilt_hardware(builder, obs, blocks, exclude=("smelting_district",))
@@ -651,6 +678,7 @@ class SmeltingDistrict:
                     "status": "blocked",
                     "reason": "expanded_row_native_preflight_failed",
                     "blocked": native.get("blocked"),
+                    "evidence": _preflight_evidence(native),
                 }
             banks = [new if b["resource"] == resource else b for b in self.state["banks"]]
             extra = {
@@ -724,7 +752,12 @@ class SmeltingDistrict:
                 return {"status": "blocked", "reason": "expanded_row_prospective_overlap"}
             native = preflight(self.game, self.builder, obs, added)
             if not native.get("ok"):
-                return {"status": "blocked", "reason": "expanded_row_native_preflight_failed", "detail": native}
+                return {
+                    "status": "blocked",
+                    "reason": "expanded_row_native_preflight_failed",
+                    "detail": native,
+                    "evidence": _preflight_evidence(native),
+                }
             banks = [new if b["resource"] == resource else b for b in self.state["banks"]]
             extra = {
                 k: v
@@ -818,7 +851,15 @@ class SmeltingDistrict:
         candidates = []
         # Other blocks' planned-but-unbuilt hardware (bridges, routed belts)
         # lies outside their reserved areas; a district must not sit on it.
-        unbuilt = planned_unbuilt_hardware(self.builder, obs, board.get("blocks", {}), exclude=("smelting_district",))
+        # Plans without a board block (power and coal feed, electric coal's poles, starter cells)
+        # count too: seed 2064942095 routed the coal belt over electric coal's unbuilt pole.
+        unboarded = unboarded_plans(self.path.parent, obs)
+        unbuilt = planned_unbuilt_hardware(
+            self.builder, obs, dict(board.get("blocks", {}), **unboarded), exclude=("smelting_district",)
+        )
+        unboarded_unbuilt = planned_unbuilt_hardware(self.builder, obs, unboarded)
+        # Routes keep off those unbuilt entities (poles, drills are hard for the router).
+        owned = [dict(e) for e in _unbuilt_entities(obs, unboarded) if e["name"] not in ("transport-belt",)]
         # The district -> bus head corridor stays free of the district (its plate feeds use it).
         header = bus_header_tiles(master)
         header_keepouts = [entity(RESERVED_TILE, x, y) for x, y in sorted(header)]
@@ -914,9 +955,20 @@ return {ok=true,legal=legal}
                     failures.append({"stage": "planning_budget", "reason": "smelting_planning_budget_exhausted"})
                     break
                 guide = None
+                detour = {}
                 if master is not None and source in sources.values():
                     guide = corridor_guide(master, source["item"])
-                route = belt_connection(game, self.builder, obs, source, destination, es + keepouts, **guided(guide))
+                    ratio = corridor_detour(
+                        master,
+                        source["item"],
+                        xy(source),
+                        xy(destination),
+                    )
+                    if ratio != ROUTE_DETOUR:
+                        detour = {"max_detour_ratio": ratio}
+                route = belt_connection(
+                    game, self.builder, obs, source, destination, es + keepouts + owned, **guided(guide), **detour
+                )
                 if not route.get("ok"):
                     failures.append(
                         {
@@ -926,6 +978,7 @@ return {ok=true,legal=legal}
                             "source": source["position"],
                             "destination": destination["position"],
                             "reason": route.get("reason"),
+                            **({"max_detour_ratio": round(detour["max_detour_ratio"], 2)} if detour else {}),
                         }
                     )
                     good = False
@@ -942,7 +995,7 @@ return {ok=true,legal=legal}
                     self.builder,
                     obs,
                     pole["position"],
-                    [e for e in es if e["name"] != "small-electric-pole"] + keepouts,
+                    [e for e in es if e["name"] != "small-electric-pole"] + keepouts + owned,
                 )
                 if not power.get("ok"):
                     failures.append({"stage": "power", "area": site["area"], "reason": power.get("reason")})
@@ -956,6 +1009,15 @@ return {ok=true,legal=legal}
             if sum(map(len, boxes)) != len(set().union(*boxes)):
                 failures.append(
                     {"stage": "whole_geometry", "area": site["area"], "reason": "whole_prospective_plan_overlaps"}
+                )
+                continue
+            if unboarded_unbuilt and hardware_conflicts(self.builder, es, unboarded_unbuilt):
+                failures.append(
+                    {
+                        "stage": "planned_hardware",
+                        "area": site["area"],
+                        "reason": "plan_meets_unboarded_planned_hardware",
+                    }
                 )
                 continue
             if early_banks and _foreign_unbuilt_conflicts(self.builder, obs, board.get("blocks", {}), es):
@@ -1031,6 +1093,16 @@ return {ok=true,legal=legal}
         stages = {
             stage: sum(f["stage"] == stage for f in failures) for stage in dict.fromkeys(f["stage"] for f in failures)
         }
+        # Which feed blocked the corridors, and what would have to change (a retry condition).
+        by_item = {}
+        for f in failures:
+            if f["stage"] == "corridor":
+                by_item[f.get("item", "?")] = by_item.get(f.get("item", "?"), 0) + 1
+        needs = "no_legal_land_site" if not failures and not survey.get("legal") else None
+        if by_item:
+            needs = "corridor_route:" + max(by_item, key=by_item.get)
+        elif failures:
+            needs = "stage:" + max(stages, key=stages.get)
         from . import evidence_capture
 
         if evidence_capture.active():  # post-mortem: every candidate, filtered before or after the land survey
@@ -1053,6 +1125,8 @@ return {ok=true,legal=legal}
                 "legal_sites": len(survey.get("legal", [])),
                 "candidate_count": len(candidates),
                 "failure_stage_counts": stages,
+                **({"corridor_failures_by_item": by_item} if by_item else {}),
+                **({"needs": needs} if needs else {}),
                 "last_failure_reason": failures[-1]["reason"] if failures else "no_legal_land_site",
                 "planning_budget_exhausted": exhausted,
                 "sites_tried": len(cursor["tried"]),

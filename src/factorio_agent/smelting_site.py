@@ -275,6 +275,41 @@ def pair_cells(pairs) -> set:
     return cells
 
 
+ROUTE_DETOUR = 1.35  # routing.route_trunks' default max_detour_ratio
+CORRIDOR_SLACK = 1.15  # a route may be this much longer than the reserved corridor's own path
+MAX_CORRIDOR_DETOUR = 3.0
+
+
+def _to_rect(point, rect) -> float:
+    """Manhattan distance from ``point`` (x, y) to the nearest point of ``rect``."""
+    x, y = point
+    dx = max(rect.x0 - x, 0.0, x - rect.x1)
+    dy = max(rect.y0 - y, 0.0, y - rect.y1)
+    return dx + dy
+
+
+def corridor_detour(plan, item: str, start, end) -> float:
+    """The detour a feeder route from ``start`` to ``end`` (x, y) may take: the plan's own corridor path.
+
+    Fleet all-1113-2155 seed 2741767595: the coal bank exits west and the plan's coal corridor
+    runs west, south around the iron patch and back east to the district (117 tiles of segments,
+    1.5-1.9 times the straight distance). The router's fixed 1.35 detour cap refused every such
+    trunk, so 16 of 19 district candidates failed at the corridor stage with 15 legal sites. The
+    reserved corridor is the plan's decision; a route may be as long as port -> corridor ->
+    port times ``CORRIDOR_SLACK``. Without a corridor the cap stays ``ROUTE_DETOUR``.
+    """
+    corridor = plan.corridor(f"corridor:{item}->smelting") if plan is not None else None
+    if corridor is None or not corridor.segments:
+        return ROUTE_DETOUR
+    direct = abs(start[0] - end[0]) + abs(start[1] - end[1])
+    if direct <= 0:
+        return ROUTE_DETOUR
+    rects = [s.rect for s in corridor.segments]
+    along = sum((r.x1 - r.x0) if s.direction in ("E", "W") else (r.y1 - r.y0) for s, r in zip(corridor.segments, rects))
+    planned = _to_rect(start, rects[0]) + along + _to_rect(end, rects[-1])
+    return min(MAX_CORRIDOR_DETOUR, max(ROUTE_DETOUR, CORRIDOR_SLACK * planned / direct))
+
+
 def corridor_guide(plan, item: str):
     """Bounding box ``(x0, y0, x1, y1)`` of the reserved feeder corridor for ``item``, or None."""
     corridor = plan.corridor(f"corridor:{item}->smelting")

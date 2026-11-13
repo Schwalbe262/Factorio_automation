@@ -514,6 +514,15 @@ placed; a drill mining two ores puts both on one belt). Rule now:
    has no more room than the lane can still bring plus `SINK_MARGIN_ITEMS`, `retire_border` lists
    the border drills to stop, so the foreign item never backs up into the splitter.
 
+Which patch and which row (`MiningOutposts.prepare`, `mining_layout_policy._relaxed_attempts`): a
+mine is planned whenever the patch has minable ore reachable off the ore. The patch is the plan's
+(an observed seed outside the plan zone is moved onto it; a plan patch farther than
+`MAX_OTHER_PATCH_DISTANCE` is skipped for the plan's nearer patches, each tried on all four sides
+toward the consumer, `mining_site.patch_exits`). A bank whose port already stands off the ore is
+the best candidate, not a dropped one. When no planned row fits, rows are relaxed in order: no
+reserved growth pair, then a single pair, each first on the patch grid's lattice. A failure carries
+`attempts` and `needs` (what would have to change).
+
 Not yet: building border lanes (the bank still places only clean cells; mixed drills need the
 native ore rule and `resource_survey` to accept a declared mixed area and a bank build that adds
 the device), a sorted-lane device for a whole `mixed_ore_zone`, and site-plan mining zones that
