@@ -966,14 +966,29 @@ class Runtimes:
 
     KEEP = 6
 
-    def __init__(self, default_root, base):
+    def __init__(self, default_root, base, follow=False):
         self.default = Dashboard(default_root)
         self.base = Path(base).resolve()
         self.others: dict[Path, Dashboard] = {}
         self.lock = threading.Lock()
+        # follow: no --runtime was given, so the default tracks <base>/active-runtime.json
+        # (``lifecycle new-map`` moves the pointer; the page then shows the new map).
+        self.follow = follow
+
+    def _follow(self):
+        try:
+            root = default_runtime(base=self.base).resolve()
+        except (SystemExit, OSError):
+            return
+        if root != self.default.root and root.is_dir():
+            with self.lock:
+                if root != self.default.root:
+                    self.default = self.others.pop(root, None) or Dashboard(root)
 
     def get(self, name=None) -> Dashboard:
         if name is None:
+            if self.follow:
+                self._follow()
             return self.default
         root = runtime_folder(self.base, name)
         if root == self.default.root:
@@ -1045,10 +1060,10 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
-def serve(root, port=8765, host="127.0.0.1", base=None) -> ThreadingHTTPServer:
+def serve(root, port=8765, host="127.0.0.1", base=None, follow=False) -> ThreadingHTTPServer:
     """``root``: the default runtime; ``base``: the runtime base whose ``fleets/`` and ``v2/`` the fleet tab reads."""
     base = Path(base) if base is not None else REPO / "runtime"
-    attrs = {"runtimes": Runtimes(root, base), "fleets": FleetBoard(base)}
+    attrs = {"runtimes": Runtimes(root, base, follow=follow), "fleets": FleetBoard(base)}
     handler = type("DashboardHandler", (Handler,), attrs)
     return ThreadingHTTPServer((host, port), handler)
 
@@ -1065,7 +1080,7 @@ def main(argv=None):
         root = (Path.cwd() / root).resolve()
     if not root.is_dir():
         raise SystemExit(f"runtime folder not found: {root}")
-    server = serve(root, args.port, base=base)
+    server = serve(root, args.port, base=base, follow=args.runtime is None)
     print(
         f"dashboard for {root} (fleets of {base}) at http://127.0.0.1:{server.server_address[1]}/  (Ctrl+C stops)",
         flush=True,

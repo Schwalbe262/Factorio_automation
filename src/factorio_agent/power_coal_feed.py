@@ -136,18 +136,15 @@ def boiler_fuel_action(builder, bootstrap, catalog, obs) -> dict | None:
     Only while the builder's ``coal_feed_mode`` is ``hand_fed`` and the
     plant's boiler stands. A trip starts when the boiler holds less than
     ``refill_below`` coal-equivalent (fuel slot plus the burning remainder).
-    Carried wood is burned first (owner, 2026-11-13): with at least
-    ``min(wood fill, WOOD_BATCH)`` wood carried (any wood when the boiler is
-    out or already burns wood) the slot is filled with wood; coal still in the
+    Carried wood is burned first (owner, 2026-11-13), but only once more than
+    one stack of wood is carried: the slot is then filled with wood; coal still in the
     slot is taken out first (one fuel slot holds one fuel kind; the coal is
     saved for the burners). Otherwise coal fills the slot to ``target``: with
     at least the fill or ``FUEL_BATCH`` carried the coal goes in (wood left
-    in the slot is taken out first); an empty boiler takes any carried coal;
+    in the slot burns out first; it is never taken back out); an empty boiler takes any carried coal;
     else the coal is collected (``ensure_item``). A plain wait returns None,
     so the job keeps working.
     """
-    from .wood_burner_feed import WOOD_BATCH
-
     spec, boiler = _hand_fed_boiler(builder, obs)
     if boiler is None:
         return None
@@ -161,7 +158,7 @@ def boiler_fuel_action(builder, bootstrap, catalog, obs) -> dict | None:
         return None
     wood_fill = min(wood_slot(catalog), math.ceil(sizing["target"] * coal_value / wood_value)) - held_wood
     wood = int((obs.get("inventory") or {}).get(WOOD, 0))
-    if wood_fill > 0 and wood > 0 and (wood >= min(wood_fill, WOOD_BATCH) or stored <= 0 or held_wood > 0):
+    if wood_fill > 0 and wood > wood_slot(catalog):  # only above one carried stack (owner, 2026-11-13)
         move = builder._move(obs, spec["position"])
         if move:
             return move
@@ -177,7 +174,9 @@ def boiler_fuel_action(builder, bootstrap, catalog, obs) -> dict | None:
         if move:
             return move
         if held_wood > 0:
-            return _take_fuel(spec, WOOD, held_wood, "hand-fed boiler: take the last wood out so the coal fits")
+            # Let the wood in the slot burn out; taking it out put it back in the hand and the
+            # wood rule above inserted it again (take/insert loop on map 4177156614).
+            return None
         return _insert_fuel(
             spec, "coal", min(carried, fill), "hand-fed boiler: refill before the dedicated coal feed exists"
         )

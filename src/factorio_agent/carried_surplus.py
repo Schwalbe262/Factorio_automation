@@ -32,9 +32,9 @@ holds wood; a hand-fed boiler swaps its coal for wood
 (``power_coal_feed.boiler_fuel_action``, which holds ``reserve`` wood for it);
 a belt-fed plant takes wood through the wood feed chest
 (``wood_burner_feed``), the next sink after the boilers. Burner drills and
-furnaces follow, then depots. Wood is moved from ``WOOD_BATCH`` on in an idle
-pass (no job acted) and from ``WOOD_CARRY_CAP`` on in every upkeep, so a
-clearing batch is not interrupted for every tree.
+furnaces follow, then depots. Wood is moved only once more than one stack is
+carried (owner, 2026-11-13: not as it comes in), so a clearing batch is not
+interrupted for every tree.
 
 Plates are construction stock and stay with ``inventory_storage.KEEP``.
 """
@@ -54,7 +54,6 @@ CHEST_SLOTS = {"wooden-chest": 16, "iron-chest": 32, "steel-chest": 48}  # base 
 DEPOSIT_LIMIT = 1000  # storage_transfer.validate_deposit envelope
 DEFAULT_STACK = 50
 WOOD = "wood"
-WOOD_CARRY_CAP = 100  # upkeep (not idle) moves carried wood from one wood stack on
 
 
 def stack_size(catalog, item) -> int:
@@ -80,9 +79,9 @@ def allowance(item, catalog) -> int | None:
 
 def threshold(item, catalog) -> int:
     if item == WOOD:
-        from .wood_burner_feed import WOOD_BATCH
-
-        return WOOD_BATCH
+        # Owner, 2026-11-13: wood is burned only once more than one stack is carried, not as it
+        # comes in; the whole carried amount then goes in one trip.
+        return stack_size(catalog, WOOD) + 1
     return SURPLUS_STACKS * stack_size(catalog, item)
 
 
@@ -242,16 +241,14 @@ class CarriedSurplus:
     def step(self, obs, *, idle=False) -> dict | None:
         """Upkeep: one disposal action for the first item whose surplus reaches the threshold, else None.
 
-        ``idle``: a pass in which no job acted; wood then moves from
-        ``threshold`` on, in other passes only from ``WOOD_CARRY_CAP`` on.
+        ``idle``: a pass in which no job acted (kept for callers; wood moves only
+        above one carried stack in every pass, see ``threshold``).
         """
         if not obs.get("world_id"):
             return None
         for item in ITEMS:
             allowed = allowance(item, self.catalog) + self.held_back(obs, item)
             excess = carried(obs, item) - allowed
-            if item == WOOD and not idle and excess < WOOD_CARRY_CAP:
-                continue
             if excess >= threshold(item, self.catalog):
                 action = self.sink_action(obs, item, excess, f"put carried surplus {item} where it is used")
                 if action is not None:

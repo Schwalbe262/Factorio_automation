@@ -265,21 +265,29 @@ class BoilerUpkeepTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             b = builder(d, power_mode=HAND_FED)
             state = obs(coal_carried=60, boiler=boiler_row(coal=10))
-            state["inventory"]["wood"] = 80
+            state["inventory"]["wood"] = 80  # one stack or less is carried, not burned (owner, 2026-11-13)
+            coal_first = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, state)
+            self.assertEqual((coal_first["type"], coal_first["item"]), ("insert", "coal"))
+            state["inventory"]["wood"] = 120  # more than one stack: wood replaces the coal
             take = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, state)
             self.assertEqual(
                 (take["type"], take["item"], take["inventory"], take["count"]), ("take", "coal", "fuel", 10)
             )
             empty = obs(coal_carried=70, boiler=boiler_row(coal=0, burning=1e6))
-            empty["inventory"]["wood"] = 80
+            empty["inventory"]["wood"] = 120
             insert = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, empty)
-            self.assertEqual((insert["type"], insert["item"], insert["count"]), ("insert", "wood", 80))
+            self.assertEqual((insert["type"], insert["item"]), ("insert", "wood"))
+            self.assertLessEqual(insert["count"], 100)
             # Wood in the slot counts at its own fuel value: 20 wood = 10 coal-equivalent, below 14.
             low = obs(coal_carried=60, boiler=dict(boiler_row(coal=0), inventory={"wood": 20}))
-            topped = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, dict(low, inventory={"coal": 60, "wood": 5}))
-            self.assertEqual((topped["item"], topped["count"]), ("wood", 5))  # any wood tops up a wood slot
-            swap = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, low)
-            self.assertEqual((swap["type"], swap["item"], swap["count"]), ("take", "wood", 20))  # no wood left: coal
+            few = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, dict(low, inventory={"coal": 60, "wood": 5}))
+            self.assertIsNone(few)  # a few carried wood are not fed one by one
+            # No wood carried: the wood in the slot burns out; it is never taken back out (that put it
+            # in the hand and the wood rule inserted it again: a take/insert loop on map 4177156614).
+            self.assertIsNone(pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, low))
+            burned = obs(coal_carried=60, boiler=boiler_row(coal=0))
+            coal = pcf.boiler_fuel_action(b, b.bootstrap, CATALOG, burned)
+            self.assertEqual((coal["type"], coal["item"]), ("insert", "coal"))
             self.assertEqual(pcf.hand_fed_wood_reserve(b, CATALOG, low, "wood"), 100)
             self.assertEqual(pcf.hand_fed_wood_reserve(b, CATALOG, low, "coal"), 0)
             b.state["power_mode"] = BELT_FED
