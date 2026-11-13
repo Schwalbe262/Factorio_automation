@@ -27,6 +27,10 @@ def _at(entity: dict[str, Any], name: str, position: dict[str, float]) -> bool:
     )
 
 
+# Final items the character may have in the native crafting queue at once.
+CRAFT_QUEUE_ITEMS = 3
+
+
 class DeterministicBootstrap:
     def __init__(self, game: Any, catalog: Any = None):
         self.game = game
@@ -301,7 +305,8 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
             return _report("blocked", "iron and copper ore require a mining drill", item=item)
         if item in {"coal", "stone", "wood"}:
             return self._raw_material(observation, item, count - have)
-        if observation.get("crafting_queue"):
+        queue = observation.get("crafting_queue") or []
+        if len(queue) >= CRAFT_QUEUE_ITEMS:
             return _report("waiting", "engine crafting queue is busy", item=item)
         if item in _stack:
             return _report("blocked", "handcraft dependency cycle", item=item)
@@ -332,7 +337,16 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
         )
         if output <= 0:
             return _report("blocked", "recipe has no deterministic item output", item=item)
-        runs = math.ceil((count - have) / output)
+        # Several different items may be in the native queue at once; the same
+        # item is not queued twice, its queued runs count toward the request.
+        queued = sum(
+            int(row.get("count") or 0)
+            for row in queue
+            if isinstance(row, dict) and row.get("recipe") == recipe["name"] and not row.get("prerequisite")
+        )
+        runs = math.ceil((count - have) / output) - queued
+        if runs <= 0:
+            return _report("waiting", "engine crafting queue is busy", item=item, queued_runs=queued)
         if not _stack and self._handcraft_collection_targets(observation, item, count) == {}:
             # The full enabled handcraft tree is reserved from held inventory.
             # Factorio queues and pays for its intermediates at normal speed;

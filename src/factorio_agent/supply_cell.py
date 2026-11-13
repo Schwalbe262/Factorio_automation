@@ -922,12 +922,15 @@ class SupplyCell:
                 return None
             box = self._find(obs, chest, row["output"])
             stock = int(((box or {}).get("inventory") or {}).get(row["item"], 0))
-            if stock < 1:
+            # Once the step has verified the cell, an empty chest only means the
+            # stock was collected or fed onward between the step and this check
+            # (seed 4176033748: job blocked postcondition_not_verified after 183 actions).
+            if stock < 1 and state.get("phase") != "verified":
                 return None
             rows.append(
                 {
                     "item": row["item"],
-                    "chest_unit": box.get("unit_number"),
+                    "chest_unit": (box or {}).get("unit_number"),
                     "chest_stock": stock,
                     "machine_products_finished": [m.get("products_finished") for m in machines],
                 }

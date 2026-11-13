@@ -303,6 +303,13 @@ def _whole_json(text: str) -> bool:
         return False
 
 
+# Native crafting-queue entries (prerequisites included) allowed before a new
+# hand craft waits. One entry at a time made every job that needed a craft
+# stand still while another item was being made (user: "while crafting it
+# only crafts").
+CRAFT_QUEUE_ENTRIES = 8
+
+
 class DeterministicGame:
     def __init__(self, cfg: AppConfig, *, backend: str = "assisted"):
         if backend not in {"assisted", "character"}:
@@ -559,10 +566,11 @@ return success{world_id=d.world_id,tick=game.tick,surface=s.name,position=pos(a.
         if kind == "recover_equipped_ammo":
             body += RECOVER_EQUIPPED_AMMO_LUA
         elif kind == "craft":
+            body += f"local CRAFT_QUEUE_ENTRIES={CRAFT_QUEUE_ENTRIES};"
             body += """
 local recipe=f.recipes[x.recipe]
 if not recipe or not recipe.enabled then return failure("recipe_locked") end
-if a.crafting_queue_size>0 then return success{status="waiting",reason="crafting_queue_busy"} end
+if a.crafting_queue_size>=CRAFT_QUEUE_ENTRIES then return success{status="waiting",reason="crafting_queue_busy"} end
 local n=a.begin_crafting{count=x.count or 1,recipe=x.recipe}
 if n<=0 then return failure("not_craftable") end
 return success{status="running",started=n}
