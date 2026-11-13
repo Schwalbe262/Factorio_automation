@@ -109,7 +109,10 @@ class NormalResearch:
                 "packs": sorted(unsupported),
             }
         if obs.get("research") not in (None, name):
-            return {"status": "blocked", "reason": "another_research_is_running"}
+            # The idle lane may have started another technology; it finishes on
+            # its own, so wait for the labs instead of blocking the roadmap step
+            # (seed 2099054105: four research steps blocked one after another).
+            return {"status": "waiting", "reason": "another_research_is_running", "running": obs.get("research")}
         supply = self.science.proof(obs)
         if not supply:
             return {"status": "waiting", "reason": "waiting for commissioned machine science and automatic lab supply"}
