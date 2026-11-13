@@ -127,9 +127,17 @@ class LineDesignTests(unittest.TestCase):
         self.assertIsNone(line["sub"])
         self.assertEqual(sorted(p["item"] for p in line["inputs"]), ["iron-gear-wheel", "iron-plate"])
 
+    def test_three_solid_tree_becomes_a_cluster_line(self):
+        line = line_for(self.catalog, "inserter", 10)
+        self.assertEqual(line["spec"]["kind"], "cluster")
+        self.assertEqual(audit_line(self.catalog, line), [])
+        self.assertEqual(sorted(p["item"] for p in line["inputs"]), ["copper-plate", "iron-plate"])
+        self.assertEqual(line["output"]["name"], "iron-chest")
+        self.assertGreater(input_demand(self.catalog, line, "copper-plate"), 0)
+        with self.assertRaisesRegex(ValueError, "new row block"):
+            extend_line(self.catalog, line, 1)
+
     def test_rejections_name_the_reason(self):
-        with self.assertRaisesRegex(ValueError, "lane-merge"):
-            line_for(self.catalog, "inserter", 10)
         with self.assertRaisesRegex(ValueError, "no source"):
             design_line(
                 self.catalog,

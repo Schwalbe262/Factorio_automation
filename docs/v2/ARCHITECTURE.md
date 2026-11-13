@@ -70,7 +70,7 @@ jobs.run_jobs: per pass one observe; critical-path jobs first, then slack jobs o
 | Space | `planned_furnaces.py` | steel/brick furnace blocks on a planned world: paired bank with another recipe on a `SiteService` block, iron from a planned tap, coal/stone from dedicated material ports, reserved growth slots; `steel_supply`/`steel_production`/`steel_coal_supply`/`brick_production` delegate here (`industrial.IndustrialOperations.planned`) |
 | Space | `planned_products.py` | engines and magazines on a planned world: `engine_production`/`ammo_production` hand over to generic `produce` rows (engine row: steel from the steel block port, gears + pipes by twin sub-rows from one iron tap); ammo refill from the row's chest |
 | Space | `plate_supply.py` | plate resolver for science: bus taps when a planned bus is published (`plate_bus`, `bus_budget`), else the district's registered output ports (old `smelter-lanes.json` only as a same-world fallback), never a port another owner took |
-| Space | `blocks/` | recipe rows: `sizing`, `row`, `derate`, `audit`, `stock_tail`, ASCII `render` |
+| Space | `blocks/` | recipe rows: `sizing`, `row`, `derate`, `audit`, `stock_tail`, ASCII `render`; direct-insertion clusters `cluster` + `cluster_audit` (LAYOUT_PRINCIPLES.md) |
 | Space | `planning.py` | `preflight` (whole-block native check), `survey_slots` |
 | Space | `transport.py`, `routing.py`, `power_grid.py`, `manufacturing.py` | belt corridors (`plan_connection`; the site plan's bus band is hard for every route but the bus feed), trunks, pole plans, `connect_power_groups` |
 | Space | `board.py` | `pcb-board.json` block registry; startup science cell |

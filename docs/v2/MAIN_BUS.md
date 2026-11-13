@@ -85,8 +85,11 @@ for every `transport.plan_connection` route except the bus's own feed
 underground span, so a consumer cannot cross it; it taps from its own side.
 
 Without a planned bus (no site plan, or no bus published for this world)
-red science takes the district plate ports and green its splitter branch at
-the district (`plate_supply.plate_bus` returns None).
+red science takes the district plate ports (`plate_supply.plate_bus` returns
+None). Green science on a planned world is one direct-insertion cluster on
+two taps (LAYOUT_PRINCIPLES.md) and blocks with
+`green_science_needs_planned_bus` until the bus is published; the district
+splitter branch is only for a controller without a site service.
 
 Steel and bricks plan from the site plan on this bus
 (`planned_furnaces.py`, see STEEL.md): the steel block taps iron with

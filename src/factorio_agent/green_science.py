@@ -1,4 +1,5 @@
-"""Belt-fed green science, local intermediates and an explicit lab lane join."""
+"""Green science: on a planned world one direct-insertion cluster (``blocks.cluster``) on bus taps;
+without a site service the development-map ``green_core`` at fixed anchors. Packs join the lab belt lane."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
-from .manufacturing import GREEN_CORE_DEPTH, GREEN_CORE_LENGTH, green_core, raw_demand
+from .manufacturing import green_core, raw_demand
 from .manufacturing import connect_power_groups, lab_green_entry, lab_green_entry_outside
 from .planning import preflight, overlap, survey_slots
 from .science import nominal_plate_supply
@@ -33,11 +34,6 @@ def validate_rate(parameters):
         raise ValueError("green science target must be finite in (0,30]")
 
 
-# Narrow green core footprint (canonical x across, y along its plate edge)
-# and the district block it needs: GREEN_CORE_LENGTH along the bus by
-# GREEN_CORE_DEPTH deep, so the west (plate) edge can face the bus.
-GREEN_FOOTPRINT = (GREEN_CORE_DEPTH, GREEN_CORE_LENGTH)
-GREEN_BLOCK = (GREEN_CORE_LENGTH, GREEN_CORE_DEPTH)
 # Development-map anchors, only for a controller built without a site service.
 LEGACY_GREEN_ANCHORS = (
     (40.5, -72.5),
@@ -50,21 +46,51 @@ LEGACY_GREEN_ANCHORS = (
 )
 
 
-def planned_green_cores(site, world_id, count):
-    """Allocator blocks for the narrow green core, turned so plate inputs face the bus edge.
+GREEN_PLATES = ("iron-plate", "copper-plate")
+GREEN_TREE = ("inserter", "transport-belt", "iron-gear-wheel", "electronic-circuit", "copper-cable")
 
-    The narrow core (``green_core(..., narrow=True)``) reserves
-    ``GREEN_FOOTPRINT`` from its north-west corner with both plate inputs on
-    its west edge, so the block is requested ``GREEN_CORE_LENGTH`` along the
-    bus by ``GREEN_CORE_DEPTH`` deep and the fit turns the west edge to the bus.
-    Empty when the plan's district strips are shallower or the bus is full.
-    """
 
-    def build(x0, y0):
-        return green_core(x0 + 10.5, y0 + 10.5, count, narrow=True)
+def green_cluster(catalog, origin, output_side=None):
+    """The first green science unit (``blocks.cluster``): one pack machine and one machine per
+    intermediate, direct insertion, plates from one two-lane belt, packs on a one-tile belt port."""
+    from .blocks.cluster import cluster_block
 
-    def inputs(core):
-        return [p for p in core["ports"] if p["direction"] == "input"]
+    each = (
+        60
+        * catalog.entities["assembling-machine-1"]["crafting_speed"]
+        / catalog.recipes["logistic-science-pack"]["energy"]
+    )
+    plan = cluster_block(
+        catalog,
+        "logistic-science-pack",
+        each,
+        sourced=GREEN_PLATES.__contains__,
+        output_side=output_side,
+        origin=origin,
+    )
+    return plan
+
+
+def planned_green_clusters(site, world_id, catalog, lab_port):
+    """Allocator blocks for the green unit; plate ports face the bus edge, the product side is the one
+    (among the compact layout's free sides) whose port lands nearest the lab entry ``lab_port``."""
+    from .production_layout import _even_turn
+
+    probe = green_cluster(catalog, (0.5, 0.5))
+    area = _even_turn(probe["reserved_area"])
+    (cx0, cy0), (cx1, cy1) = area
+    size = (int(cx1 - cx0), int(cy1 - cy0))
+
+    def build_side(side):
+        def build(x0, y0):
+            plan = green_cluster(catalog, (0.5 + x0 - cx0, 0.5 + y0 - cy0), side)
+            plan["reserved_area"] = [[x0, y0], [x0 + size[0], y0 + size[1]]]
+            return plan
+
+        return build
+
+    def inputs(plan):
+        return [p for p in plan["ports"] if p["direction"] == "input"]
 
     found = []
     placements = allocated_placements(
@@ -72,15 +98,27 @@ def planned_green_cores(site, world_id, count):
         world_id,
         kind="science",
         name="logistic_science",
-        size=GREEN_FOOTPRINT,
-        block=GREEN_BLOCK,
-        build=build,
+        size=size,
+        block=(size[1], size[0]),
+        build=build_side(probe["output_side"]),
         inputs=inputs,
     )
+    target = (lab_port["position"]["x"], lab_port["position"]["y"])
     for allocation, placement in placements:
-        core = placement.plan
+        rect = placement.target
+        corner = (int(rect.x0 + rect.width / 2 - size[0] / 2), int(rect.y0 + rect.height / 2 - size[1] / 2))
+        best = None
+        for side in probe["output_sides"]:
+            plan = apply_transform(placement.transform, build_side(side)(*corner))
+            out = plan["ports"][-1]["position"]
+            score = abs(out["x"] - target[0]) + abs(out["y"] - target[1])
+            if best is None or score < best[0]:
+                best = (score, plan)
+        core = best[1]
         core["site_transform"] = placement.transform.to_dict()
         core["allocation"] = allocation
+        core["connections"] = []
+        core["cells"] = {"cluster": {"entities": core["entities"]}}
         found.append(core)
     return found
 
@@ -96,8 +134,14 @@ class LogisticScience:
         validate_rate(parameters)
         if not self.science.proof(obs):
             return {"ok": False, "reason": "commissioned_red_science_required"}
-        required = {"logistic-science-pack", "fast-inserter"}
-        if not required.issubset(k for k, v in obs.get("enabled_recipes", {}).items() if v):
+        planned = self.site is not None
+        enabled = {k for k, v in obs.get("enabled_recipes", {}).items() if v}
+        if planned:
+            # The cluster uses plain inserters; every recipe of the tree must be settable.
+            missing = sorted({"logistic-science-pack", *GREEN_TREE} - enabled)
+            if missing:
+                return {"ok": False, "reason": "native_green_science_research_required", "missing": missing}
+        elif not {"logistic-science-pack", "fast-inserter"}.issubset(enabled):
             return {"ok": False, "reason": "native_green_science_and_fast_inserter_research_required"}
         board_path = self.path.parent / "pcb-board.json"
         board = json.loads(board_path.read_text(encoding="utf-8"))
@@ -111,13 +155,17 @@ class LogisticScience:
         count = math.ceil(parameters["rate_per_minute"] * 1.15 / each)
         if count > 7:
             return {"ok": False, "reason": "green_science_row_exceeds_seven_slots"}
-        # Plates come from bus taps when the planned bus exists; the splitter
-        # branch at the district below is only the fallback without one.
-        bus = plate_bus(board, obs["world_id"]) if self.site is not None else None
+        # Plates come from bus taps on a planned world; the splitter branch at
+        # the district below is only for a world without a site service.
+        bus = plate_bus(board, obs["world_id"]) if planned else None
+        if planned and bus is None:
+            return {"ok": False, "reason": "green_science_needs_planned_bus"}
         sized = self.supply_sized_count(count, each, bus=bus)
         if not sized.get("ok"):
             return sized
-        count = sized["count"]
+        # Start small (one pack machine fed by one machine per intermediate); a
+        # higher rate is a later block, decided by blocks.cluster.grow_decision.
+        count = 1 if planned else sized["count"]
         demand = raw_demand(self.catalog, "logistic-science-pack", count * each)
         for recipe, equivalent in demand["machine_equivalents"].items():
             if recipe != "logistic-science-pack" and equivalent > 1:
@@ -219,7 +267,7 @@ class LogisticScience:
         # Sites come from the master plan; the fixed development-map anchors
         # are only for a controller built without a site service.
         if self.site is not None:
-            cores = planned_green_cores(self.site, obs["world_id"], count)
+            cores = planned_green_clusters(self.site, obs["world_id"], self.catalog, lab_port)
             if not cores:
                 return self.no_allocation(obs["world_id"])
         else:
@@ -382,12 +430,16 @@ class LogisticScience:
             depth = self.site.plan(world_id).district_depth
         except Exception:  # noqa: BLE001 - the reason is diagnostic only
             depth = None
-        reason = "green_science_needs_deeper_district" if depth is not None and depth < GREEN_CORE_DEPTH else None
+        from .production_layout import _even_turn
+
+        (x0, y0), (x1, y1) = _even_turn(green_cluster(self.catalog, (0.5, 0.5))["reserved_area"])
+        along, needed = int(y1 - y0), int(x1 - x0)
+        reason = "green_science_needs_deeper_district" if depth is not None and depth < needed else None
         return {
             "ok": False,
             "reason": reason or "no_green_science_district_block",
-            "block_along": GREEN_CORE_LENGTH,
-            "block_depth": GREEN_CORE_DEPTH,
+            "block_along": along,
+            "block_depth": needed,
             "district_depth": depth,
         }
 

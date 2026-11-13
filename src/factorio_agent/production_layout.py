@@ -59,6 +59,8 @@ from typing import Any, Callable
 
 from .blocks.audit import audit_row
 from .blocks.belts import belt_graph, belt_tiles, spread
+from .blocks.cluster_audit import audit_cluster
+from .blocks.params import inserter_rate
 from .blocks.geometry import bounding_box, footprint, step, xy
 from .blocks.row import RowShape, extend_row, row_block
 from .blocks.sizing import RowSizing, size_row
@@ -221,7 +223,108 @@ def design_line(
     chest: str,
     origin: tuple[float, float] = MAIN_ORIGIN,
 ) -> dict:
-    """Canonical (east-flowing) line at ``origin``; see the module docstring."""
+    """Canonical line at ``origin``: a row line (module docstring) or, when no row
+    can carry the recipe tree, a direct-insertion cluster (``blocks.cluster``)."""
+    try:
+        return _design_row_line(
+            catalog, product, rate, inserter=inserter, enabled=enabled, sourced=sourced, chest=chest, origin=origin
+        )
+    except ValueError as row_error:
+        try:
+            return cluster_line(
+                catalog, product, rate, inserter=inserter, enabled=enabled, sourced=sourced, chest=chest, origin=origin
+            )
+        except ValueError as cluster_error:
+            raise ValueError(f"{row_error}; cluster: {cluster_error}") from row_error
+
+
+CLUSTER_MACHINES = ("assembling-machine-2", "assembling-machine-1")
+
+
+def cluster_line(
+    catalog: Any,
+    product: str,
+    rate: float,
+    *,
+    inserter: str,
+    enabled: list[str],
+    sourced: Callable[[str], bool],
+    chest: str,
+    origin: tuple[float, float] = MAIN_ORIGIN,
+) -> dict:
+    """A stock line made of one ``blocks.cluster`` plan ending in its chest (same keys as a row line)."""
+    from .blocks.cluster import cluster_block
+    from .blocks.stock_tail import STOCK_STACKS
+
+    machine = next((m for m in CLUSTER_MACHINES if m in enabled and m in catalog.entities), None)
+    if machine is None:
+        raise ValueError("no enabled assembling machine for a cluster")
+    plan = cluster_block(
+        catalog, product, rate, sourced=sourced, machine=machine, inserter=inserter, chest=chest, origin=origin
+    )
+    output = next(p for p in plan["ports"] if p["direction"] == "output")
+    chest_entity = next(e for e in plan["entities"] if e["name"] == chest)
+    arm = next(
+        e
+        for e in plan["entities"]
+        if e["name"] == inserter and step(xy(e), (e["direction"] + 8) % 16) == xy(chest_entity)
+    )
+    rated = float(plan["rated_per_minute"])
+    tail = {
+        "entities": [],
+        "arm": arm,
+        "chest": chest_entity,
+        "pole": None,
+        "port": {k: v for k, v in output.items() if k != "facing"},
+        "belt_end": None,
+        "bar_slots": STOCK_STACKS,
+        "stock_rate_per_minute": min(rated, inserter_rate(catalog, inserter)),
+    }
+    spec = {
+        "kind": "cluster",
+        "product": product,
+        "recipe": plan["recipe"],
+        "rate_per_minute": rate,
+        "inserter": inserter,
+        "chest": chest,
+        "sub_item": None,
+        "sub_recipe": None,
+        "twin_item": None,
+        "twin_recipe": None,
+    }
+    return {
+        "spec": spec,
+        "main": plan,
+        "sub": None,
+        "twin": None,
+        "merge": None,
+        "tail": tail,
+        "inputs": [p for p in plan["ports"] if p["direction"] == "input"],
+        "output": tail["port"],
+        "joint": None,
+        "entities": list(plan["entities"]),
+        "reserved_area": _even_turn(plan["reserved_area"]),
+        "rated_per_minute": rated,
+        "stock_rate_per_minute": tail["stock_rate_per_minute"],
+        "bar_slots": tail["bar_slots"],
+    }
+
+
+def is_cluster(line: dict) -> bool:
+    return (line.get("spec") or {}).get("kind") == "cluster"
+
+
+def _design_row_line(
+    catalog: Any,
+    product: str,
+    rate: float,
+    *,
+    inserter: str,
+    enabled: list[str],
+    sourced: Callable[[str], bool],
+    chest: str,
+    origin: tuple[float, float] = MAIN_ORIGIN,
+) -> dict:
     recipe = _row_recipe(catalog, product)
     if recipe is None:
         raise ValueError(f"no recipe makes {product}")
@@ -412,6 +515,8 @@ def compose(
 
 def audit_line(catalog: Any, line: dict) -> list[str]:
     """Every row audit, the tail audit, the joint and whole-line overlaps; ``[]`` = OK."""
+    if is_cluster(line):
+        return [f"cluster:{e}" for e in audit_cluster(catalog, line["main"])]
     errors = [f"main:{e}" for e in audit_row(catalog, line["main"])]
     if line.get("twin") is not None:
         errors += [f"sub:{e}" for e in audit_row(catalog, line["sub"])]
@@ -490,7 +595,9 @@ def input_demand(catalog: Any, line: dict, item: str) -> float:
     total = 0.0
     if item not in {p["item"] for p in line["inputs"]}:
         return total
-    for row in rows(line):
+    if is_cluster(line):
+        total = float(line["main"]["plates"].get(item, 0.0))
+    for row in [] if is_cluster(line) else rows(line):
         recipe = catalog.recipes[row["recipe"]]
         amount = sum(float(r["amount"]) for r in recipe["ingredients"] if r["name"] == item)
         # A row's own port for an external item is external (twin rows share one belt and port).
@@ -514,6 +621,8 @@ def input_demand(catalog: Any, line: dict, item: str) -> float:
 def extend_line(catalog: Any, line: dict, extra: int) -> dict:
     """Fill ``extra`` more main-row slots in place; the sub-row was sized for every
     slot already, the tail and every external port stay where they are."""
+    if is_cluster(line):
+        raise ValueError("a cluster has no reserved slots: more rate is a new row block (blocks.cluster.grow_decision)")
     main = extend_row(line["main"], catalog, extra)
     extended = compose(
         catalog, line["spec"], main, line["sub"], line["tail"], twin=line.get("twin"), merge=line.get("merge")
