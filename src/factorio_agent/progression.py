@@ -623,7 +623,15 @@ def _research_items(catalog, step: Step) -> dict[str, float]:
     return packs
 
 
-def lookahead_demand(catalog, jobs, observation, *, horizon=4) -> dict[str, float]:
+# Roadmap steps whose material bill counts as upcoming demand for capacity
+# decisions. With 4, the first steps (power, two researches, electric coal)
+# hid the outposts and the smelting district (hundreds of belts) until they
+# were next, so plate capacity grew too late (user rule: think 3-4 steps
+# beyond the current one; the heavy steps are 6-9 at the start).
+LOOKAHEAD_STEPS = 8
+
+
+def lookahead_demand(catalog, jobs, observation, *, horizon=LOOKAHEAD_STEPS) -> dict[str, float]:
     """Raw items the next ``horizon`` unsatisfied roadmap steps will need.
 
     Research steps add ``unit_count`` x pack raw cost; steps with ``builds``

@@ -343,7 +343,10 @@ def _ordered(decisions: list[CapacityDecision]) -> list[CapacityDecision]:
     kept: list[CapacityDecision] = []
     for decision in ranked:
         cost = decision.evidence["raw_cost_per_cell"]
-        if any(earlier.item in cost for earlier in kept):
+        # The few coal pieces that start a new cell do not compete with a coal
+        # expansion; without this exception coal went first and iron, the item
+        # every job was waiting for, lost a planning round (seed 4176033748).
+        if any(earlier.item in cost and earlier.item != FUEL_ITEM for earlier in kept):
             continue
         kept.append(decision)
     return kept
