@@ -31,6 +31,10 @@ from .board import (
 BOOTSTRAP_RESEARCH_MAX_UNITS = 100
 DIVERSION_STALL_TICKS = 1800
 SCIENCE_COURIER_BATCH = 5
+# Funding moves at least this many plates per insert (or the batch's whole
+# remainder): the machines start on the first plates instead of waiting for
+# the full batch, without one-plate insert loops.
+FUND_CHUNK = 10
 # One sizing decision per finite target batch, kept outside the bound state.
 CAPACITY_FILE = "startup-science-capacity.json"
 # Further red-only roadmap technologies that justify one expansion.
@@ -1606,30 +1610,16 @@ class BootstrapLogistics:
                 "reason": "finite machine-built science naturally researched the target",
                 "evidence": proof,
             }
+        funding_wait = None
         if self.state.get("prewarm"):
             balanced = self._balanced_funding(obs, acquire=True)
             if balanced:
                 return balanced
         else:
-            for item, total in inputs.items():
-                remaining = total - self.state["allocated_inputs"].get(item, 0)
-                if remaining <= 0:
-                    continue
-                if obs.get("inventory", {}).get(item, 0) < remaining:
-                    return self.bootstrap.ensure_item(obs, item, remaining)
-                port = next(p for p in plan["ports"] if p["item"] == item)
-                return self._transfer(
-                    "fund",
-                    dict(
-                        type="insert",
-                        name="wooden-chest",
-                        position=port["position"],
-                        inventory="chest",
-                        item=item,
-                        count=remaining,
-                        reason="fund one finite machine research batch for " + name,
-                    ),
-                )
+            funding = self._incremental_funding(obs, plan, inputs, name)
+            if funding is not None and funding.get("type"):
+                return funding
+            funding_wait = funding
         repair = self._repair_funding(obs, plan)
         if repair:
             return repair
@@ -1697,6 +1687,10 @@ class BootstrapLogistics:
                     reason="collect owned machine-built bootstrap science",
                 ),
             )
+        if funding_wait is not None:
+            # Partly funded: the machines already work on what arrived; an
+            # empty cell here is the plate wait, not a diversion.
+            return dict(funding_wait, evidence={**self._progress(obs), **funding_wait.get("evidence", {})})
         repair = self._recover_stalled_diversion(obs, plan)
         if repair:
             return repair
@@ -1705,6 +1699,51 @@ class BootstrapLogistics:
             "reason": "waiting_for_finite_machine_science_and_native_research",
             "evidence": self._progress(obs),
         }
+
+    def _incremental_funding(self, obs, plan, inputs, name):
+        """Fund the batch as plates arrive (PLANNERS.md "Bootstrap research", incremental funding).
+
+        Returns an insert of what the hands hold (at least ``FUND_CHUNK`` or
+        the whole remainder, never more than the remaining allowance), else a
+        collection action, else a waiting status naming every unfunded item
+        in ``evidence.needs`` (the critical-path claim), or None once funded.
+        The accounting is the same ``fund`` transfer receipt as before:
+        ``allocated_inputs`` grows by the moved amount and never exceeds
+        ``required_inputs``.
+        """
+        allocated = self.state["allocated_inputs"]
+        pending = [(item, total - allocated.get(item, 0)) for item, total in inputs.items()]
+        pending = [(item, remaining) for item, remaining in pending if remaining > 0]
+        if not pending:
+            return None
+        inventory = obs.get("inventory", {})
+        for item, remaining in pending:
+            held = inventory.get(item, 0)
+            if type(held) is int and held >= min(remaining, FUND_CHUNK):
+                port = next(p for p in plan["ports"] if p["item"] == item)
+                return self._transfer(
+                    "fund",
+                    dict(
+                        type="insert",
+                        name="wooden-chest",
+                        position=port["position"],
+                        inventory="chest",
+                        item=item,
+                        count=min(held, remaining),
+                        reason="fund one finite machine research batch for " + name,
+                    ),
+                )
+        needs = {item: remaining for item, remaining in pending}
+        wait = None
+        for item, remaining in pending:
+            result = self.bootstrap.ensure_item(obs, item, remaining)
+            if result.get("type"):
+                return result
+            wait = wait or result
+        reason = str((wait or {}).get("reason") or "")
+        if not reason.startswith("waiting"):
+            reason = "waiting for plates to fund the batch: " + ", ".join(needs)
+        return {"status": "waiting", "reason": reason, "evidence": {**(wait or {}).get("evidence", {}), "needs": needs}}
 
     def _transfer(self, kind, action, recovery_id=None):
         self.state["transfer_sequence"] = self.state.get("transfer_sequence", 0) + 1

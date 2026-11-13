@@ -774,7 +774,9 @@ UNKNOWN_BATCH_OUTCOMES = (
 )
 
 
-def _advance_job(root: Path, game, executors, ledger: Ledger, key: str, obs: dict) -> tuple[str, dict]:
+def _advance_job(
+    root: Path, game, executors, ledger: Ledger, key: str, obs: dict, *, view: dict | None = None, guard=None
+) -> tuple[str, dict]:
     """Advance one job by at most one executor step against an already synced observation.
 
     Returns (outcome, result). outcome is one of:
@@ -783,6 +785,11 @@ def _advance_job(root: Path, game, executors, ledger: Ledger, key: str, obs: dic
     performed and the job is still active), "status" (a non-action status was
     recorded and the job is still active). result is the executor's result, or
     {} when the executor was not called.
+
+    ``view`` (default ``obs``) is the observation the executor plans against;
+    a slack job gets ``critical_path.slack_view`` there. ``guard(result)`` may
+    replace a planned action by a status before any intent is stored
+    (``critical_path.slack_refusal``). Progress and proof use ``obs``.
     """
     job = ledger.data["jobs"][key]
     if job["status"] in TERMINAL | {"paused"}:
@@ -818,7 +825,9 @@ def _advance_job(root: Path, game, executors, ledger: Ledger, key: str, obs: dic
         return "terminal", {}
     started = time.perf_counter()
     try:
-        result = executors.step(job["capability"], obs, job["parameters"])
+        result = executors.step(job["capability"], obs if view is None else view, job["parameters"])
+        if guard is not None and result.get("type"):
+            result = guard(result) or result
     except PLANNER_FAULTS as exc:
         # Planning is read-only. A planner that trips over missing state or an
         # unexpected shape blocks its own job; it must not stop the other jobs
@@ -980,6 +989,46 @@ def _active_in_priority_order(ledger: Ledger) -> list[str]:
     return [job["key"] for job in active]
 
 
+def _critical_split(ledger: Ledger, obs: dict, executors, order: list[str]):
+    """Critical job keys of this pass and, per slack job, its (view, guard) (critical_path.py).
+
+    Claims are read when the first slack job advances, after the critical jobs
+    of the pass reported, so they reflect what those jobs wait for now. A
+    planner fault here never stops the jobs: the pass runs in plain priority order.
+    """
+    from . import critical_path as cp
+
+    jobs = ledger.data["jobs"]
+    catalog = getattr(executors, "catalog", None)
+    try:
+        path = cp.critical_path(jobs.values(), obs, CAPABILITIES, catalog=catalog)
+        known = cp.known_items(catalog, obs)
+        critical = set(cp.critical_jobs({k: jobs[k] for k in order}, path, known_items=known))
+    except PLANNER_FAULTS:
+        return set(), lambda key: (None, None)
+    cache: dict = {}
+
+    def slack(key):
+        if key in critical or not critical:
+            return None, None
+        if "view" not in cache:
+            try:
+                claimed = cp.critical_claims(jobs, sorted(critical), known)
+                cache["view"] = cp.slack_view(obs, claimed) if claimed else None
+            except PLANNER_FAULTS:
+                claimed, cache["view"] = {}, None
+            cache["claimed"] = claimed
+        claimed = cache["claimed"]
+        if not claimed:
+            return None, None
+        guard = None
+        if jobs[key]["capability"] not in cp.GUARD_EXEMPT:
+            guard = lambda result: cp.slack_refusal(result, obs, claimed, catalog)  # noqa: E731
+        return cache["view"], guard
+
+    return critical, slack
+
+
 def _perform_idle_action(game, executors, ledger: Ledger, obs: dict) -> bool:
     """Perform the executors' optional idle action once; True when an action was sent.
 
@@ -1067,10 +1116,13 @@ def run_jobs(root: Path, game, executors, *, seconds: float = 25) -> dict:
                 return finished()
             acted = False
             stopped = False
+            critical, slack = _critical_split(ledger, obs, executors, order)
+            order = [key for key in order if key in critical] + [key for key in order if key not in critical]
             for key in order:
                 job = ledger.data["jobs"][key]
                 before = job["actions"]
-                outcome, result = _advance_job(root, game, executors, ledger, key, obs)
+                view, guard = slack(key)
+                outcome, result = _advance_job(root, game, executors, ledger, key, obs, view=view, guard=guard)
                 last_results[key] = result
                 performed = job["actions"] - before
                 actions += performed

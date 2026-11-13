@@ -431,6 +431,65 @@ class BootstrapResearchTests(unittest.TestCase):
         self.assertEqual((action["type"], action["item"], action["count"]), ("take", "iron-plate", 20))
         self.bootstrap.ensure_item.assert_called_once_with(self.obs, "iron-plate", 20)
 
+    def test_funding_inserts_partial_plates_as_they_arrive_within_the_allowance(self):
+        # gun-turret: 20 iron + 10 copper. 12 iron and 4 copper in hand.
+        self.obs["inventory"] = {"iron-plate": 12, "copper-plate": 4}
+        action = self.controller.step(self.obs)
+        self.assertEqual((action["type"], action["item"], action["count"]), ("insert", "iron-plate", 12))
+        self.controller.record_action(action, {"ok": True, "moved": 12})
+        self.obs["inventory"] = {"copper-plate": 4}
+        self.obs["research"] = "gun-turret"  # started on the first plates (next test)
+        # 8 iron and 10 copper remain; 4 copper is below one chunk: collect, never a 4-plate insert.
+        self.bootstrap.ensure_item.side_effect = lambda obs, item, count: {
+            "status": "waiting",
+            "reason": f"waiting for drill-fed {item} production",
+            "evidence": {"item": item, "have": 0, "need": count},
+        }
+        wait = self.controller.step(self.obs)
+        self.assertEqual(wait["status"], "waiting")
+        self.assertEqual(wait["evidence"]["needs"], {"iron-plate": 8, "copper-plate": 10})
+        self.assertEqual(wait["evidence"]["allocated_normal_inputs"], {"iron-plate": 12})
+        # The remainder of a smaller item is moved even below a chunk; never more than the allowance.
+        self.obs["inventory"] = {"iron-plate": 30, "copper-plate": 4}
+        action = self.controller.step(self.obs)
+        self.assertEqual((action["item"], action["count"]), ("iron-plate", 8))
+        self.controller.record_action(action, {"ok": True, "moved": 8})
+        self.obs["inventory"] = {"iron-plate": 22, "copper-plate": 10}
+        action = self.controller.step(self.obs)
+        self.assertEqual((action["item"], action["count"]), ("copper-plate", 10))
+        self.controller.record_action(action, {"ok": True, "moved": 10})
+        self.assertEqual(self.controller.state["allocated_inputs"], self.controller.state["required_inputs"])
+        self.assertEqual(
+            self.controller.step(self.obs)["reason"], "waiting_for_finite_machine_science_and_native_research"
+        )
+
+    def test_partly_funded_batch_starts_research_and_carries_packs_before_the_rest_arrives(self):
+        self.obs["inventory"] = {"iron-plate": 10}
+        self.bootstrap.ensure_item.side_effect = lambda obs, item, count: {
+            "status": "waiting",
+            "reason": f"waiting for drill-fed {item} production",
+            "evidence": {"item": item, "have": 0, "need": count},
+        }
+        action = self.controller.step(self.obs)
+        self.controller.record_action(action, {"ok": True, "moved": 10})
+        self.obs["inventory"] = {}
+        self.assertEqual(self.controller.step(self.obs)["type"], "research")
+        self.obs["research"] = "gun-turret"
+        output = next(
+            e
+            for e in self.obs["entities"]
+            if e["name"] == "wooden-chest" and e["position"] == self.plan["ports"][-1]["position"]
+        )
+        output["inventory"]["automation-science-pack"] = 5
+        action = self.controller.step(self.obs)
+        self.assertEqual((action["type"], action["count"]), ("take", 5))
+        self.controller.record_action(action, {"ok": True, "moved": 5})
+        output["inventory"]["automation-science-pack"] = 0
+        wait = self.controller.step(self.obs)  # 5 packs carried but none in hand: the plate wait names both items
+        self.assertEqual(wait["reason"], "waiting for drill-fed iron-plate production")
+        self.assertEqual(wait["evidence"]["needs"], {"iron-plate": 10, "copper-plate": 10})
+        self.assertIsNone(self.controller.proof(self.obs))
+
     def test_job_acknowledges_actual_moved_count_before_clearing_intent_and_preserves_unknown(self):
         self.obs["technologies"].pop("logistics")
         for moved in (7, None):
