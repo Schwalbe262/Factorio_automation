@@ -161,6 +161,10 @@ class StarterExecutors:
         self.material_supply = DedicatedMaterials(
             game, self.builder, catalog, self.outposts, perimeter=self.perimeter, smelting=self.smelting
         )
+        from .power_coal_tap import PowerCoalTap
+
+        # Boiler coal from the coal patch trunk; the starter feed retires (mine_trunk rule).
+        self.power_coal_tap = PowerCoalTap(game, self.builder, catalog, outposts=self.outposts, smelting=self.smelting)
         self.chemical_coal = DedicatedMaterials(
             game,
             self.builder,

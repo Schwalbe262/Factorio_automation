@@ -79,6 +79,12 @@ CAPABILITIES = {
         "requires": ["power", "power_coal_feed"],
         "effect": "normally craft electric drill, prebuild grid, reserve-backed cutover and real coal output onto retained trunk",
     },
+    # Mine-trunk rule (power_coal_tap.py): proposed once the coal patch has a proven bank with a trunk.
+    "power_coal_tap": {
+        "parameters": {},
+        "requires": ["power", "power_coal_feed", "electric_coal"],
+        "effect": "boiler coal from an output-priority splitter tap on the coal patch trunk; verify 30 game seconds, then mine the starter feed drill and its upstream belts",
+    },
     "mining_outpost": {
         "parameters": {
             "resource": "iron-ore|copper-ore|coal|stone",

@@ -243,14 +243,28 @@ Rule:
 
 Wired today: `dedicated_materials` (coal and stone, also the chemistry purpose) taps the patch
 bank when one exists (`material_supply.TRUNK_MODE`; coal gets a two-output even hub splitter
-for `coal` / `brick-coal`). A supply prepared before this rule keeps its own bank. When the
-trunk has no tap site (no observed straight run, every row rejected) the old independent pair
-is still planned and the entry records `second_group_reason`: a recorded exception to retire
-later, not the design.
+for `coal` / `brick-coal`). A supply prepared before this rule keeps its own bank. Before any
+consumer opens its own group the trunk is searched further (`plan_tap`): every straight run
+of the observed trunk (`trunk_segments` follows its turns and passes built tap splitters; a
+belt fed from behind is another line and ends the trace), first `ATTEMPTS` rows per side,
+then `EXTENDED_ATTEMPTS` more. Only when all of that fails is the old independent pair
+planned; the entry records `second_group_reason` and the observe receipt lists it under
+`mine_trunks.independent_groups` (a recorded exception to retire later, not the design).
 
-Not yet: power's boiler feed as a `serve="first"` tap (the starter feed stays separate and is
-not retired), smelting fuel on a tap, building a second trunk lane and its 2-2 splitter (the
-receipt flags `second_lane_required`), retiring an old separate group through `obsolete.py`.
+Power (`power_coal_tap.py`, capability `power_coal_tap`): once the boiler is belt-fed,
+`electric_coal` succeeded and the coal patch has a proven bank with an observed trunk
+(receipt `mine_trunks.power_tap`), one node moves the boiler feed onto the trunk: a
+`serve="first"` tap (branch output priority) and a branch belt that side-loads onto a straight
+belt of the existing feed. The old feed keeps running until trunk coal stands at the join with
+a fuelled boiler, a powered bank drill and both engines for 30 game seconds; then the builder's
+`coal_plan` is replaced (branch + kept feed belts + poles, `drill` = a bank drill, template
+`power_trunk_tap`), and the old drill, its arm and the belts upstream of the join are mined one
+guarded `mine` each, only while the boiler holds fuel (`obsolete.REGISTRY`). Before a bank
+exists the hand-fed boiler and the starter feed stay as they are.
+
+Smelting fuel stays the trunk's main output (the downstream consumer of every tap). Not yet:
+`steam_expansion`'s own paired coal bank, retiring an old independent material group through
+`obsolete.py`.
 The whole-patch grid of the Mining Patch Planner "simple" layout (several row pairs, all
 lanes to one edge, searched grid shift, pole lanes, lane merging by saturation) is the
 target shape for the patch plan; today a patch is one row pair with reserved pair slots, and

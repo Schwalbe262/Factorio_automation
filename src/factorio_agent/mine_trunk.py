@@ -63,6 +63,7 @@ BELT_RATE_PER_MINUTE = {
 RESERVED_LANES = 1  # free lanes kept beside the built trunk for its next lane
 MAX_TRACE = 128  # trunk tiles followed from the port
 ATTEMPTS = 3  # tap rows tried per side (each costs a native preflight)
+EXTENDED_ATTEMPTS = 6  # further rows per side and run before a consumer may open its own drill group
 DEFAULT_SPAN = 4  # underground span when the game is not asked (a tap needs none on a mine trunk)
 FACING_LETTER = {0: "N", 4: "E", 8: "S", 12: "W"}
 SERVES = ("first", "after")
@@ -180,35 +181,73 @@ def _surface(obs) -> dict:
     return tiles
 
 
-def trace_trunk(obs, port: dict) -> list[dict]:
-    """Observed straight run from the output port along its facing: belts (and tap splitters) in flow order."""
+def trunk_segments(obs, port: dict, *, limit: int = MAX_TRACE) -> list[tuple[dict, list[dict]]]:
+    """The observed trunk from the output port as straight runs ``[(head, run)]``, following its turns.
+
+    ``head`` is a port-like ``{"position", "facing"}`` on the run's first tile;
+    ``run`` its belts and tap splitters in flow order (a splitter of the run's
+    facing passes, so a built tap never ends the trunk). A turn is a belt on the
+    next tile facing sideways that nothing feeds from behind (a curve); a belt
+    fed from behind is another line the trunk side-loads into, and the trace
+    stops there, as it does at a gap, a reversed belt or ``limit`` tiles.
+    """
     facing = port.get("facing")
     if facing not in FACING_LETTER:
         return []
-    dx, dy = DIRECTIONS[FACING_LETTER[facing]]
     tiles = _surface(obs)
     x, y = _tile(port["position"])
-    run = []
-    for _ in range(MAX_TRACE):
+    segments, run, head = [], [], {"position": dict(port["position"]), "facing": facing}
+    for _ in range(limit):
         here = tiles.get((x, y))
-        if here is None or here.get("direction", 0) != facing:
+        if here is None:
             break
+        direction = here.get("direction", 0)
+        if direction != facing:
+            bx, by = DIRECTIONS[FACING_LETTER.get(direction, "N")]
+            behind = tiles.get((x - bx, y - by))
+            turn = (
+                here.get("name") == "transport-belt"
+                and direction in FACING_LETTER
+                and direction != (facing + 8) % 16
+                and not (behind is not None and behind.get("direction", 0) == direction)
+            )
+            if not turn or not run:
+                break
+            segments.append((head, run))
+            facing, run = direction, []
+            head = {"position": {"x": x + 0.5, "y": y + 0.5}, "facing": facing}
         run.append(here)
+        dx, dy = DIRECTIONS[FACING_LETTER[facing]]
         x, y = x + dx, y + dy
-    return run
+    if run:
+        segments.append((head, run))
+    return segments
 
 
-def trunk_bus(bank: dict, obs, side: str, *, lanes_built: int = 1, reserved: int = RESERVED_LANES, stations=()):
+def trace_trunk(obs, port: dict) -> list[dict]:
+    """Observed straight run from the output port along its facing: belts (and tap splitters) in flow order."""
+    segments = trunk_segments(obs, port)
+    return segments[0][1] if segments else []
+
+
+def trunk_bus(
+    bank: dict, obs, side: str, *, lanes_built: int = 1, reserved: int = RESERVED_LANES, stations=(), segment=None
+):
     """A ``planned_tap`` bus document for the bank's trunk with taps towards ``side``.
 
     The built lanes and the reserved next lane lie on the side away from the
     taps; the tap side's band edge is the tile beside the outer trunk lane, so
     a branch leaves the trunk in two tiles and never crosses a trunk lane.
+    ``segment`` (``(head, run)`` of :func:`trunk_segments`) frames a later
+    straight run of the trunk instead of the first.
     """
     if side not in ("left", "right"):
         raise ValueError("side must be left or right")
     port = bank["plan"]["ports"][0]
-    run = trace_trunk(obs, port)
+    if segment is None:
+        run = trace_trunk(obs, port)
+    else:
+        port, run = segment
     letter = FACING_LETTER.get(port.get("facing"))
     if not run or letter is None:
         return {"ok": False, "reason": "mine_trunk_not_observed"}
@@ -249,45 +288,70 @@ def tap_priorities(tap: dict) -> dict:
 def plan_tap(bank, obs, *, owner, name, demand, serve="after", sides=("right", "left"), stations=(), accept=None):
     """Feasible splitter taps on the bank's trunk, nearest the patch first, per side.
 
-    Returns ``{"ok": True, "taps": [...]}`` (candidates in preference order) or a failure.
+    Search order (the trunk is extended before anyone opens a second drill group):
+    the first ``ATTEMPTS`` fitting rows per side on every straight run of the
+    observed trunk (the first run from the port, then the runs after each turn,
+    :func:`trunk_segments`); when none is accepted, up to ``EXTENDED_ATTEMPTS``
+    further rows per side and run. Each tap records its ``segment``.
+
+    Returns ``{"ok": True, "taps": [...]}`` (candidates in preference order) or a failure
+    with ``rows_rejected`` and ``segments`` (runs searched).
     """
     if serve not in SERVES:
         raise ValueError("serve must be first or after")
-    found, rejected = [], {}
-    for side in sides:
-        bus = trunk_bus(bank, obs, side, stations=stations)
-        if not bus.get("ok"):
-            return bus
-        view = BusView(bus)
-        item = bank["plan"]["resource"]
-        rows, why = candidates(
-            view, item, side, FIRST_ROW, FIRST_ROW, view.bus.length, span=DEFAULT_SPAN, limit=ATTEMPTS
-        )
-        for reason, count in why.items():
-            rejected[reason] = rejected.get(reason, 0) + count
-        live = {(e["name"], *_tile(e["position"])): e for e in obs.get("entities", [])}
-        for row in rows:
-            units = [live.get(("transport-belt", *_tile(p)), {}).get("unit_number") for p in row["remove"]]
-            if not all(type(u) is int for u in units):
-                rejected["mine_trunk_belt_not_observed"] = rejected.get("mine_trunk_belt_not_observed", 0) + 1
-                continue
-            tap = dict(
-                row,
-                name=name,
-                owner=owner,
-                serve=serve,
-                demand_per_minute=round(float(demand), 3),
-                primary_demand=round(float(bank.get("nominal_rate_per_minute", 0)), 3),
-                remove_units=units,
-                trunk=trunk_key(bank),
-                built=False,
-                frame=bus["frame"],
-            )
-            tap["splitter"].update(tap_priorities(tap))  # the same dict as in ``entities``
-            if accept is None or accept(tap):
-                found.append(tap)
+    port = bank["plan"]["ports"][0]
+    segments = trunk_segments(obs, port)
+    if not segments or FACING_LETTER.get(port.get("facing")) is None:
+        return {"ok": False, "reason": "mine_trunk_not_observed"}
+    found, rejected, tried = [], {}, set()
+    live = {(e["name"], *_tile(e["position"])): e for e in obs.get("entities", [])}
+    item = bank["plan"]["resource"]
+    for limit in (ATTEMPTS, ATTEMPTS + EXTENDED_ATTEMPTS):
+        for index, segment in enumerate(segments):
+            own = [s for s in stations if s.get("segment", 0) == index]
+            for side in sides:
+                bus = trunk_bus(bank, obs, side, stations=own, segment=segment)
+                if not bus.get("ok"):
+                    continue
+                view = BusView(bus)
+                rows, why = candidates(
+                    view, item, side, FIRST_ROW, FIRST_ROW, view.bus.length, span=DEFAULT_SPAN, limit=limit
+                )
+                for reason, count in why.items():
+                    rejected[reason] = rejected.get(reason, 0) + count
+                for row in rows:
+                    if (index, side, row["along"]) in tried:
+                        continue
+                    tried.add((index, side, row["along"]))
+                    units = [live.get(("transport-belt", *_tile(p)), {}).get("unit_number") for p in row["remove"]]
+                    if not all(type(u) is int for u in units):
+                        rejected["mine_trunk_belt_not_observed"] = rejected.get("mine_trunk_belt_not_observed", 0) + 1
+                        continue
+                    tap = dict(
+                        row,
+                        name=name,
+                        owner=owner,
+                        serve=serve,
+                        demand_per_minute=round(float(demand), 3),
+                        primary_demand=round(float(bank.get("nominal_rate_per_minute", 0)), 3),
+                        remove_units=units,
+                        trunk=trunk_key(bank),
+                        segment=index,
+                        built=False,
+                        frame=bus["frame"],
+                    )
+                    tap["splitter"].update(tap_priorities(tap))  # the same dict as in ``entities``
+                    if accept is None or accept(tap):
+                        found.append(tap)
+        if found:
+            break
     if not found:
-        return {"ok": False, "reason": "mine_trunk_tap_unavailable", "rows_rejected": rejected}
+        return {
+            "ok": False,
+            "reason": "mine_trunk_tap_unavailable",
+            "rows_rejected": rejected,
+            "segments": len(segments),
+        }
     return {"ok": True, "taps": found}
 
 
@@ -535,14 +599,42 @@ def trunk_receipt(root, jobs, obs, *, belt: str = "transport-belt") -> dict | No
     """Per trunk: demand (first consumer + every tap), supply (proven banks of the patch), lanes.
 
     ``jobs`` is accepted for the observe receipt's common signature.
+    Also: ``independent_groups`` (supplies that opened their own drill group because
+    the trunk had no tap site, :func:`fallback_groups`) and ``power_tap``
+    (``power_coal_tap.tap_receipt``: whether the boiler feed can move onto the coal trunk).
     """
     root = Path(root)
     state = ledger(root, obs.get("world_id"))
-    if not state["trunks"]:
-        return None
     mining = _read(root / "mining-outposts.json")
-    if mining.get("world_id") != obs.get("world_id"):
-        return None
+    rows = _trunk_rows(state, mining, obs, belt) if mining.get("world_id") == obs.get("world_id") else []
+    from .power_coal_tap import tap_receipt
+
+    receipt = {"trunks": rows}
+    fallbacks = fallback_groups(root, obs.get("world_id"))
+    if fallbacks:
+        receipt["independent_groups"] = fallbacks
+    power = tap_receipt(root, obs)
+    if power is not None:
+        receipt["power_tap"] = power
+    return receipt if rows or len(receipt) > 1 else None
+
+
+def fallback_groups(root, world_id) -> list[dict]:
+    """Dedicated-material supplies that opened their own drill group (``second_group_reason``)."""
+    rows = []
+    for name in ("material-supply.json", "material-supply-chemistry.json"):
+        state = _read(Path(root) / name)
+        if state.get("world_id") != world_id:
+            continue
+        for resource, entry in sorted((state.get("supplies") or {}).items()):
+            why = entry.get("second_group_reason") if isinstance(entry, dict) else None
+            if why:
+                reason = why.get("reason") if isinstance(why, dict) else str(why)
+                rows.append({"state": name, "resource": resource, "reason": reason})
+    return rows
+
+
+def _trunk_rows(state, mining, obs, belt) -> list[dict]:
     rows = []
     for key, trunk in sorted(state["trunks"].items()):
         bank = find_bank(mining.get("banks"), key)
@@ -573,7 +665,7 @@ def trunk_receipt(root, jobs, obs, *, belt: str = "transport-belt") -> dict | No
                 "second_lane_required": lanes > 1,
             }
         )
-    return {"trunks": rows} if rows else None
+    return rows
 
 
 def mine_trunk_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
