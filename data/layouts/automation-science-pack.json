@@ -1,0 +1,613 @@
+{
+ "catalog_fingerprint": "284d4776bc3ab0b4cab69291afd367fac84c46ea17689a20010eb68de609f26d",
+ "entries": {
+  "adjacent/flat/meets/none": {
+   "descriptor": {
+    "aspect": "flat",
+    "counts": {
+     "belts": 24,
+     "inserters": 4,
+     "machines": 2,
+     "poles": 2
+    },
+    "footprint": [
+     12,
+     18
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 6.0,
+     "slots": 0
+    },
+    "id": "cl-am1-1x3t-b-0201",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "S",
+    "pollution_per_min": null,
+    "port_relation": "adjacent",
+    "power_kw": 208.8,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 121.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "automation-science-pack": [
+      0,
+      2
+     ],
+     "iron-gear-wheel": [
+      0,
+      1
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     1,
+     3
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "bottom",
+    "turned": true
+   },
+   "scores": {
+    "archive_cost": [
+     121.0,
+     24,
+     216,
+     33
+    ]
+   }
+  },
+  "adjacent/square/meets/none": {
+   "descriptor": {
+    "aspect": "square",
+    "counts": {
+     "belts": 20,
+     "inserters": 4,
+     "machines": 2,
+     "poles": 3
+    },
+    "footprint": [
+     12,
+     14
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 6.0,
+     "slots": 0
+    },
+    "id": "cl-am1-1x2t-b-0100",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "S",
+    "pollution_per_min": null,
+    "port_relation": "adjacent",
+    "power_kw": 208.8,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 116.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "automation-science-pack": [
+      0,
+      1
+     ],
+     "iron-gear-wheel": [
+      0,
+      0
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     1,
+     2
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "bottom",
+    "turned": true
+   },
+   "scores": {
+    "archive_cost": [
+     116.0,
+     20,
+     168,
+     30
+    ]
+   }
+  },
+  "adjacent/tall/meets/none": {
+   "descriptor": {
+    "aspect": "tall",
+    "counts": {
+     "belts": 14,
+     "inserters": 4,
+     "machines": 2,
+     "poles": 2
+    },
+    "footprint": [
+     14,
+     10
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 6.0,
+     "slots": 0
+    },
+    "id": "cl-am1-2x1s-b-0010",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "S",
+    "pollution_per_min": null,
+    "port_relation": "adjacent",
+    "power_kw": 208.8,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 106.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "automation-science-pack": [
+      0,
+      0
+     ],
+     "iron-gear-wheel": [
+      1,
+      0
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     2,
+     1
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "bottom",
+    "turned": false
+   },
+   "scores": {
+    "archive_cost": [
+     106.0,
+     14,
+     140,
+     23
+    ]
+   }
+  },
+  "opposite/square/meets/in_place": {
+   "descriptor": {
+    "aspect": "square",
+    "counts": {
+     "belts": 37,
+     "inserters": 9,
+     "machines": 2,
+     "poles": 5
+    },
+    "footprint": [
+     18,
+     16
+    ],
+    "form": "row",
+    "growth": {
+     "kind": "in_place",
+     "limit": "reserved_slots",
+     "max_rate_in_place": 12.0,
+     "slots": 1
+    },
+    "id": "row-am1-default",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "E",
+    "pollution_per_min": null,
+    "port_relation": "opposite",
+    "power_kw": 288.6,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 174.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "row",
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "spare": "default"
+   },
+   "scores": {
+    "archive_cost": [
+     174.0,
+     37,
+     288,
+     54
+    ]
+   }
+  },
+  "opposite/square/meets/none": {
+   "descriptor": {
+    "aspect": "square",
+    "counts": {
+     "belts": 25,
+     "inserters": 9,
+     "machines": 2,
+     "poles": 5
+    },
+    "footprint": [
+     14,
+     16
+    ],
+    "form": "row",
+    "growth": {
+     "kind": "none",
+     "limit": "no_reserved_slot",
+     "max_rate_in_place": 6.0,
+     "slots": 0
+    },
+    "id": "row-am1-none",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "E",
+    "pollution_per_min": null,
+    "port_relation": "opposite",
+    "power_kw": 288.6,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 156.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "row",
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "spare": "none"
+   },
+   "scores": {
+    "archive_cost": [
+     156.0,
+     25,
+     224,
+     42
+    ]
+   }
+  },
+  "opposite/tall/meets/in_place": {
+   "descriptor": {
+    "aspect": "tall",
+    "counts": {
+     "belts": 61,
+     "inserters": 9,
+     "machines": 2,
+     "poles": 8
+    },
+    "footprint": [
+     26,
+     16
+    ],
+    "form": "row",
+    "growth": {
+     "kind": "in_place",
+     "limit": "lane_capacity",
+     "max_rate_in_place": 24.0,
+     "slots": 3
+    },
+    "id": "row-am1-max",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "E",
+    "pollution_per_min": null,
+    "port_relation": "opposite",
+    "power_kw": 288.6,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 213.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "row",
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "spare": "max"
+   },
+   "scores": {
+    "archive_cost": [
+     213.0,
+     61,
+     416,
+     81
+    ]
+   }
+  },
+  "opposite/tall/meets/none": {
+   "descriptor": {
+    "aspect": "tall",
+    "counts": {
+     "belts": 14,
+     "inserters": 4,
+     "machines": 2,
+     "poles": 2
+    },
+    "footprint": [
+     16,
+     10
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 6.0,
+     "slots": 0
+    },
+    "id": "cl-am1-2x1s-r-1000",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "E",
+    "pollution_per_min": null,
+    "port_relation": "opposite",
+    "power_kw": 208.8,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 106.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "automation-science-pack": [
+      1,
+      0
+     ],
+     "iron-gear-wheel": [
+      0,
+      0
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     2,
+     1
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "right",
+    "turned": false
+   },
+   "scores": {
+    "archive_cost": [
+     106.0,
+     14,
+     160,
+     23
+    ]
+   }
+  },
+  "same/flat/meets/none": {
+   "descriptor": {
+    "aspect": "flat",
+    "counts": {
+     "belts": 24,
+     "inserters": 4,
+     "machines": 2,
+     "poles": 2
+    },
+    "footprint": [
+     12,
+     18
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 6.0,
+     "slots": 0
+    },
+    "id": "cl-am1-1x3t-l-0201",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "W",
+    "pollution_per_min": null,
+    "port_relation": "same",
+    "power_kw": 208.8,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 121.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "automation-science-pack": [
+      0,
+      2
+     ],
+     "iron-gear-wheel": [
+      0,
+      1
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     1,
+     3
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "left",
+    "turned": true
+   },
+   "scores": {
+    "archive_cost": [
+     121.0,
+     24,
+     216,
+     33
+    ]
+   }
+  },
+  "same/square/meets/none": {
+   "descriptor": {
+    "aspect": "square",
+    "counts": {
+     "belts": 20,
+     "inserters": 4,
+     "machines": 2,
+     "poles": 3
+    },
+    "footprint": [
+     12,
+     12
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 6.0,
+     "slots": 0
+    },
+    "id": "cl-am1-1x2t-l-0001",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "W",
+    "pollution_per_min": null,
+    "port_relation": "same",
+    "power_kw": 208.8,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 116.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "automation-science-pack": [
+      0,
+      0
+     ],
+     "iron-gear-wheel": [
+      0,
+      1
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     1,
+     2
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "left",
+    "turned": true
+   },
+   "scores": {
+    "archive_cost": [
+     116.0,
+     20,
+     144,
+     30
+    ]
+   }
+  },
+  "same/tall/meets/none": {
+   "descriptor": {
+    "aspect": "tall",
+    "counts": {
+     "belts": 14,
+     "inserters": 4,
+     "machines": 2,
+     "poles": 2
+    },
+    "footprint": [
+     14,
+     10
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 6.0,
+     "slots": 0
+    },
+    "id": "cl-am1-2x1s-l-0010",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "W",
+    "pollution_per_min": null,
+    "port_relation": "same",
+    "power_kw": 208.8,
+    "rate_now": 6.0,
+    "rate_requested": 6.0,
+    "raw_total": 106.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "automation-science-pack": [
+      0,
+      0
+     ],
+     "iron-gear-wheel": [
+      1,
+      0
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     2,
+     1
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "left",
+    "turned": false
+   },
+   "scores": {
+    "archive_cost": [
+     106.0,
+     14,
+     140,
+     23
+    ]
+   }
+  }
+ },
+ "format": "factorio-agent-layout-library",
+ "generator": "layout-variants-v1",
+ "item": "automation-science-pack",
+ "request": {
+  "chest": "iron-chest",
+  "inserter": "inserter",
+  "rate": 6,
+  "sourced": [
+   "copper-plate",
+   "iron-plate",
+   "steel-plate"
+  ]
+ }
+}

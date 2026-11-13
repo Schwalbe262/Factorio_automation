@@ -117,10 +117,48 @@ def planned_green_clusters(site, world_id, catalog, lab_port):
         core = best[1]
         core["site_transform"] = placement.transform.to_dict()
         core["allocation"] = allocation
+        core["layout"] = green_layout_record(catalog, core)
         core["connections"] = []
         core["cells"] = {"cluster": {"entities": core["entities"]}}
         found.append(core)
     return found
+
+
+def green_layout_record(catalog, plan) -> dict:
+    """The ``layout`` record of the green unit (fleet report): its genome and a few metrics.
+
+    The green tree has one cluster topology under ``blocks.cluster`` (the pack machine
+    needs two belt-fed neighbours and a free side: only the 4 x 2 turned grid); the
+    output side is chosen per placement (nearest the lab entry), so there is no
+    candidate ranking here yet (``docs/v2/LAYOUT_PRINCIPLES.md``).
+    """
+    from .layout_variants import Genome, energy_metrics
+
+    genome = Genome(
+        "cluster",
+        plan["machine"],
+        grid=(plan["grid"]["columns"], plan["grid"]["rows"]),
+        turned=bool(plan["grid"]["turned_belt"]),
+        cells=tuple(sorted((n["recipe"], tuple(n["cell"])) for n in plan["nodes"])),
+        output_side=plan["output_side"],
+    )
+    (x0, y0), (x1, y1) = plan["reserved_area"]
+    names = [e["name"] for e in plan["entities"]]
+    return {
+        "variant": genome.key(),
+        "genome": genome.to_dict(),
+        "descriptor": {
+            "footprint": [int(x1 - x0), int(y1 - y0)],
+            "counts": {
+                "machines": sum(1 for e in plan["entities"] if e.get("recipe")),
+                "belts": names.count("transport-belt"),
+            },
+            "rate_now": plan.get("rated_per_minute"),
+            **energy_metrics(catalog, genome, plan),
+        },
+        "source": "generated",
+        "explored": False,
+    }
 
 
 class LogisticScience:
@@ -365,6 +403,7 @@ class LogisticScience:
                 "rated_demand": demand,
                 "route_metrics": [r["route_metrics"] for r in routes],
                 "taps": taps,
+                "layout": dict(core.get("layout") or {}, chosen_tick=obs.get("tick")) if core.get("layout") else None,
             }
         settle(self.site, obs["world_id"], "logistic_science", None)
         return {"ok": False, "reason": "no_green_science_site_with_clean_connections", "failures": failures}
@@ -585,6 +624,8 @@ class LogisticScience:
                 "reason": "waiting for native green intermediates, every science machine and automatic lab delivery",
             }
         self.state["phase"] = "verified"
+        if isinstance(self.state.get("layout"), dict) and self.state["layout"].get("verified_tick") is None:
+            self.state["layout"]["verified_tick"] = obs.get("tick")
         _atomic_json(self.path, self.state)
         return {
             "status": "succeeded",
