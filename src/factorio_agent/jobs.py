@@ -683,11 +683,17 @@ def _admission_error(
     slots = len(used) + slots_added(used, capability) - 1
     if slots >= MAX_ACTIVE_JOBS:
         return f"another job must finish or pause first: at most {MAX_ACTIVE_JOBS} jobs may be active"
-    # Early start: the job runs ahead of unfinished prerequisites and never takes the last free slot.
+    # Early start: the job runs ahead of unfinished prerequisites and never takes the last free slot
+    # while one of them still has to be admitted. The free slot is for the work it runs ahead of: once
+    # every missing strict requirement has an active job, nothing is left to admit for it.
+    # aud-1114-0436: the district was refused from ~13.5 min (supply cell, logistics, outposts active)
+    # until logistics ended (median 18.6), and its producer prefix (~100 entities) was built only then.
     succeeded = {job["capability"] for job in jobs.values() if job["status"] == "succeeded"}
     if is_early(CAPABILITIES, capability, succeeded) and slots >= MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS:
-        limit = MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS
-        return f"an early start keeps a job slot free: at most {limit} jobs may be active"
+        missing = set(CAPABILITIES[capability].get("requires", [])) - succeeded
+        if not missing <= {job["capability"] for job in active}:
+            limit = MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS
+            return f"an early start keeps a job slot free: at most {limit} jobs may be active"
     return None
 
 

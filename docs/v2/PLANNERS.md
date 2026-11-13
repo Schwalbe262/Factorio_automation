@@ -915,6 +915,11 @@ propose step S early (progression.autopilot_nodes -> early_start.early_ready) wh
   priority unchanged: TOP_PRIORITY - index, below every step it runs ahead of
 admit (jobs.submit, WorkQueue.refresh): early.requires instead of requires;
   an early job never takes the last free slot (EARLY_FREE_SLOTS = 1: at most 3 active when it is admitted)
+  while one of its missing strict requires has no active job; once every one is active the slot is its own
+  (aud-1114-0436: supply cell + logistics + outposts held 3 slots, the district was refused from ~13.5 min to
+  the logistics end at a median 18.6 and built its ~100-entity producer prefix only after it; the prefix ended
+  1.3-7.2 min after logistics, "waits for underground-belt" being only the last entity built, every slice in
+  between "waiting for drill-fed iron-plate production")
 build (ensure_plan(defer=early_start.deferral(...))), per plan entity in order:
   recipe locked by a coming technology            -> left for later, "waiting for research <t> to unlock <recipe>"
   hand craft would use a plate another active job waits for (contested_plates; only while early) -> later
