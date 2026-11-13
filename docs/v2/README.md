@@ -9,7 +9,7 @@
 | [DEBUGGING_A_STALL.md](DEBUGGING_A_STALL.md) | report, ledger, read-only live inspection, known stall patterns, fix rules |
 | [PLANNERS.md](PLANNERS.md) | planner formulas, defaults, tuning, pinning tests |
 | [SUPERVISOR.md](SUPERVISOR.md) | supervisor flags, planner none/luna, incident replay |
-| [LIFECYCLE.md](LIFECYCLE.md) | BAT menu and `lifecycle` commands |
+| [LIFECYCLE.md](LIFECYCLE.md) | BAT menu and `lifecycle` commands; parallel measurement runs: "Fleet runs" below |
 | [AUTOMATION_CONFIG.md](AUTOMATION_CONFIG.md) | `automation_config.json` fields and ranges |
 
 ## Dashboard (read-only run view)
@@ -31,6 +31,57 @@ read incrementally and a missing or half-written JSON keeps its last good value.
 | 완료 (done) | report milestones (`job-events.jsonl` terminal successes); `progression.ROADMAP` matched against jobs/queue: done / active / queued / blocked / ready / not started |
 | 최근 활동 | last 40 `action_intent` rows of `job-events.jsonl` with their result, report's repeated-action top 3, `open_incidents` of the controller state, last controller errors |
 | 레이아웃 | `site-map.json` + `site-plan.json` drawn by `site.planrender.render_dashboard_svg` (map, zones, corridors, rail, bus lanes, allocations) with the `pcb-board.json` blocks' `reserved_area` on top; a placeholder until `SiteService` wrote the plan |
+
+## Fleet runs (N maps in parallel, one report)
+
+```
+python -B tools/fleet.py start --count 8 --minutes 30 [--seeds random | a,b,c] [--name NAME]
+python -B tools/fleet.py status [--name NAME]          # one line per run
+python -B tools/fleet.py report [--name NAME] [--window 0-30] [--json]
+python -B tools/fleet.py stop   [--name NAME]          # lifecycle safe stop + server /quit per run
+python -B tools/fleet.py cost                          # machine and per-run estimate
+```
+
+`start` makes `runtime/v2/<name>-<seed>` per run (refuses existing folders),
+allocates free port pairs from 34400/27400 up (skipping every port in a
+`run.json`, a fleet manifest or `active-runtime.json`), generates the maps one
+at a time, starts up to `--parallel` (4) runs at once with `--stagger` (10 s),
+and writes `runtime/fleets/<name>.json` (seeds, ports, pids with creation
+times, status). It never changes `runtime/active-runtime.json`, so
+`lifecycle`, the BAT menu and the dashboard stay on the interactive map; the
+dashboard can still look at one fleet run with `--runtime runtime/v2/<run> --port 8766`.
+`--minutes M` starts a detached watcher (`fleet.py watch`, log
+`runtime/fleets/<name>-watch.log`) that safe-stops each run once its game tick
+passes M minutes; `status`/`report` do the same check when the watcher is gone.
+Stopped runs keep their folders; nothing is deleted.
+
+Each run is what `lifecycle start --no-gui` runs: a dedicated server, the
+run's own automation client (`agent-client/`, window hidden, very-low graphics,
+no audio) and a `--planner none` supervisor (`Lifecycle._start(select=False)`).
+The client is required: the actor is the server-created character bound to the
+client's connected player (`deterministic_character.BIND_CRAFTING_PLAYER_LUA`);
+hand crafts must run through a player for the engine's research trigger
+(`deterministic_bootstrap`: "engine crafting requires an associated player"),
+and `supervisor.actor_binding` refuses a character without its pinned player.
+Factorio has no headless client, so "no GUI" means one hidden client per run.
+
+Cost measured on this machine (Ryzen 9 7950X3D, 32 logical cpus, 64 GB):
+a fresh run is server ~350 MB + client ~690 MB + supervisor ~50 MB, ~0.4
+cores in steady state (the client's start-up asset load briefly takes ~4
+cores); the 90-minute interactive map uses ~1.2 GB and ~1.5 cores. `start`
+uses the larger of the last measured fleet run (`runtime/fleets/cost.json`,
+written by `status`) and 1500 MB / 1.5 cores, keeps 6 GB and 4 cpus free, and
+refuses more runs than fit (`--force` overrides): with ~36 GB free that is
+about 18, so 16 runs fit next to the interactive map.
+
+`report` prints one table: per run the game minute each key step succeeded
+(power, automation, electric-mining-drill, logistics, the three outposts,
+smelting district, main bus, red science), the furthest roadmap step, lab idle
+seconds and actor seconds critical/slack in the window (`tools/critical_path.py`);
+then min/median/max per column, how many runs reached it, blocked/failed job
+reasons across runs (numbers normalized; count, example seed) and controller
+errors (`tools/report_run.py`). 16 runs fit in about 35 lines; `--json` has
+the full rows.
 
 ## Capability and subsystem reference
 

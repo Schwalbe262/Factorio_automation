@@ -222,6 +222,14 @@ class LifecycleTests(unittest.TestCase):
         self.assertNotIn("create", [q[0] for q in self.calls])
         self.assertEqual(json.loads(self.control.pointer.read_text())["runtime"], str(self.root))
 
+    def test_fleet_start_without_select_leaves_the_interactive_pointer(self):
+        self.write(self.control.pointer, dict(runtime=str(self.repo / "runtime/v2/interactive"), seed=7))
+        before = self.control.pointer.read_text()
+        result = self.control._start(self.root, visible=False, select=False)
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(len(self.proc.spawned), 1)
+        self.assertEqual(self.control.pointer.read_text(), before)
+
     def test_start_restores_lost_gui_without_duplicating_live_supervisor(self):
         first = self.launch()
         self.proc.rows.pop(11)
