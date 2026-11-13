@@ -127,7 +127,13 @@ def other_patches(site, world_id, resource):
     if row is None:
         return []
     return [
-        {"centroid": [float(p.centroid[0]), float(p.centroid[1])], "bbox": p.bbox.to_list(), "distance": p.distance}
+        {
+            "centroid": [float(p.centroid[0]), float(p.centroid[1])],
+            "bbox": p.bbox.to_list(),
+            "distance": p.distance,
+            "amount": p.amount,
+            "tile_count": p.tile_count,
+        }
         for p in row.others
     ]
 

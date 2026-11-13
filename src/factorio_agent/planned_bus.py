@@ -121,7 +121,12 @@ def feed_priorities(feed: dict) -> dict:
 
 
 def tap_priorities(tap: dict) -> dict:
-    """Tap splitter: its consumer branch (towards the tap port) first, the surplus continues down the bus."""
+    """Tap splitter: its consumer branch (towards the tap port) first, the surplus continues down the bus.
+
+    A feed (``planned_tap.feed_layout``, kind ``feed``) carries its own: output to the trunk side,
+    no input priority."""
+    if tap.get("kind") == "feed":
+        return {k: tap["splitter"][k] for k in PRIORITY_KEYS}
     return branch_priorities(tap["splitter"], tap["port"]["position"])
 
 

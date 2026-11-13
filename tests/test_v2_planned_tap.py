@@ -199,6 +199,70 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(late["reason"], "tap_beyond_bus_length")
 
 
+class FeedLayoutTests(unittest.TestCase):
+    """A feed: plates from a block away from the district enter a built trunk (mirrored tap)."""
+
+    def test_every_direction_side_and_plate_reaches_the_trunk_downstream(self):
+        for direction in ("N", "E", "S", "W"):
+            for item in ("iron-plate", "copper-plate"):
+                for side in ("left", "right"):
+                    with self.subTest(direction=direction, item=item, side=side):
+                        bus = published(direction)
+                        view = pt.BusView(bus)
+                        feed = pt.feed_layout(view, item, side, 20, span=SPAN)
+                        self.assertTrue(feed["ok"], feed)
+                        lane = view.lanes[feed["lane"]]
+                        s = 1 if side == "right" else -1
+                        edge = view.bus.half if s > 0 else -view.bus.half - 1
+                        self.assertEqual(local(view, feed["port"]["position"]), (21, edge + s))
+                        self.assertEqual(feed["port"]["direction"], "input")
+                        boxes = [GEOMETRY._occupied_by_plan([e]) for e in feed["entities"]]
+                        self.assertEqual(sum(map(len, boxes)), len(set().union(*boxes)))
+                        trunk_tiles = {xy(e) for e in bus["entities"]}
+                        removed = {xy({"position": p}) for p in feed["remove"]}
+                        self.assertEqual(set().union(*boxes) & trunk_tiles, removed)
+                        # From the port the plates walk to the splitter's partner input tile.
+                        path = follow(
+                            feed["entities"],
+                            feed["underground_pairs"],
+                            xy(feed["port"]),
+                            xy({"position": view.world(22, lane.offset + s)}),
+                        )
+                        self.assertIsNotNone(path)
+                        splitter = feed["splitter"]
+                        self.assertEqual(splitter["position"], view.world(23, min(lane.offset, lane.offset + s) + 0.5))
+                        trunk = view.world(24, lane.offset)
+                        self.assertEqual(splitter["splitter_output_priority"], native_side(splitter, trunk))
+                        self.assertEqual(splitter["splitter_input_priority"], "none")
+                        self.assertEqual(pb.tap_priorities(feed), {k: splitter[k] for k in pb.PRIORITY_KEYS})
+                        for index in feed["dived_lanes"]:
+                            first = xy({"position": view.world(20, view.lanes[index].offset)})
+                            last = xy({"position": view.world(22, view.lanes[index].offset)})
+                            self.assertIn(
+                                (first, last),
+                                {(tuple(p["input"]), tuple(p["output"])) for p in feed["underground_pairs"]},
+                            )
+                        self.assertEqual(
+                            pt.station(dict(feed, name="f", owner="o", supply_per_minute=75))["kind"], "planned_feed"
+                        )
+
+    def test_feed_windows_keep_apart_from_taps_and_need_the_trunk_past_the_splitter(self):
+        view = pt.BusView(published("N"))
+        tap = pt.layout(view, "iron-plate", "right", 10, span=SPAN)
+        view.add(dict(tap, name="a:iron-plate", owner="a", demand_per_minute=10, built=False))
+        found, rejected = pt.feed_candidates(view, "iron-plate", "right", span=SPAN, limit=6)
+        # Nearest the head first; rows whose copper dive lies within a span of the tap's dive are refused.
+        self.assertEqual([row["along"] for row in found], [2, 3, 19, 20, 21, 22])
+        self.assertIn("feed_window_taken", rejected)
+        self.assertIn("feed_dive_near_trunk_underground", rejected)
+        self.assertEqual(
+            pt.feed_layout(view, "iron-plate", "right", 61, span=SPAN)["reason"], "feed_beyond_built_trunk"
+        )
+        self.assertEqual(
+            pt.feed_layout(view, "iron-plate", "right", 1, span=SPAN)["reason"], "feed_row_too_close_to_head"
+        )
+
+
 class Harness:
     """A built planned bus in a runtime dir with observed trunk belts."""
 
