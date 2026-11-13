@@ -178,6 +178,18 @@ class ReportTests(unittest.TestCase):
             self.assertTrue(any(line.startswith("median") for line in lines))
             self.assertTrue(any("e.g. 11" in line for line in lines))
 
+    def test_the_report_header_names_the_commit_the_fleet_ran(self):
+        rows = [dict(seed=1, alive=True, game_minutes=30.0, milestones={"power": 10.0}, furthest=None)]
+        agg = fleet.aggregate(rows)
+        header = fleet.format_report(dict(name="f", commit="6f5e8e5"), rows, agg, window_text="0-30")[0]
+        self.assertTrue(header.startswith("fleet f commit 6f5e8e5: 1 runs"), header)
+        old = fleet.format_report(dict(name="f"), rows, agg, window_text="0-30")[0]
+        self.assertTrue(old.startswith("fleet f commit ?:"), old)  # manifests from before the field
+        commit = fleet.git_commit(fleet.REPO)
+        self.assertRegex(commit or "", r"^[0-9a-f]{7,}(\+dirty)?$")
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertIsNone(fleet.git_commit(directory))
+
     def test_sixteen_runs_fit_in_sixty_lines(self):
         rows = [
             dict(seed=i, alive=True, game_minutes=30.0, milestones={"power": 10.0 + i}, furthest=None)

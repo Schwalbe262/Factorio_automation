@@ -286,6 +286,19 @@ def aggregate(runs):
     )
 
 
+def git_commit(code) -> str | None:
+    """Short hash of the code a fleet runs (``+dirty`` with uncommitted tracked changes), or None."""
+    try:
+        run = dict(cwd=str(code), capture_output=True, text=True, timeout=10)
+        head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], **run)
+        if head.returncode != 0 or not head.stdout.strip():
+            return None
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], **run)
+        return head.stdout.strip() + ("+dirty" if dirty.returncode == 0 and dirty.stdout.strip() else "")
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _cell(value, width):
     text = "-" if value is None else (f"{value:.1f}" if isinstance(value, float) else str(value))
     return text.rjust(width)
@@ -295,7 +308,8 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     """The compact table: one header, one line per run, 3 stat lines, histograms."""
     heads = [h for h, _ in COLUMNS]
     lines = [
-        f"fleet {fleet.get('name')}: {len(runs)} runs, target {fleet.get('target_minutes') or '-'} game min,"
+        f"fleet {fleet.get('name')} commit {fleet.get('commit') or '?'}: {len(runs)} runs,"
+        f" target {fleet.get('target_minutes') or '-'} game min,"
         f" critical-path window {window_text} min; milestone cells = game minute the step succeeded"
     ]
     tests = [r for r in runs if r.get("test_mode")]
@@ -590,6 +604,7 @@ class Fleet:
             name=name,
             base=str(self.base),
             code=str(self.code),
+            commit=git_commit(self.code),
             created_at=time.time(),
             target_minutes=minutes,
             planner=self.planner,
@@ -840,7 +855,10 @@ class Fleet:
 
 
 def _status_lines(value):
-    lines = [f"fleet {value['name']} (target {value.get('target_minutes') or '-'} game min)"]
+    lines = [
+        f"fleet {value['name']} commit {value.get('commit') or '?'}"
+        f" (target {value.get('target_minutes') or '-'} game min)"
+    ]
     if any(r.get("test_mode") for r in value["runs"]):
         lines[0] += " TEST MODE client_free (C: n = no client by design, d = detached)"
     lines.append("seed        state          S C V  gmin  act blk done  last milestone")
