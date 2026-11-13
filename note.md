@@ -252347,3 +252347,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: 25f4c0d (lab slots planned hardware, LINK_POLE_LUA, supply-cell site-map filter + hop links + relax rung), 27c9a3f (bus keep_clear orders, bridges keep out of corridors, far guide dropped, idle ladder recheck 90 s), power_coal_tap join_rank.
 - expected next round: no supply_cell obstructed / no_clear_supply_cell_site, no bootstrap resource block, bus feed blocks only where a built pole blocks a head.
 - next: fleet 12 x 45 min; check supply_cell rejected_by evidence and remedy events.
+
+## 2026-11-14 09:00 Part 56: live-map blockers and early fleet blockers merged
+- goal: unblock the GUI map past oil, remove the early blockers of round aud-1114-0526/0614.
+- actions: merged 5649d0b (pump segments), a8155be (dead-end bank is no trunk supply), 4602163 (route_tap: a taken block port serves a second row), ddf7694 (tap splitter accepted in green/row proofs; research names its supply gate), 25f4c0d/27c9a3f/16879cd (link poles, supply cell sites, crossing bus feeds, coal tap order, idle ladder recheck 90 s).
+- metrics: aud-1114-0614 (bf64b2c) district 27.2 (8/12), bus 31.6 (4/12), idle with work 1000 s.
+- result: plastics research wait was a stale green proof, not iron (my earlier diagnosis was wrong). Iron growth still blocked: home patch full, ore routes cannot cross the bus band.
+- failure reason: none of the merged fixes is proven live yet (replays and what-ifs only).
+- next: remote plate block worker; read aud-1114-0703 (first round with payback iron cells) and the next round with 16879cd; long fleets at the oil stage.
