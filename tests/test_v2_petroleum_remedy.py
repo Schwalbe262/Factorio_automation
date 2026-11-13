@@ -130,5 +130,52 @@ class RefinerySiteTests(unittest.TestCase):
         self.assertEqual(result["evidence"]["attempts"], len(petroleum.LEGACY_ANCHOR_OFFSETS))
 
 
+class PumpSegmentTests(unittest.TestCase):
+    """A crude pipe longer than one native segment (default_pipeline_extent 320) gets inline pumps:
+    the owner reported maps whose oil lies outside the survey radius (rings up to 1024 tiles)."""
+
+    BOX = {"left_top": {"x": 0, "y": -1}, "right_bottom": {"x": 3, "y": 2}}
+
+    def straight(self, length):
+        path = [(1.5 + k, 0.5) for k in range(length)]
+        return path, {p: "pipe" for p in path[1:]}
+
+    def test_a_700_tile_pipe_gets_two_pumps_and_every_segment_fits(self):
+        path, kinds = self.straight(700)
+        split = petroleum.pump_segments(path, kinds, self.BOX, [path[-1]], 320)
+        self.assertTrue(split["ok"])
+        self.assertEqual(len(split["pumps"]), 2)
+        cuts = [0] + split["pumps"] + [len(path)]
+        for a, b in zip(cuts, cuts[1:]):
+            start = 0 if a == 0 else a + 2
+            xs = [p[0] for p in path[start:b]]
+            self.assertLessEqual(max(xs) - min(xs) + 1, 320)
+
+    def test_a_short_pipe_needs_no_pump_and_a_pump_never_sits_on_an_underground_mouth(self):
+        path, kinds = self.straight(200)
+        self.assertEqual(petroleum.pump_segments(path, kinds, self.BOX, [], 320)["pumps"], [])
+        path, kinds = self.straight(400)
+        for p in path[250:330]:
+            kinds[p] = "pipe-to-ground"
+        split = petroleum.pump_segments(path, kinds, self.BOX, [], 320)
+        self.assertTrue(split["ok"])
+        self.assertTrue(all(kinds[path[i]] == "pipe" and kinds[path[i + 1]] == "pipe" for i in split["pumps"]))
+        self.assertLess(split["pumps"][0], 250)
+
+    def test_pump_entities_face_the_flow_and_join_the_pipes_on_both_sides(self):
+        path, _ = self.straight(10)
+        pumps, replaced, poles = petroleum.pump_entities(path, [4])
+        pump = pumps[0]
+        self.assertEqual((pump["name"], pump["position"], pump["direction"]), ("pump", {"x": 6.0, "y": 0.5}, 4))
+        self.assertEqual(replaced, {path[4], path[5]})
+        self.assertEqual(poles[0][0], {"x": 5.5, "y": 1.5})
+        nodes = [petroleum.entity("pipe", *p) for p in path if p not in replaced] + pumps
+        edges = petroleum._fluid_edges(nodes, [], {"machines": []}, None, pumps)
+        joined = sorted(e["b"]["position"]["x"] for e in edges if e["a"]["name"] == "pump")
+        self.assertEqual(joined, [4.5, 7.5])
+        # The pipes beside the pump are not joined to each other through it.
+        self.assertFalse(any({e["a"]["position"]["x"], e["b"]["position"]["x"]} == {4.5, 7.5} for e in edges))
+
+
 if __name__ == "__main__":
     unittest.main()

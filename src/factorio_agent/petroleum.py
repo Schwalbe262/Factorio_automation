@@ -308,6 +308,7 @@ def plan_crude_connection(game, builder, obs, source, destination, core):
             underground_pairs=list(first.get("underground_pairs", [])) + list(second.get("underground_pairs", [])),
             ports=[deepcopy(source), deepcopy(destination)],
             waypoint={"x": x, "y": y, "facing": facing},
+            full_path=list(first.get("full_path") or []) + list(second.get("full_path") or [])[1:],
         )
     return direct
 
@@ -422,6 +423,121 @@ def pipeline_extent(source_box, entities, limit):
     }
 
 
+PUMP = "pump"
+PUMP_MARGIN = 2  # tiles kept below the native extent per segment
+PUMP_POLE_SIDES = (1, -1)  # the pump's pole one tile beside its first tile, either side
+
+
+def _box(points):
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    return min(xs) - 0.5, min(ys) - 0.5, max(xs) + 0.5, max(ys) + 0.5
+
+
+def _fits(box, limit):
+    return box[2] - box[0] <= limit and box[3] - box[1] <= limit
+
+
+def _grow(box, point):
+    return (
+        min(box[0], point[0] - 0.5),
+        min(box[1], point[1] - 0.5),
+        max(box[2], point[0] + 0.5),
+        max(box[3], point[1] + 0.5),
+    )
+
+
+def pump_segments(path, kinds, source_box, tail, limit, margin=PUMP_MARGIN):
+    """Inline pumps that cut a long crude pipe into native pipeline segments (pure).
+
+    ``path``: the route's tiles in flow order, ``path[0]`` the well's outlet; ``kinds``: tile ->
+    entity name of the planned route (``pipe`` / ``pipe-to-ground``; buried tiles absent);
+    ``source_box``: the well's live segment box; ``tail``: the refinery's crude pipe tiles (in the
+    last segment); ``limit``: the native ``default_pipeline_extent``. A pump replaces two surface
+    pipes ``path[i], path[i+1]`` on a straight run whose neighbours ``path[i-1]``, ``path[i+2]``
+    are surface pipes too. Greedy: each segment runs as long as it fits (``limit - margin``),
+    the pump on the last straight spot before it would not. ``{"ok", "pumps": [i, ...]}`` or a
+    failure naming the tile where no pump fits.
+    """
+    cap = limit - margin
+    lo, hi = source_box["left_top"], source_box["right_bottom"]
+    box = (lo["x"], lo["y"], hi["x"], hi["y"])
+    pumps, candidate, start = [], None, 1
+    n = len(path)
+    i = 1
+    while i < n:
+        grown = _grow(box, path[i])
+        if _fits(grown, cap):
+            box = grown
+            if (
+                i - 1 >= start
+                and i + 2 < n
+                and all(kinds.get(path[k]) == "pipe" for k in (i - 1, i, i + 1, i + 2))
+                and all(
+                    (path[k + 1][0] - path[k][0], path[k + 1][1] - path[k][1])
+                    == (path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1])
+                    for k in (i, i + 1)
+                )
+            ):
+                candidate = i
+            i += 1
+            continue
+        if candidate is None:
+            return {"ok": False, "reason": "pump_segment_has_no_straight_run", "position": list(path[i])}
+        pumps.append(candidate)
+        start = candidate + 2
+        box = _box([path[start]])
+        candidate = None
+        i = start + 1
+    final = box
+    for point in tail:
+        final = _grow(final, point)
+    if not _fits(final, cap):
+        return {"ok": False, "reason": "pump_segment_tail_exceeds_extent", "pumps": pumps}
+    return {"ok": True, "pumps": pumps}
+
+
+def pump_entities(path, pumps):
+    """``(pump entities, replaced tiles, pole points)`` for ``pump_segments`` indices on ``path``."""
+    out, replaced, poles = [], set(), []
+    for i in pumps:
+        a, b = path[i], path[i + 1]
+        d = next(k for k, v in VECTORS.items() if v == (b[0] - a[0], b[1] - a[1]))
+        pump = dict(entity(PUMP, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, d), segment_index=i)
+        out.append(pump)
+        replaced |= {a, b}
+        side = VECTORS[(d + 4) % 16]
+        poles.append([{"x": a[0] + s * side[0], "y": a[1] + s * side[1]} for s in PUMP_POLE_SIDES])
+    return out, replaced, poles
+
+
+def plan_pumps(game, builder, obs, route, core, source, reserved):
+    """The crude route with inline powered pumps (``pump_segments``) or a failure; ``reserved`` are the
+    plan's other entities (power routes keep off them)."""
+    path = [xy({"position": p}) for p in route.get("full_path") or []]
+    if len(path) < 2:
+        return {"ok": False, "reason": "pump_segment_route_path_missing"}
+    if not (obs.get("enabled_recipes") or {}).get(PUMP):
+        return {"ok": False, "reason": "pump_recipe_locked"}
+    kinds = {xy(e): e["name"] for e in route["entities"]}
+    split = pump_segments(path, kinds, source["extent"], [xy(e) for e in core["crude_pipes"]], source["limit"])
+    if not split.get("ok"):
+        return split
+    pumps, replaced, poles = pump_entities(path, split["pumps"])
+    entities = [e for e in route["entities"] if xy(e) not in replaced] + pumps
+    power, hops = [], 0
+    for pump, choices in zip(pumps, poles):
+        found = None
+        for point in choices:
+            found = power_connection(game, builder, obs, point, entities + power + list(reserved))
+            if found.get("ok"):
+                break
+        if not found or not found.get("ok"):
+            return {"ok": False, "reason": "pump_power_connection_failed", "pump": pump["position"], "detail": found}
+        power = merge_entities(power, found["entities"])
+        hops += found.get("wire_hops") or 0
+    return dict(route, entities=entities, pumps=pumps, pump_power=power, pump_wire_hops=hops)
+
+
 def fluid_plan_isolation(game, source, core, route):
     """Never accidentally join gas to crude or steal an existing underground peer."""
     crude = {xy(e) for e in route["entities"] + core["crude_pipes"]} | {xy(source)}
@@ -452,9 +568,9 @@ return {ok=true}"""
     )
 
 
-def _fluid_edges(nodes, pairs, core, source):
-    """Expected reciprocal entity/index edges, including physical refinery ports."""
-    by = {xy(e): e for e in nodes}
+def _fluid_edges(nodes, pairs, core, source, pumps=()):
+    """Expected reciprocal entity/index edges, including physical refinery ports and inline pumps."""
+    by = {xy(e): e for e in nodes if e["name"] != PUMP}
     edges = []
     seen = set()
 
@@ -474,6 +590,14 @@ def _fluid_edges(nodes, pairs, core, source):
                 add(e, 1, other, 1)
     for pair in pairs:
         add(by[tuple(pair["first"])], 1, by[tuple(pair["last"])], 1)
+    for pump in pumps:
+        dx, dy = VECTORS[pump["direction"]]
+        px, py = pump["position"]["x"], pump["position"]["y"]
+        for sign in (-1, 1):  # the pipe behind the pump (input) and in front of it (output)
+            other = by.get((px + sign * 1.5 * dx, py + sign * 1.5 * dy))
+            if other is None:
+                raise ValueError("pump_segment_neighbour_missing")
+            add(pump, 1, other, 1)
     for machine in core["machines"]:
         for item, offset in (("crude-oil", (1, 3)), ("petroleum-gas", (2, -3))):
             pipe = by[(machine["position"]["x"] + offset[0], machine["position"]["y"] + offset[1])]
@@ -627,8 +751,14 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
                 continue
             extent = pipeline_extent(source.get("extent"), route["entities"] + core["crude_pipes"], source.get("limit"))
             if not extent.get("ok"):
-                failures.append({"stage": "pipeline_extent", "detail": extent})
-                continue
+                # A crude pipe longer than one native segment: inline powered pumps split it
+                # (far oil fields, survey rings to 1024 tiles).
+                pumped = plan_pumps(self.game, self.builder, obs, route, core, source, core["entities"])
+                if not pumped.get("ok"):
+                    failures.append({"stage": "pipeline_extent", "detail": dict(extent, pumps=pumped)})
+                    continue
+                route = pumped
+                extent = dict(extent, ok=True, reason="", pump_segments=len(pumped["pumps"]))
             power = power_connection(
                 self.game,
                 self.builder,
@@ -639,7 +769,7 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
             if not power.get("ok"):
                 failures.append({"stage": "power", "detail": power})
                 continue
-            es = merge_entities(route["entities"], core["entities"], power["entities"])
+            es = merge_entities(route["entities"], core["entities"], power["entities"], route.get("pump_power", []))
             check = preflight(self.game, self.builder, obs, es)
             if not check.get("ok"):
                 failures.append({"stage": "whole_preflight", "detail": check})
@@ -684,8 +814,10 @@ return {ok=true,extent=e.get_fluid_segment_extent_bounding_box(1),limit=prototyp
                 "defense_preview": defense,
                 "pipeline_extent": extent,
                 "fluid_nodes": nodes,
-                "fluid_edges": _fluid_edges(nodes, route["underground_pairs"], core, source["source"]),
-                "wire_hops": power["wire_hops"],
+                "fluid_edges": _fluid_edges(
+                    nodes, route["underground_pairs"], core, source["source"], route.get("pumps", [])
+                ),
+                "wire_hops": power["wire_hops"] + route.get("pump_wire_hops", 0),
                 "planning_attempts": attempts,
                 "site_allocation": self._allocations.get((x, y)),
             }
@@ -886,7 +1018,8 @@ local function id(q,index)return key(q).."@"..index end
 for _,p in ipairs(args.gas_positions)do gas[p.x..":"..p.y]=true end
 for _,q in ipairs(args.nodes)do local e=target(q.position,q.name)
  if not e or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.position.x~=q.position.x or e.position.y~=q.position.y then return {ok=false,reason="petroleum_native_asset_identity_changed",position=q.position}end
- if(q.name=="pipe-to-ground"or q.name=="oil-refinery")and e.direction~=q.direction then return {ok=false,reason="petroleum_native_direction_changed"}end
+ if(q.name=="pipe-to-ground"or q.name=="oil-refinery"or q.name=="pump")and e.direction~=q.direction then return {ok=false,reason="petroleum_native_direction_changed"}end
+ if q.name=="pump"and(not e.is_connected_to_electric_network()or e.energy<=0)then return {ok=false,reason="petroleum_pump_unpowered",position=q.position}end
  local fluids=e.get_fluid_contents();local isgas=gas[q.position.x..":"..q.position.y]
  for name in pairs(fluids)do if(q.name=="oil-refinery"and name~="crude-oil"and name~="petroleum-gas")or(q.name~="oil-refinery"and name~=(isgas and"petroleum-gas"or"crude-oil"))then return {ok=false,reason="petroleum_native_fluid_contamination",position=q.position}end end
  if q.name=="oil-refinery"then local recipe=e.get_recipe()
@@ -908,7 +1041,7 @@ for _,q in ipairs(args.nodes)do local e=target(q.position,q.name)
   end
   if not mapping[2]or not mapping[5]or mapping[2]==mapping[5]then return {ok=false,reason="petroleum_required_runtime_storages_missing"}end
   storage_maps[e.unit_number]=mapping;storage_indices[e.unit_number]=indices
- else
+ elseif q.name~="pump"then
   if not e.has_fluid_segment(1)then return {ok=false,reason="petroleum_native_segment_missing"}end
   local b=e.get_fluid_segment_extent_bounding_box(1)
   if b.right_bottom.x-b.left_top.x>limit or b.right_bottom.y-b.left_top.y>limit then return {ok=false,reason="petroleum_native_pipeline_extent_exceeded"}end

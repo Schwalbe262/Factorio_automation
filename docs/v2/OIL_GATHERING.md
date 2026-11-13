@@ -31,10 +31,12 @@ adjacent service-pole sites per well. When no field fits:
 
 A far field's crude connection is planned by `petroleum.plan_crude_connection`:
 its corridor survey runs in row strips of `PIPE_SURVEY_CELLS` up to
-`PIPE_SURVEY_MAX_CELLS` with the shared long-route fallback. Not yet: pump
-segments (a route beyond one native pipeline extent blocks with
-`pipeline_requires_explicit_pump_segment`) and a rail alternative for a very
-far field. Local output
+`PIPE_SURVEY_MAX_CELLS` with the shared long-route fallback. A route beyond one
+native pipeline extent gets inline powered pumps (`petroleum.pump_segments` /
+`plan_pumps`: a pump replaces two surface pipes on a straight run, greedy longest
+segments below the extent, one pole beside each pump joined by `power_grid.plan_connection`;
+no straight spot or no power still blocks `pipeline_requires_explicit_pump_segment`).
+Not yet: a rail alternative for a very far field. Local output
 geometry comes from the installed catalog's four rotated internal fluid-port
 positions plus their outward direction. Each candidate includes one pumpjack,
 three ordinary pipe tiles and one local pole. A bounded ordinary pole bridge
