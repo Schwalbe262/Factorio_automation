@@ -423,6 +423,10 @@ class V2Bootstrap(DeterministicBootstrap):
                     "reason": f"waiting for machine-made {item}",
                     "evidence": {"item": item, "missing": missing, "limit": HANDCRAFT_LIMIT, "machine": machine},
                 }
+        intermediates = getattr(self, "cell_intermediates", None)  # supply_cell.SupplyCell.intermediate_take
+        taken = intermediates(observation, item, missing) if intermediates is not None and missing > 0 else None
+        if taken is not None and self._take_output(observation, item, missing) is None:  # finished stock first
+            return taken  # stocked gears/circuits first: the craft queue only does the final assembly
         result = super().ensure_item(observation, item, count, _stack)
         if (
             machine is not None

@@ -1,76 +1,87 @@
-"""``supply_cell``: a temporary, hand-fed assembler cell for bulk construction items.
+"""``supply_cell``: a temporary, hand-fed assembler cell for bulk construction items and their intermediates.
 
 Why: before the smelting district and the bus exist, every belt and inserter
-was hand crafted (668 belts in the first 50 minutes on seed 283895142) and
-jobs queued behind "crafting queue is busy". A player puts down a small
-chest-fed factory as soon as power and automation exist. This module is that
-cell, modelled on the startup science cell (``board.startup_science_cell``):
-not connected to any belt or the bus, plates go in by hand in batches,
-machines make the product, the product is collected from a chest.
+was hand crafted (668 belts, 112 poles, 64 inserters in the first 50 minutes on
+seed 283895142) and jobs queued behind "crafting queue is busy". A player puts
+down a small chest-fed factory as soon as power and automation exist, and keeps
+gears and circuits in stock so a drill or a lab is only a final assembly. This
+module is that cell, modelled on the startup science cell
+(``board.startup_science_cell``): not connected to any belt or the bus, plates
+go in by hand in batches, machines make the products, products are collected
+from chests.
 
 Lifecycle (rules in code, see ``docs/v2/PLANNERS.md``, "Supply cell"):
 
 1. Propose (``supply_cell_nodes``): after ``power`` succeeded and
    assembling-machine-1 is enabled, once per map, for the products that
-   ``candidates`` qualifies from the next ``DEMAND_HORIZON`` roadmap steps
-   (``progression.bulk_item_demand``): more than ``HANDCRAFT_LIMIT`` needed,
-   the hand time saved pays for hand crafting the cell's own hardware, and
-   machine time stays within ``WAIT_FACTOR`` x hand time.
-2. Build (``SupplyCell.step``): design every product's recipe tree from the
-   catalog (``recipe_tree``, ``layout``), survey a site near the powered
-   grid (ring like ``board.reserve_startup_science``; never on ore, never in a
-   site-plan zone or another block), register board block ``supply_cell``,
-   build it, cap each output chest with a bar, feed a first batch, prove
-   machine output in the chests.
-3. Use: ``ensure_item`` collects from the output chests and stops hand
-   crafting above ``HANDCRAFT_LIMIT`` (``stock`` hook, time rule); shared
-   upkeep and the idle lane top up the input chests, sized from demand
-   (``feed_action``).
+   ``choose_products`` picks from the upcoming demand
+   (``supply_demand.item_demand``: the hardware of the next
+   ``DEMAND_HORIZON`` roadmap steps, measured from saved plans where a job
+   already planned, and every intermediate inside it). Ingredients are priced
+   first; a product whose ingredients the cell already stocks is priced with
+   only its own machine (shared machines) and its residual hand time.
+2. Build (``SupplyCell.step``): design the cell (``layout``), survey a site
+   near the powered grid (never on ore, never in a site-plan zone or another
+   block), register board block ``supply_cell``, build it, cap each product
+   chest with a bar, feed a first batch, prove machine output in the chests.
+3. Use: ``ensure_item`` collects products from their chests and stops hand
+   crafting above ``HANDCRAFT_LIMIT`` (``stock`` hook, time rule); before a
+   hand craft it collects the stocked direct ingredients (``intermediate_take``)
+   so the craft queue only does the final assembly. Shared upkeep and the idle
+   lane top up the input chests, sized from the whole upcoming demand
+   (pre-production), but only from the steps in flight for a plate that a
+   job is waiting for (``contested_plates``).
 4. Retire (``supply_cell_nodes`` with ``{"retire": true}``): when every
    product's remaining demand is at most ``HANDCRAFT_LIMIT`` or a ``produce``
-   row for it succeeded. Feeding stops at once; the job waits while any job
-   still waits for its products, then mines the machines, inserters and
-   chests (paid ``mine``, contents return to the inventory), removes the board
-   block and records ``phase: retired`` (never proposed again). Poles stay:
-   other blocks' pole chains may hang on them.
+   row for it succeeded, or when the build job stayed blocked for
+   ``ABANDON_TICKS``. Feeding stops at once; the job waits while any job still
+   waits for its products and (at most ``DRAIN_TICKS``) while input chests
+   still hold plates, then mines the machines, inserters and chests (paid
+   ``mine``, contents return to the inventory), removes the board block and
+   records ``phase: retired`` (never proposed again). Poles stay: other blocks'
+   pole chains may hang on them.
 
-Cell geometry for ``["transport-belt", "inserter"]`` (``layout`` on the real
-catalog; ``>`` an inserter moving items east, ``^`` north; P pole)::
+Cell geometry for ``[gear, circuit, belt, inserter]`` (``render(layout(...))``
+on the real catalog). Every product has one product chest (``H``, bar 2
+stacks); a machine whose ingredient is another product takes it from that
+chest through its own inserter, so the one gear machine feeds the gear chest,
+the belt machine and the inserter machine (arrows: where an inserter drops;
+``c`` hand-fed input chest; letters: machines; ``P`` poles)::
 
-    ...GGG...BBB...     a iron (gear)       G gear     b iron + gears     B belt
-    .a>GGG>b>BBB>O     O belt chest, bar 2 stacks; P poles
-    ...GGG...BBB...
-    P......P..P....
-    ...GGG...III...     c iron (gear)       d iron + gears + circuits   I inserter
-    .c>GGG>d>III>Q     Q inserter chest, bar 2 stacks
-    ...GGG.^.III...
-    ......EEE......     E circuit machine
-    .....PEEE......
-    ......EEE......
-    .......^.......
-    .......e.......     e iron + cables
-    .......^.......
-    ......KKK......     K cable machine
-    .....PKKK......
-    ......KKK......
-    .......^.......
-    .......f.......     f copper
+    .............P..P...
+    .........DDD...EEE..     D circuit machine, E cable machine (chained off D's input chest)
+    .......H<DDD<c<EEE<c     H circuit chest
+    .......vPDDD...EEE..
+    ......AAA...........     A inserter machine: circuits from the north chest,
+    ....c>AAA>H.........       gears from the south chest, iron from c, product H east
+    P.....AAA...........
+    ...CCCP^.BBB........     C gear machine, B belt machine
+    .c>CCC>H>BBB>H......     H in the middle: the gear chest (C -> H -> A and B)
+    ...CCC...BBB........
+    ..........^P........
+    ..........c.........
 
-Each machine sits between the chest it feeds and its own input chest, one
-inserter on each side; a machine's first intermediate ingredient continues
-the chain away from the product chest, a second and third branch off to the
-sides of its input chest (``_place``). Raw
-ingredients (``progression.RAW_ITEMS``) are hand-fed ports on that input
-chest. Inserters only take what a recipe needs, so a chest may hold plates
-and an intermediate at once (the startup science hub trick).
+(printed again by ``tests/test_v2_supply_cell.py`` ``SharedLayoutTests``).
+
+Placement (``_Grid``): products with the most stocked ingredients first; a
+machine stands at inserter distance (3 tiles) from every product chest it
+touches, its own chest, its stocked ingredients' chests and one input chest
+take one side each (4 sides at most); a machine that touches no placed chest
+goes below the cell. Non-stocked intermediates (cable inside a circuit when
+cable is not a product) are chained off the input chest as before
+(``_place``). Raw ingredients (``progression.RAW_ITEMS``) are hand-fed ports on
+input chests. Inserters only take what a recipe needs, so a chest may hold
+plates and an intermediate at once.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
+from itertools import permutations
 import json
 import math
 from pathlib import Path
+import re
 
 from .blocks.params import pole_radius, pole_reach
 from .blocks.stock_tail import STOCK_STACKS
@@ -90,14 +101,19 @@ MACHINE = "assembling-machine-1"
 INSERTER = "inserter"
 POLE = "small-electric-pole"
 CHESTS = ("wooden-chest", "iron-chest")  # cheapest enabled first
-DEMAND_HORIZON = 8  # roadmap steps whose ``builds`` count as upcoming demand
+DEMAND_HORIZON = 8  # roadmap steps whose builds count as upcoming demand
+MAX_PRODUCTS = 6  # product chests one cell keeps (validate_parameters)
 # Chest <-> machine basic inserter, hand size 1: about 0.83 swings/s.
 CHEST_INSERTER_PER_MINUTE = 50.0
 HAND_CRAFT_SPEED = 1.0  # the character crafts at speed 1
 # A waiting job leaves the character to the other active jobs (jobs.MAX_ACTIVE_JOBS = 4).
 WAIT_FACTOR = 3.0
+# Machine-made stock counts only as far as the cell makes it within this window: the steps of
+# DEMAND_HORIZON took about 50 minutes on seed 283895142, later stock would come too late.
+PRODUCTION_WINDOW_SECONDS = 1800.0
 MAX_CHILDREN = 3  # intermediate ingredients one machine's input chest can take (west, north, south)
 MAX_DEPTH = 4
+MACHINE_SIDES = 4  # chests one machine touches: its product, stocked ingredients, one input chest
 FEED_CAP = 100  # items of one kind per input chest (one plate stack)
 FEED_BATCH = 3 * COLLECT_BATCH  # one feed trip fills a third of an input chest
 FEED_RESERVE = 50  # plates a job's own upkeep feed leaves in the character's hands
@@ -107,10 +123,16 @@ SITE_PITCH = 8  # candidate origins on an 8-tile grid around the powered pole
 SITE_REACH = 6  # ... up to 48 tiles each way, nearest first
 MAX_SITE_CANDIDATES = 40
 PROGRESS_WRITE_TICKS = 600  # at most one progress write per 10 game seconds
+DRAIN_TICKS = 3600  # retiring waits at most one game minute for machines to use the plates inside
+ABANDON_TICKS = 36000  # a build blocked this long (10 game minutes, auto-retry had its chances) is retired
+BELOW_TRIES = 16  # rows tried below the cell for a machine that touches no placed chest
 BUILD_PRIORITY = -52  # just below produce rows (-51)
 RETIRE_PRIORITY = -1000  # demolition is never on the critical path
 NODE_ID = "auto_supply_cell"
 RETIRE_NODE_ID = "auto_supply_cell_retire"
+ACTIVE = ("running", "waiting", "pending")
+# Side preference of a machine's chests: product east, input west, stocked ingredients north, then south.
+SIDES = ((1, 0), (-1, 0), (0, -1), (0, 1))
 _GEOMETRY = FactoryBuilder.__new__(FactoryBuilder)
 
 
@@ -127,14 +149,15 @@ def _out_amount(recipe, item):
 
 
 # ----- recipe tree ---------------------------------------------------------
-def recipe_tree(catalog, item, units=1.0, *, enabled=None, depth=0):
-    """``{item, recipe, energy, crafts, raw, children}`` per product unit, from catalog recipes only.
+def recipe_tree(catalog, item, units=1.0, *, enabled=None, depth=0, stocked=frozenset()):
+    """``{item, recipe, energy, crafts, raw, hubs, children}`` per product unit, from catalog recipes only.
 
     ``crafts`` is crafts of the recipe per product unit, ``raw`` the hand-fed
-    items this machine's input chest needs per product unit. Raises
-    ValueError when the tree does not fit the cell (fluid, no recipe, a
-    category assembling-machine-1 cannot craft, too deep or too wide, locked
-    recipe when ``enabled`` is given).
+    items this machine's input chest needs per product unit, ``hubs`` (root
+    only) the units of ``stocked`` ingredients taken from their own product
+    chest instead of a sub-tree. Raises ValueError when the tree does not fit
+    the cell (fluid, no recipe, a category assembling-machine-1 cannot craft,
+    too deep or too wide, locked recipe when ``enabled`` is given).
     """
     if depth > MAX_DEPTH:
         raise ValueError(f"supply cell recipe tree too deep at {item}")
@@ -147,17 +170,21 @@ def recipe_tree(catalog, item, units=1.0, *, enabled=None, depth=0):
     if enabled is not None and recipe["name"] not in enabled:
         raise ValueError(f"recipe {recipe['name']} is locked")
     crafts = units / _out_amount(recipe, item)
-    raw, children = {}, []
+    raw, hubs, children = {}, {}, []
     for row in recipe.get("ingredients") or ():
         if row.get("type", "item") != "item":
             raise ValueError(f"{recipe['name']} needs a fluid")
         need = row["amount"] * crafts
         if row["name"] in _raw_items():
             raw[row["name"]] = raw.get(row["name"], 0.0) + need
+        elif depth == 0 and row["name"] in stocked and row["name"] != item:
+            hubs[row["name"]] = hubs.get(row["name"], 0.0) + need
         else:
             children.append(recipe_tree(catalog, row["name"], need, enabled=enabled, depth=depth + 1))
     if len(children) > MAX_CHILDREN:
         raise ValueError(f"{recipe['name']} has more than {MAX_CHILDREN} intermediate ingredients")
+    if 1 + len(hubs) + bool(raw or children) > MACHINE_SIDES:
+        raise ValueError(f"{recipe['name']} touches more than {MACHINE_SIDES} chests")
     return {
         "item": item,
         "recipe": recipe["name"],
@@ -165,6 +192,7 @@ def recipe_tree(catalog, item, units=1.0, *, enabled=None, depth=0):
         "units": units,
         "crafts": crafts,
         "raw": raw,
+        "hubs": hubs,
         "children": children,
     }
 
@@ -175,8 +203,13 @@ def _nodes(tree):
         yield from _nodes(child)
 
 
-def hand_seconds(catalog, item, count=1.0):
-    """Character crafting time for ``count`` items, intermediates included (catalog energy)."""
+def _fed(node):
+    """A node has a hand-fed input chest when it needs raw items or builds sub-trees."""
+    return bool(node["raw"] or node["children"])
+
+
+def hand_seconds(catalog, item, count=1.0, stocked=frozenset()):
+    """Character crafting time for ``count`` items; intermediates are included unless ``stocked`` (taken from the cell)."""
     if item in _raw_items():
         return 0.0
     recipe = catalog.recipe_for_product(item)
@@ -185,68 +218,121 @@ def hand_seconds(catalog, item, count=1.0):
     crafts = count / _out_amount(recipe, item)
     total = crafts * float(recipe.get("energy") or 0.5) / HAND_CRAFT_SPEED
     for row in recipe.get("ingredients") or ():
-        if row.get("type", "item") == "item":
-            total += hand_seconds(catalog, row["name"], row["amount"] * crafts)
+        if row.get("type", "item") == "item" and row["name"] not in stocked:
+            total += hand_seconds(catalog, row["name"], row["amount"] * crafts, stocked)
     return total
 
 
-def units_per_minute(catalog, tree):
-    """Product units/min: the slowest machine or chest inserter of the tree."""
+def recipe_depth(catalog, item, depth=0):
+    """0 for a recipe of raw items only, else 1 + the deepest ingredient (ingredients are priced first)."""
+    recipe = catalog.recipe_for_product(item) if item not in _raw_items() else None
+    if not recipe or depth > MAX_DEPTH * 4:
+        return 0
+    deeper = [
+        1 + recipe_depth(catalog, row["name"], depth + 1)
+        for row in recipe.get("ingredients") or ()
+        if row.get("type", "item") == "item" and row["name"] not in _raw_items()
+    ]
+    return max(deeper, default=0)
+
+
+def units_per_minute(catalog, tree, hub_rates=None):
+    """Product units/min: the slowest machine, chest inserter or stocked-ingredient supply of the tree."""
     speed = float((catalog.entities.get(MACHINE) or {}).get("crafting_speed") or 0.5)
     rates = []
     for node in _nodes(tree):
         rates.append(60.0 * speed / node["energy"] / node["crafts"])
         moved_in = sum(node["raw"].values()) + sum(child["units"] for child in node["children"])
-        rates.append(CHEST_INSERTER_PER_MINUTE / moved_in)
+        if moved_in:
+            rates.append(CHEST_INSERTER_PER_MINUTE / moved_in)
         rates.append(CHEST_INSERTER_PER_MINUTE / node["units"])
+        for hub, units in node.get("hubs", {}).items():
+            rates.append(CHEST_INSERTER_PER_MINUTE / units)
+            if hub_rates and hub in hub_rates:
+                rates.append(hub_rates[hub] / units)
     return min(rates)
 
 
 def hardware(tree):
-    """Items the tree places: one machine and two inserters per node, one input chest per node, one output chest."""
-    machines = sum(1 for _ in _nodes(tree))
-    return {MACHINE: machines, INSERTER: 2 * machines, "chest": machines + 1}
+    """Items the tree places: one machine per node, an inserter per chest it touches, its input chests, one product chest."""
+    nodes = list(_nodes(tree))
+    return {
+        MACHINE: len(nodes),
+        INSERTER: sum(1 + _fed(n) + len(n.get("hubs", {})) for n in nodes),
+        "chest": sum(_fed(n) for n in nodes) + 1,
+    }
 
 
-def evaluate(catalog, item, count, *, enabled=None, chest="wooden-chest"):
-    """Whether a cell for ``count`` items pays: the rule ``candidates`` applies per item."""
+def evaluate(catalog, item, count, *, enabled=None, chest="wooden-chest", stocked=frozenset(), hub_rates=None):
+    """Whether making ``count`` items in the cell pays, with ``stocked`` products already in the cell."""
     row = {"item": item, "count": count, "qualifies": False}
+    stocked = frozenset(stocked) - {item}
     try:
-        tree = recipe_tree(catalog, item, enabled=enabled)
+        tree = recipe_tree(catalog, item, enabled=enabled, stocked=stocked)
     except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
         return dict(row, reason=str(exc)[:120])
-    hand = hand_seconds(catalog, item, count)
-    rate = units_per_minute(catalog, tree)
-    machine = 60.0 * count / rate
-    parts = hardware(tree)
-    build = sum(hand_seconds(catalog, name if name != "chest" else chest, n) for name, n in parts.items())
+    hand = hand_seconds(catalog, item, count, stocked)
+    rate = units_per_minute(catalog, tree, hub_rates)
+    made = min(count, rate * PRODUCTION_WINDOW_SECONDS / 60.0)
+    saved = hand_seconds(catalog, item, made, stocked)
+    # The cell is hand crafted before it holds any stock: its hardware is priced at full hand time.
+    build = sum(hand_seconds(catalog, name if name != "chest" else chest, n) for name, n in hardware(tree).items())
     row.update(
         hand_seconds=round(hand, 1),
-        machine_seconds=round(machine, 1),
+        machine_seconds=round(60.0 * count / rate, 1),
+        saved_hand_seconds=round(saved, 1),
         build_hand_seconds=round(build, 1),
         units_per_minute=round(rate, 2),
+        stocked_inputs=sorted(tree["hubs"]),
     )
     if count <= HANDCRAFT_LIMIT:
         return dict(row, reason="demand within the hand-craft limit")
     if hand < build:
         return dict(row, reason="hand crafting the demand is cheaper than hand crafting the cell")
-    if machine > WAIT_FACTOR * hand:
-        return dict(row, reason="machine time exceeds the wait factor over hand time")
+    if saved < build:
+        return dict(row, reason="the cell makes too little within the production window to pay for itself")
     return dict(row, qualifies=True, reason="cell pays for itself")
 
 
-def candidates(catalog, jobs, observation):
-    """Receipt field ``supply_cell_candidates``: per-item demand rows and the qualifying products."""
-    from .progression import bulk_item_demand
+def choose_products(catalog, demand, *, enabled=None, chest=CHESTS[0]):
+    """``(products, rows)``: greedy over ``demand`` (``{item: count}``), largest hand time first.
 
-    demand = bulk_item_demand(catalog, jobs, observation, horizon=DEMAND_HORIZON)
+    Each item is priced with the products chosen before it stocked
+    (``evaluate``: a machine that takes a stocked ingredient saves only the
+    residual hand time) and kept only when the cell layout still fits.
+    """
+    order = sorted(demand, key=lambda i: (-hand_seconds(catalog, i, demand[i]), i))
+    chosen, rates, rows = [], {}, {}
+    for item in order:
+        row = evaluate(catalog, item, demand[item], enabled=enabled, chest=chest, stocked=chosen, hub_rates=rates)
+        if row["qualifies"] and len(chosen) >= MAX_PRODUCTS:
+            row = dict(row, qualifies=False, reason=f"the cell already holds {MAX_PRODUCTS} products")
+        if row["qualifies"]:
+            try:
+                layout(catalog, chosen + [item], chest=chest, enabled=enabled)
+            except ValueError as exc:
+                row = dict(row, qualifies=False, reason=f"no room in the cell layout: {exc}"[:120])
+        if row["qualifies"]:
+            chosen.append(item)
+            rates[item] = row["units_per_minute"]
+        rows[item] = row
+    return chosen, rows
+
+
+def candidates(catalog, jobs, observation, *, root=None):
+    """Receipt field ``supply_cell_candidates``: per-item demand rows and the chosen products (in choice order)."""
+    from .supply_demand import item_demand
+
+    rows = item_demand(catalog, jobs, observation, horizon=DEMAND_HORIZON, root=root)
+    demand = {item: row["count"] for item, row in rows.items() if row["direct_use"]}
     enabled = _enabled(observation)
     chest = choose_chest(enabled) or CHESTS[0]
-    rows = {item: evaluate(catalog, item, row["count"], enabled=enabled, chest=chest) for item, row in demand.items()}
+    products, evaluated = choose_products(catalog, demand, enabled=enabled, chest=chest)
     return {
-        "demand": {item: row["count"] for item, row in demand.items()},
-        "products": sorted(item for item, row in rows.items() if row["qualifies"]),
-        "rows": rows,
+        "demand": demand,
+        "current": {item: row["current"] for item, row in rows.items() if row["direct_use"]},
+        "products": products,
+        "rows": evaluated,
     }
 
 
@@ -274,8 +360,12 @@ def _add(p, v, k=1):
     return (p[0] + k * v[0], p[1] + k * v[1])
 
 
+def _point(p):
+    return {"x": p[0], "y": p[1]}
+
+
 def _place(tree, chest_at, d, chest, rows):
-    """Machine of ``tree`` west of ``chest_at`` (direction ``d``), its input chest, then its children."""
+    """Machine of ``tree`` at ``chest_at`` + 3 ``d`` feeding that chest, its input chest beyond, then its children."""
     facing = _direction(d)
     machine_at, input_at = _add(chest_at, d, 3), _add(chest_at, d, 6)
     rows["entities"] += [
@@ -285,12 +375,7 @@ def _place(tree, chest_at, d, chest, rows):
         entity(chest, *input_at),
     ]
     rows["nodes"].append(
-        {
-            "item": tree["item"],
-            "machine": {"x": machine_at[0], "y": machine_at[1]},
-            "chest": {"x": input_at[0], "y": input_at[1]},
-            "raw": dict(tree["raw"]),
-        }
+        {"item": tree["item"], "machine": _point(machine_at), "chest": _point(input_at), "raw": dict(tree["raw"])}
     )
     side = (d[1], -d[0])
     for child, way in zip(tree["children"], (d, side, (-side[0], -side[1]))):
@@ -301,13 +386,91 @@ def _tiles(entities):
     return set().union(*[_GEOMETRY._occupied_by_plan([e]) for e in entities]) if entities else set()
 
 
-def _tree_rows(tree, origin, chest):
-    rows = {"entities": [entity(chest, *origin)], "nodes": []}
-    _place(tree, origin, (-1, 0), chest, rows)
-    tiles = [_GEOMETRY._occupied_by_plan([e]) for e in rows["entities"]]
-    if sum(map(len, tiles)) != len(set().union(*tiles)):
-        raise ValueError(f"supply cell tree of {tree['item']} overlaps itself")
-    return rows
+class _Grid:
+    """The cell under construction: entities, taken tiles, each product's chest and its machines."""
+
+    def __init__(self, chest, origin):
+        self.chest, self.origin = chest, origin
+        self.entities, self.taken = [], set()
+        self.chests = {}  # product -> its product chest position (a hub for machines that use it)
+        self.nodes = {}  # product -> node rows of its machines (root first)
+
+    def place(self, tree):
+        for center in self._centers(tree):
+            for sides in self._side_choices(tree, center):
+                placed = self._try(tree, center, sides)
+                if placed is not None:
+                    return
+        raise ValueError(f"supply cell has no free place for {tree['item']}")
+
+    def _links(self, tree):
+        """The chests the root machine touches besides its input chest: its product, then stocked ingredients."""
+        return [tree["item"]] + sorted(tree["hubs"])
+
+    def _centers(self, tree):
+        fixed = [self.chests[i] for i in self._links(tree) if i in self.chests]
+        if fixed:
+            around = [_add(fixed[0], s, 3) for s in SIDES]
+            return [c for c in around if all(any(_add(c, s, 3) == f for s in SIDES) for f in fixed)]
+        if not self.entities:
+            return [_add(self.origin, (-3, 0))]  # product chest at the origin, machine west of it
+        bottom = max(t[1] for t in self.taken)
+        return [(self.origin[0] - 3, bottom + 3 + k) for k in range(BELOW_TRIES)]
+
+    def _side_choices(self, tree, center):
+        """``{role: side}`` per arrangement; a role whose chest exists already must face it."""
+        roles = [("product", tree["item"])] + ([("input", None)] if _fed(tree) else [])
+        roles += [("stocked", item) for item in sorted(tree["hubs"])]
+        forced = {}
+        for role in roles:
+            if role[1] in self.chests and role[0] != "input":
+                side = next((s for s in SIDES if _add(center, s, 3) == self.chests[role[1]]), None)
+                if side is None:
+                    return
+                forced[role] = side
+        free_roles = [r for r in roles if r not in forced]
+        free_sides = [s for s in SIDES if s not in forced.values()]
+        for chosen in permutations(free_sides, len(free_roles)):
+            yield {**forced, **dict(zip(free_roles, chosen))}
+
+    def _try(self, tree, center, sides):
+        new = [entity(MACHINE, *center, recipe=tree["recipe"])]
+        chests, input_at = {}, None
+        for (kind, item), side in sides.items():
+            pick = (-side[0], -side[1]) if kind == "product" else side  # the product inserter picks from the machine
+            new.append(entity(INSERTER, *_add(center, side, 2), _direction(pick)))
+            at = _add(center, side, 3)
+            if kind == "input":
+                input_at = at
+                new.append(entity(self.chest, *at))
+            elif item not in self.chests:
+                chests[item] = at
+                new.append(entity(self.chest, *at))
+        nodes = [
+            {
+                "item": tree["item"],
+                "machine": _point(center),
+                "chest": _point(input_at) if input_at else None,
+                "raw": dict(tree["raw"]),
+            }
+        ]
+        if input_at is not None:
+            rows = {"entities": [], "nodes": []}
+            way = sides[("input", None)]
+            side = (way[1], -way[0])
+            for child, d in zip(tree["children"], (way, side, (-side[0], -side[1]))):
+                _place(child, input_at, d, self.chest, rows)
+            new += rows["entities"]
+            nodes += rows["nodes"]
+        tiles = [_GEOMETRY._occupied_by_plan([e]) for e in new]
+        union = set().union(*tiles)
+        if sum(map(len, tiles)) != len(union) or union & self.taken:
+            return None
+        self.entities += new
+        self.taken |= union
+        self.chests.update(chests)
+        self.nodes[tree["item"]] = nodes
+        return nodes
 
 
 def _covers(catalog, pole, e):
@@ -348,38 +511,78 @@ def place_poles(catalog, entities):
     return [entity(POLE, x, y) for x, y in poles]
 
 
+def _rates(catalog, trees):
+    """Units/min per product; a product's stocked ingredients limit it by their own rate."""
+    rates = {}
+
+    def rate(item):
+        if item not in rates:
+            hubs = {h: rate(h) for h in trees[item]["hubs"]}
+            rates[item] = units_per_minute(catalog, trees[item], hubs)
+        return rates[item]
+
+    for item in trees:
+        rate(item)
+    return rates
+
+
 def layout(catalog, products, *, chest, enabled=None, origin=(0.5, 0.5)):
-    """The cell plan for ``products`` around ``origin`` (first product chest): entities, ports, nodes, outputs."""
-    entities, ports, products_rows = [], [], []
-    top = None
+    """The cell plan for ``products``: entities, ports, per-product rows (product chest, machines, rates)."""
+    stocked = frozenset(products)
+    trees = {p: recipe_tree(catalog, p, enabled=enabled, stocked=stocked - {p}) for p in products}
+    grid = _Grid(chest, origin)
+    for item in sorted(products, key=lambda p: (-len(trees[p]["hubs"]), products.index(p))):
+        grid.place(trees[item])
+    rates = _rates(catalog, trees)
+    ports, rows = [], []
     for item in products:
-        tree = recipe_tree(catalog, item, enabled=enabled)
-        probe = _tree_rows(tree, (0.5, 0.5), chest)
-        ys = [t[1] for t in _tiles(probe["entities"])]
-        offset = 0 if top is None else top - min(ys) + 2  # one free row between trees
-        at = (origin[0], origin[1] + offset)
-        rows = _tree_rows(tree, at, chest)
-        top = max(t[1] for t in _tiles(rows["entities"]))
-        entities += rows["entities"]
-        output = {"x": at[0], "y": at[1]}
+        output = _point(grid.chests[item])
         ports.append({"item": item, "kind": "item", "direction": "output", "position": dict(output)})
-        for node in rows["nodes"]:
+        for node in grid.nodes[item]:
             for raw in node["raw"]:
                 ports.append({"item": raw, "kind": "item", "direction": "input", "position": dict(node["chest"])})
-        products_rows.append(
+        rows.append(
             {
                 "item": item,
                 "output": output,
-                "nodes": rows["nodes"],
-                "units_per_minute": round(units_per_minute(catalog, tree), 3),
-                "hand_seconds_per_unit": round(hand_seconds(catalog, item), 4),
+                "nodes": grid.nodes[item],
+                "stocked_inputs": sorted(trees[item]["hubs"]),
+                "units_per_minute": round(rates[item], 3),
+                "hand_seconds_per_unit": round(hand_seconds(catalog, item, 1.0, stocked - {item}), 4),
             }
         )
-    tiles = _tiles(entities)
-    if len(tiles) != sum(len(_GEOMETRY._occupied_by_plan([e])) for e in entities):
-        raise ValueError("supply cell trees overlap")
-    entities += place_poles(catalog, entities)
-    return {"entities": entities, "ports": ports, "products": products_rows, "chest": chest}
+    entities = grid.entities + place_poles(catalog, grid.entities)
+    return {"entities": entities, "ports": ports, "products": rows, "chest": chest}
+
+
+ARROWS = {(1, 0): ">", (-1, 0): "<", (0, -1): "^", (0, 1): "v"}
+
+
+def render(design):
+    """ASCII picture of a design: machine letters (legend), ``H`` product chest, ``c`` input chest, drop arrows, ``P``."""
+    outputs = {(r["output"]["x"], r["output"]["y"]) for r in design["products"]}
+    letters, cells = {}, {}
+    for e in design["entities"]:
+        if e["name"] == MACHINE:
+            mark = letters.setdefault(e["recipe"], chr(ord("A") + len(letters)))
+        elif e["name"] == INSERTER:
+            vx, vy = VECTORS[e["direction"]]
+            mark = ARROWS[(-vx, -vy)]
+        elif e["name"] == POLE:
+            mark = "P"
+        else:
+            mark = "H" if _xy(e) in outputs else "c"
+        for tile in _GEOMETRY._occupied_by_plan([e]):
+            cells[tile] = mark
+    xs = [t[0] for t in cells]
+    ys = [t[1] for t in cells]
+    lines = []
+    for y in range(math.floor(min(ys)), math.floor(max(ys)) + 1):
+        lines.append(
+            "".join(cells.get((x + 0.5, y + 0.5), ".") for x in range(math.floor(min(xs)), math.floor(max(xs)) + 1))
+        )
+    legend = ", ".join(f"{mark} {recipe}" for recipe, mark in letters.items())
+    return "\n".join(lines + [legend])
 
 
 def _area(entities, margin=1):
@@ -393,8 +596,9 @@ def _shift(design, dx, dy):
     moved = deepcopy(design)
 
     def go(p):
-        p["x"] += dx
-        p["y"] += dy
+        if p is not None:
+            p["x"] += dx
+            p["y"] += dy
 
     for e in moved["entities"]:
         go(e["position"])
@@ -471,11 +675,32 @@ class SupplyCell:
             return []
         return [job for job in ledger.get("jobs", {}).values() if job.get("world_id") == obs.get("world_id")]
 
-    def demand(self, obs):
-        from .progression import bulk_item_demand
+    def _demand_rows(self, obs):
+        from .supply_demand import item_demand
 
-        rows = bulk_item_demand(self.catalog, self._jobs(obs), obs, horizon=DEMAND_HORIZON)
-        return {item: row["count"] for item, row in rows.items()}
+        return item_demand(self.catalog, self._jobs(obs), obs, horizon=DEMAND_HORIZON, root=self.root)
+
+    def demand(self, obs):
+        """Units of each item in the hardware of the next DEMAND_HORIZON steps (pre-production target)."""
+        return {item: row["count"] for item, row in self._demand_rows(obs).items()}
+
+    def current_demand(self, obs):
+        """Units of each item in the hardware of the steps whose jobs are in flight."""
+        return {item: row["current"] for item, row in self._demand_rows(obs).items()}
+
+    def contested_plates(self, obs):
+        """Raw items another active job is waiting for (its reason or evidence names the item)."""
+        items = set()
+        for job in self._jobs(obs):
+            if job.get("capability") == CAPABILITY or job.get("status") not in ACTIVE:
+                continue
+            reason = str(job.get("reason") or "")
+            evidence = job.get("evidence") if isinstance(job.get("evidence"), dict) else {}
+            for raw in _raw_items():
+                named = re.search(rf"(?<![\w-]){re.escape(raw)}(?![\w-])", reason)
+                if evidence.get("item") == raw or (reason.startswith("waiting") and named):
+                    items.add(raw)
+        return items
 
     # site
     def prepare(self, obs, products):
@@ -727,14 +952,17 @@ class SupplyCell:
                 items.append(row)
         return items
 
-    def feed_targets(self, obs, state, *, minimum=0, demand=None):
+    def feed_targets(self, obs, state, *, minimum=0, demand=None, contested=frozenset()):
         """``[(deficit, item, chest position)]`` from the demand of each fed product, largest first.
 
-        need = max(minimum, demand - output stock - carried) product units;
-        target = min(FEED_CAP, ceil(need x raw per unit)) per input chest and item.
+        need = max(minimum, demand - product stock - carried) product units,
+        demand = the whole upcoming demand (pre-production), or only the steps
+        in flight for a ``contested`` plate; target = min(FEED_CAP, ceil(need x
+        raw per unit)) per input chest and item.
         """
         only = None if demand is None else set(demand)  # an explicit demand feeds only its products
-        demand = self.demand(obs) if demand is None else demand
+        upcoming = self.demand(obs) if demand is None else demand
+        current = self.current_demand(obs) if demand is None and contested else upcoming
         chest = self._chest_name(state)
         carried = obs.get("inventory") or {}
         rows = []
@@ -742,11 +970,14 @@ class SupplyCell:
             if only is not None and row["item"] not in only:
                 continue
             box = self._find(obs, chest, row["output"])
-            stock = int(((box or {}).get("inventory") or {}).get(row["item"], 0))
-            need = max(minimum, demand.get(row["item"], 0) - stock - carried.get(row["item"], 0))
+            stock = int(((box or {}).get("inventory") or {}).get(row["item"], 0)) + int(carried.get(row["item"], 0))
             for node in row["nodes"]:
+                if not node.get("chest"):
+                    continue
                 inside = (self._find(obs, chest, node["chest"]) or {}).get("inventory") or {}
                 for item, per_unit in node["raw"].items():
+                    wanted = (current if item in contested else upcoming).get(row["item"], 0)
+                    need = max(minimum, wanted - stock)
                     target = min(FEED_CAP, math.ceil(need * per_unit - 1e-9))
                     deficit = target - int(inside.get(item, 0))
                     if deficit > 0 and deficit >= min(FEED_BATCH, target):
@@ -759,7 +990,10 @@ class SupplyCell:
         if not state or state.get("phase") in ("retiring", "retired"):
             return None
         chest = self._chest_name(state)
-        for deficit, item, position in self.feed_targets(obs, state, minimum=minimum, demand=demand):
+        contested = self.contested_plates(obs) if demand is None else set()
+        for deficit, item, position in self.feed_targets(
+            obs, state, minimum=minimum, demand=demand, contested=contested
+        ):
             held = int((obs.get("inventory") or {}).get(item, 0)) - reserve
             if held >= min(deficit, FEED_BATCH):
                 return {
@@ -773,7 +1007,7 @@ class SupplyCell:
                 }
             if acquire:
                 return self.bootstrap.ensure_item(obs, item, reserve + deficit)
-            if collect:
+            if collect and item not in contested:  # never collect plates a waiting job needs
                 taken = self.bootstrap._take_output(obs, item, deficit)
                 if taken is not None:
                     return taken
@@ -831,6 +1065,7 @@ class SupplyCell:
         fed = all(
             int(((self._find(obs, chest, node["chest"]) or {}).get("inventory") or {}).get(raw, 0)) >= math.ceil(per)
             for node in row["nodes"]
+            if node.get("chest")
             for raw, per in node["raw"].items()
         )
         if not fed and idle > PROGRESS_WRITE_TICKS:
@@ -840,6 +1075,36 @@ class SupplyCell:
         if idle > STALL_TICKS:
             return dict(result, status="stalled", ticks_without_progress=idle)
         return dict(result, status="producing", ticks_without_progress=idle)
+
+    def intermediate_take(self, obs, item, missing):
+        """Before hand crafting ``missing`` ``item``: a batched collection of a direct ingredient the cell stocks, or None.
+
+        Only the ingredients the craft still lacks are taken (recipe amount x
+        runs - carried), through ``_take_output`` (batch rule, owned input
+        chests excluded), so the craft queue only does the final assembly.
+        """
+        state = self._live(obs)
+        if state.get("phase") not in ("verified", "retiring") or missing < 1:
+            return None
+        recipe = self.catalog.recipe_for_product(item)
+        if not recipe:
+            return None
+        runs = math.ceil(missing / _out_amount(recipe, item))
+        stocked = {row["item"]: row for row in state["products"]}
+        carried = obs.get("inventory") or {}
+        chest = self._chest_name(state)
+        for row in recipe.get("ingredients") or ():
+            name = row.get("name")
+            if row.get("type", "item") != "item" or name == item or name not in stocked:
+                continue
+            lacking = math.ceil(row["amount"] * runs) - int(carried.get(name, 0))
+            box = self._find(obs, chest, stocked[name]["output"])
+            if lacking < 1 or int(((box or {}).get("inventory") or {}).get(name, 0)) < 1:
+                continue
+            taken = self.bootstrap._take_output(obs, name, lacking)
+            if taken is not None:
+                return taken
+        return None
 
     def _idle_ticks(self, obs, state, finished):
         tick = int(obs.get("tick") or 0)
@@ -863,6 +1128,7 @@ class SupplyCell:
         if state.get("phase") != "retired":
             if state.get("phase") != "retiring":
                 state["phase"] = "retiring"  # feeding stops now
+                state["retiring_tick"] = obs.get("tick")
                 self._save(state)
             products = {r["item"] for r in state["products"]}
             dependent = [
@@ -877,6 +1143,14 @@ class SupplyCell:
                     "status": "waiting",
                     "reason": "supply_cell_retire_waits_for_dependent_jobs",
                     "evidence": {"jobs": dependent},
+                }
+            draining = self._plates_inside(obs, state)
+            waited = int(obs.get("tick") or 0) - int(state.get("retiring_tick") or obs.get("tick") or 0)
+            if draining and waited < DRAIN_TICKS:
+                return {
+                    "status": "waiting",
+                    "reason": "supply_cell_retire_drains_input_chests",
+                    "evidence": {"plates": draining, "ticks_left": DRAIN_TICKS - waited},
                 }
             for e in self._demolition_order(state):
                 live = self._find(obs, e["name"], e["position"])
@@ -907,6 +1181,22 @@ class SupplyCell:
             "reason": "temporary supply cell demolished and its block released",
             "evidence": evidence,
         }
+
+    def _plates_inside(self, obs, state):
+        """Raw items still in the input chests of machines that may use them (verified cells only)."""
+        if not state.get("bars"):
+            return {}
+        chest = self._chest_name(state)
+        left = {}
+        for row in state["products"]:
+            for node in row["nodes"]:
+                if not node.get("chest"):
+                    continue
+                inside = (self._find(obs, chest, node["chest"]) or {}).get("inventory") or {}
+                for raw in node["raw"]:
+                    if int(inside.get(raw, 0)) > 0:
+                        left[raw] = left.get(raw, 0) + int(inside[raw])
+        return left
 
     @staticmethod
     def _demolition_order(state):
@@ -953,7 +1243,7 @@ def validate_parameters(parameters):
     products = parameters["products"]
     if (
         not isinstance(products, list)
-        or not 1 <= len(products) <= 6
+        or not 1 <= len(products) <= MAX_PRODUCTS
         or len(set(products)) != len(products)
         or not all(isinstance(p, str) and 0 < len(p) <= 64 for p in products)
     ):
@@ -965,8 +1255,27 @@ def _rows(jobs, queue_nodes):
     return [r for r in list(jobs) + list(queue_nodes) if r.get("capability") == CAPABILITY]
 
 
+def _abandoned(job, tick):
+    """A build job that ended blocked or failed and was not retried for ABANDON_TICKS."""
+    if job.get("status") not in ("blocked", "failed"):
+        return False
+    since = job.get("blocked_at_tick", job.get("last_tick"))
+    return isinstance(since, (int, float)) and isinstance(tick, (int, float)) and tick - since >= ABANDON_TICKS
+
+
+def _retire_node(reason):
+    return {
+        "id": RETIRE_NODE_ID,
+        "capability": CAPABILITY,
+        "parameters": {"retire": True},
+        "priority": RETIRE_PRIORITY,
+        "depends_on": [],
+        "reason": reason,
+    }
+
+
 def supply_cell_nodes(jobs, queue_nodes, observation, capabilities):
-    """Build once when products qualify; retire once when every product's demand ended or a produce row took over."""
+    """Build once when products qualify; retire once when demand ended, a produce row took over or the build was abandoned."""
     if CAPABILITY not in capabilities:
         return []
     jobs = list(jobs)
@@ -980,7 +1289,7 @@ def supply_cell_nodes(jobs, queue_nodes, observation, capabilities):
     if not mine:
         if MACHINE not in _enabled(observation) or not found.get("products"):
             return []
-        products = list(found["products"])[:6]
+        products = list(found["products"])[:MAX_PRODUCTS]
         rows = found.get("rows") or {}
         note = ", ".join(f"{p} {rows.get(p, {}).get('count', '?')}" for p in products)
         return [
@@ -995,8 +1304,11 @@ def supply_cell_nodes(jobs, queue_nodes, observation, capabilities):
         ]
     if any((r.get("parameters") or {}).get("retire") for r in mine):
         return []
-    built = [j for j in jobs if j.get("capability") == CAPABILITY and j.get("status") == "succeeded"]
+    builds = [j for j in jobs if j.get("capability") == CAPABILITY]
+    built = [j for j in builds if j.get("status") == "succeeded"]
     if not built:
+        if builds and all(_abandoned(j, observation.get("tick")) for j in builds):
+            return [_retire_node("supply cell build stayed blocked: demolish what stands and release the block")]
         return []
     products = (built[0].get("parameters") or {}).get("products") or []
     demand = found.get("demand") or {}
@@ -1007,13 +1319,4 @@ def supply_cell_nodes(jobs, queue_nodes, observation, capabilities):
     }
     if not all(demand.get(p, 0) <= HANDCRAFT_LIMIT or p in permanent for p in products):
         return []
-    return [
-        {
-            "id": RETIRE_NODE_ID,
-            "capability": CAPABILITY,
-            "parameters": {"retire": True},
-            "priority": RETIRE_PRIORITY,
-            "depends_on": [],
-            "reason": "supply cell products have a permanent source or no remaining demand: drain and demolish",
-        }
-    ]
+    return [_retire_node("supply cell products have a permanent source or no remaining demand: drain and demolish")]

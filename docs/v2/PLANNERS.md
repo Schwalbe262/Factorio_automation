@@ -66,31 +66,48 @@ skip when any plate net is unmeasured or <= 0, or rate < PRODUCE_MIN_RATE (1.0)
 
 A small chest-fed assembler cell, like the startup science cell: not on the
 bus, plates carried in by hand in batches, products taken from bar-capped
-chests. It replaces hand crafting of bulk items between power and the bus.
+chests. It replaces hand crafting of bulk items and stocks the intermediates
+(gears, circuits) between power and the bus, so a drill or a lab is only a
+final assembly.
 
 ```
-receipt  supply_cell_candidates = candidates(catalog, jobs, obs)        (__main__ observe)
-demand   bulk_item_demand over the next DEMAND_HORIZON (8) roadmap steps
-item qualifies when  count > HANDCRAFT_LIMIT (10)
-                and  hand_seconds(count) >= hand_seconds(cell hardware: 1 assembler + 2 inserters + 1 chest per recipe node)
-                and  machine_seconds(count) <= WAIT_FACTOR (3) * hand_seconds(count)
-                     machine rate = min over nodes(assembler crafts/min, CHEST_INSERTER_PER_MINUTE 50 / items moved)
-build    node auto_supply_cell {"products": qualifying} once per map, priority -52,
-         requires power, native assembling-machine-1
-retire   node auto_supply_cell_retire {"retire": true} once, priority -1000, after the build job succeeded,
-         when every product has demand <= HANDCRAFT_LIMIT or a succeeded produce job
+receipt  supply_cell_candidates = candidates(catalog, jobs, obs, root=runtime)     (__main__ observe)
+builds   supply_demand.upcoming_builds over the next DEMAND_HORIZON (8) roadmap steps:
+           a step in flight with a saved plan (MEASURED_PLANS: smelting_district, automation_science,
+           planned_main_bus) counts plan.required_items minus the plan entities standing on the map,
+           every other step counts Step.builds
+demand   item_demand(X) = units of X inside those builds (recursive catalog expansion, stops at raw items
+           and at X), for every X that is placed or a direct ingredient of a placed item (direct_use);
+           current(X) = the same over the steps in flight only; science packs are not counted
+choose   greedy, largest hand_seconds(count) first, at most MAX_PRODUCTS (6):
+           evaluate(X, stocked = products chosen so far): a stocked direct ingredient is a shared chest,
+           not a sub-tree, so X costs only its own machine and saves only its residual hand time
+           qualifies when  count > HANDCRAFT_LIMIT (10)
+                      and  hand_seconds(count) >= hand_seconds(hardware: per machine 1 assembler, one inserter
+                                                   per chest it touches, its input chest; 1 product chest)
+                      and  hand_seconds(made) >= hand_seconds(hardware),
+                           made = min(count, rate * PRODUCTION_WINDOW_SECONDS (1800) / 60)
+                           rate = min(assembler crafts/min, CHEST_INSERTER_PER_MINUTE 50 / items moved,
+                                      stocked ingredient rate / units needed)
+                      and  layout(chosen + [X]) still fits
+build    node auto_supply_cell {"products": chosen} once per map, priority -52, requires power, native assembling-machine-1
+retire   node auto_supply_cell_retire {"retire": true} once, priority -1000, when
+           the build job succeeded and every product has demand <= HANDCRAFT_LIMIT or a succeeded produce job, or
+           every build job is blocked/failed for ABANDON_TICKS (36000) since blocked_at_tick
 ```
 
 | Phase | Rule |
 |---|---|
-| design | `recipe_tree` from catalog recipes; raw = `progression.RAW_ITEMS` are hand-fed ports; first intermediate continues the chain, the 2nd/3rd branch sideways; greedy poles |
+| design | `recipe_tree(stocked=products)`; `_Grid` places products with most stocked ingredients first; a machine stands 3 tiles from every product chest it touches (its own, its stocked ingredients'), one side each, input chest on a free side (4 sides at most); a machine touching no placed chest goes below the cell; non-stocked intermediates chain off the input chest (`_place`); raw = `progression.RAW_ITEMS` are hand-fed ports; greedy poles; `render` draws it |
 | site | 8-tile ring around the powered pole, nearest first; refused: overlap with a board block, planned-unbuilt hardware, a site-plan zone (`SiteService.world().zones()`), ore or buildings (native survey); trees/rocks are cleared |
 | build | `ensure_plan`, bar `OUTPUT_STACKS` (2) on each product chest, first feed for `PROOF_UNITS` (2), proof: every machine finished products, every product chest holds stock |
-| use | `ensure_item` collects from the product chest; above `HANDCRAFT_LIMIT` it waits when `(missing - stock) * wait_s <= WAIT_FACTOR * missing * hand_s` (`construction_supply._waiting_pays`), else hand crafts; an unfed cell (`starved`) is fed from hand first; no progress for `STALL_TICKS` = hand crafting resumes |
-| feed | target per input chest = `min(FEED_CAP 100, ceil(need * raw per unit))`, need = demand - chest stock - carried; a trip only when the deficit is >= `FEED_BATCH` (10) or covers the whole target; shared upkeep inserts only plates beyond `FEED_RESERVE` (50); the idle lane may also collect furnace plates; no feed for a product whose `produce` row is producing |
-| retire | feeding stops (`phase: retiring`); waits while any job waits for "machine-made <product>"; mines inserters, machines, chests (paid, guarded `mine`, contents return to the inventory); keeps poles (other chains may hang on them); removes board block `supply_cell`; `phase: retired` is never proposed again |
+| use | `ensure_item` collects from the product chest; above `HANDCRAFT_LIMIT` it waits when `(missing - stock) * wait_s <= WAIT_FACTOR * missing * hand_s` (`construction_supply._waiting_pays`), else hand crafts; before a hand craft with no finished stock to collect it takes the stocked direct ingredients the craft lacks (`intermediate_take`, batched `_take_output`); an unfed cell (`starved`) is fed from hand first; no progress for `STALL_TICKS` = hand crafting resumes |
+| feed (pre-production) | target per input chest = `min(FEED_CAP 100, ceil(need * raw per unit))`, need = demand - product stock - carried, demand = the whole upcoming demand, so stock for the next steps is made while the current one waits; a plate that another active job waits for (`contested_plates`: reason "waiting ... <plate>" or evidence item) feeds only `current` demand and is never collected from furnaces by the idle lane; a trip only when the deficit is >= `FEED_BATCH` (10) or covers the whole target; shared upkeep inserts only plates beyond `FEED_RESERVE` (50); no feed for a product whose `produce` row is producing |
+| retire | feeding stops (`phase: retiring`); waits while any job waits for "machine-made <product>", and at most `DRAIN_TICKS` (3600) while input chests of a barred cell still hold plates; mines inserters, machines, chests (paid, guarded `mine`, contents return to the inventory); keeps poles (other chains may hang on them); removes board block `supply_cell`; `phase: retired` is never proposed again |
 
-Pinned by `tests/test_v2_supply_cell.py`.
+Keep the estimate honest: `DemandTests.test_builds_constants_cover_the_offline_plans`
+compares `Step.builds` with offline plans (`smelting_site.district_candidate`,
+`board.startup_science_cell`) and the live plan range. Pinned by `tests/test_v2_supply_cell.py`.
 
 ## Research capacity (`research_capacity.py`, `ResearchCapacityConfig`)
 

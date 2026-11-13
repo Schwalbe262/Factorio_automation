@@ -341,7 +341,8 @@ class LookaheadDemandTests(unittest.TestCase):
         self.assertNotIn("copper-plate", demand)
 
     def test_steps_without_builds_add_nothing(self):
-        self.assertEqual(pg.lookahead_demand(FakeCatalog(), done_through("smelting_district"), {}, horizon=3), {})
+        # automation_science has builds (its labs and machines), so start after it
+        self.assertEqual(pg.lookahead_demand(FakeCatalog(), done_through("automation_science"), {}, horizon=3), {})
 
     @unittest.skipUnless(REAL_CATALOG.exists(), "live catalog not present")
     def test_real_catalog_is_sane(self):
