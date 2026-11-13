@@ -434,14 +434,26 @@ the flow's downstream side, which the site plan chose from where the consumers a
 resource, at least `GRID_MIN_ORE_TILES` tiles; trees are ignored (cleared). The lattice shift
 is searched over one drill pitch (4 x 8 offsets) and scored by ore tiles covered, then fewer
 drills, then less ore unreachable. `prepare_new_bank` grids the patch first, makes the grid's
-lattice the bank's policy grid and plans the bank as the grid row pair whose edge-most columns
-fit (`candidate_sites(grid=)`), reserving that row's growth up to `MAX_PAIRS` columns; the
-bank keeps the record as `patch_grid`. Building is staged: the drills nearest the output edge
+lattice the bank's policy grid and plans the bank as one grid row pair (`candidate_sites(grid=)`):
+per row the walk goes inward from the output edge over the row's full pair columns
+(`pair_anchors`: both drills clean) to the first whose columns pass the drill checks, whose
+collector leaves the ore within `MAX_EXIT_CELLS` through this patch's ore only (the cell ahead of
+the port free of reservations) and that stays inside the plan's mining zone; rows rank by ore of
+the poorer drill row, growth up to `GRID_GROWTH_ENOUGH` pairs, then exit cost. The row's growth is
+reserved up to `MAX_PAIRS` columns or the zone edge; the bank keeps the record as `patch_grid`
+(`row`, `inward_columns`, per row `start` and `full_pairs`). Cause (fleet all-1113-2155): the
+grid's sites started at a row's edge-most column, which on a ragged edge or beside a starter cell
+holds no full pair, so 32 of 36 banks fell back to the lattice. On the recorded patches of that
+round (site-map + end-state board reservations, the bank's own exit side and pair count) a grid
+bank is found for 29 of 36 banks (before 8; the rest have rows with too few full pairs on that
+flow and take the lattice), on seed 2150100594's three patches in all 12
+(patch, flow) cases (before 10). Building is staged: the drills nearest the output edge
 first, then growth along the row (`prepare_extension`, the mine-trunk growth node). A later
 bank on the patch keeps the lattice (`MiningOutposts.prepare` passes the patch bank's
 `grid_origin`), so it is another row pair of the same grid; another patch is gridded afresh.
 Banks of older maps keep their plan (one row pair on the default lattice). When no grid row
-pair fits, the historical lattice is used and the record says `fallback`. Not yet: the grid's
+pair fits (also after the relaxations, which try grid rows first), the historical lattice is used
+and the record says `fallback`. Not yet: the grid's
 footprint is not a board reservation of its own (the ore rule already keeps other blocks off
 it), and the next row pair is placed by `prepare_connected_bank`'s search, not picked from the
 grid record.
@@ -491,13 +503,14 @@ placed; a drill mining two ores puts both on one belt). Rule now:
    has no more room than the lane can still bring plus `SINK_MARGIN_ITEMS`, `retire_border` lists
    the border drills to stop, so the foreign item never backs up into the splitter.
 
-Which patch and which row (`MiningOutposts.prepare`, `mining_layout_policy._relaxed_attempts`): a
+Which patch and which row (`MiningOutposts.prepare`, `mining_layout_policy._attempts`): a
 mine is planned whenever the patch has minable ore reachable off the ore. The patch is the plan's
 (an observed seed outside the plan zone is moved onto it; a plan patch farther than
 `MAX_OTHER_PATCH_DISTANCE` is skipped for the plan's nearer patches, each tried on all four sides
 toward the consumer, `mining_site.patch_exits`). A bank whose port already stands off the ore is
 the best candidate, not a dropped one. When no planned row fits, rows are relaxed in order: no
-reserved growth pair, then a single pair, each first on the patch grid's lattice. A failure carries
+reserved growth pair, then a single pair, each first on the patch grid's rows, then on its lattice
+and the planned one (a site already checked is not checked again). A failure carries
 `attempts` and `needs` (what would have to change).
 
 Not yet: building border lanes (the bank still places only clean cells; mixed drills need the

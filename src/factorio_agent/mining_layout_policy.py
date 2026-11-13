@@ -445,6 +445,7 @@ def survey_patch(game, obs, catalog, resource, area, *, maximum_tiles=MAX_TILES)
 
 
 MAX_EXIT_CELLS = 12
+GRID_GROWTH_ENOUGH = 3  # growth pairs beyond which a grid row is not preferred for more room
 
 
 def _canonical_inputs(snapshot, policy, reservations):
@@ -493,9 +494,17 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
     """Pure coherent grid; score unique ore and contiguous future columns once.
 
     ``grid`` (:func:`patch_grid` on this policy's lattice) restricts the sites
-    to the grid's row pairs, each starting at its edge-most column (the drills
-    nearest the output edge are built first) and reserving its growth along
-    the row up to ``MAX_PAIRS`` columns (staged growth, ``prepare_extension``).
+    to the grid's row pairs: per row the walk goes inward from the output edge
+    over the row's full pair columns (``pair_anchors``) to the first one whose
+    ``pairs`` columns all fit, whose collector leaves the ore within the bounded
+    native exit through this patch's ore only, and that stays inside the plan's
+    mining zone (the drills nearest the output edge are built first). Its growth
+    is reserved along the row up to ``MAX_PAIRS`` columns or the zone edge
+    (staged growth, ``prepare_extension``). Grid rows rank by (port clear of
+    another patch, ore of the poorer drill row, growth columns up to
+    ``GRID_GROWTH_ENOUGH``, -exit cost, growth columns, unique ore tiles,
+    amount); a candidate records ``grid_row`` and
+    ``inward_columns`` (full pair columns skipped from the edge).
 
     Sites are searched in the canonical EAST frame of the policy flow and
     returned on the map. The score, compared as a tuple (bigger is better):
@@ -524,6 +533,7 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
     zone = None
     if site_exit and site_exit.get("zone_rect"):
         zone = list(frame.inverse().rect(*site_exit["zone_rect"]))
+    foreign = {p for p, t in tiles.items() if t["name"] != resource}
     anchors = set()
     for t in canonical_tiles if grid is None else ():
         if t["name"] != resource:
@@ -532,9 +542,11 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
         x = origin["x"] + PAIR_PITCH * math.floor((x - origin["x"]) / PAIR_PITCH)
         y = origin["y"] + BANK_PITCH * math.floor((y - origin["y"]) / BANK_PITCH)
         anchors.update((x + dx, y + dy) for dx in (-4, 0, 4) for dy in (-8, 0, 8))
+    rows = [[a] for a in sorted(anchors)]
     if grid is not None:
+        # Per grid row its full pair columns, edge-most first; the row's site is the first that fits.
         back = frame.inverse()
-        anchors = {back.point(row["anchor"]["x"], row["anchor"]["y"]) for row in grid["rows"]}
+        rows = [[back.point(a["x"], a["y"]) for a in row.get("pair_anchors", [row["anchor"]])] for row in grid["rows"]]
     growth_limit = MAX_PAIRS if grid is not None else None
 
     def exit_cost(core):
@@ -547,11 +559,16 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
         # of its few sites this way).
         if not 0 <= cells <= MAX_EXIT_CELLS:
             return None
-        x, y = frame.point(port["position"]["x"] + cells, port["position"]["y"])
+        px, py = _xy(port)
+        if grid is not None and any((px + step, py) in foreign for step in range(1, cells + 1)):
+            return None  # a grid collector leaves through its own ore only (the native exit refuses others)
+        if grid is not None and any(overlap([[px + 0.51, py - 0.49], [px + 1.49, py + 0.49]], a) for a in reservations):
+            return None  # the cell ahead of the port starts every native exit prefix and the output apron
+        if site_exit is None:
+            return cells
+        x, y = frame.point(px + cells, py)
         tx, ty = site_exit["corridor_start"]
         return cells + abs(x - tx) + abs(y - ty)
-
-    foreign = {p for p, t in tiles.items() if t["name"] != resource}
 
     def faces(core):
         """True when another resource's ore lies ahead of the output port (the exit would face that patch)."""
@@ -582,50 +599,68 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
                 seen.update({_xy(t): t["amount"] for t in cells})
         return sum(seen.values()), len(seen), counts
 
-    ranked = []
-    for x, y in sorted(anchors):
+    def site(x, y, index):
+        """The ranked candidate whose edge-most pair column is ``(x, y)`` (grid row ``index``), or None."""
         core = mining_pair(x, y, pairs, resource)
         base = covered(core)
         if not base:
-            continue
+            return None
+        if grid is not None and zone is not None and not _inside(core["mining_footprint"], zone):
+            return None
         slots = pairs
         future = core
         for n in range(pairs, (growth_limit or min(MAX_PAIRS, pairs + 2)) + 1):
             q = mining_pair(x, y, n, resource)
             if any(overlap(q["mining_footprint"], a) for a in reservations) or not covered(q):
                 break
+            if grid is not None and zone is not None and not _inside(q["mining_footprint"], zone):
+                break  # a grid row grows only as far as the plan's mining zone
             slots = n
             future = q
         if slots < pairs + policy["minimum_growth_pairs"] or any(
             overlap(core["mining_footprint"], a) for a in reservations
         ):
-            continue
+            return None
         row_tiles = min(base[2].values())
         amount = min(base[0], 100000)
         clear = 0 if faces(core) else 1
-        if site_exit is None:
+        if grid is not None:
+            # A grid row: ore under the pair, room to grow (up to GRID_GROWTH_ENOUGH pairs counts the
+            # same), then the exit to the output edge; its whole row is the frame.
+            cost = exit_cost(core)
+            if cost is None:
+                return None
+            score = (row_tiles, min(slots - pairs, GRID_GROWTH_ENOUGH), -cost, slots - pairs, base[1], amount)
+        elif site_exit is None:
             score = (slots - pairs, row_tiles, base[1], amount, -x * x - y * y)
         else:
             cost = exit_cost(core)
             if cost is None or (zone is not None and not _inside(future["mining_footprint"], zone)):
-                continue
+                return None
             score = (slots - pairs, row_tiles, -cost, base[1], amount)
         if foreign:
             score = (clear,) + score  # a port that does not face another patch comes first
-        ranked.append(
-            dict(
-                x=x,
-                y=y,
-                plan=core,
-                future_plan=future,
-                reserved_pair_slots=slots,
-                unique_resource_amount=base[0],
-                unique_resource_tiles=base[1],
-                row_resource_tiles=base[2],
-                faces_neighbour=not clear,
-                score=score,
-            )
+        return dict(
+            x=x,
+            y=y,
+            plan=core,
+            future_plan=future,
+            reserved_pair_slots=slots,
+            unique_resource_amount=base[0],
+            unique_resource_tiles=base[1],
+            row_resource_tiles=base[2],
+            faces_neighbour=not clear,
+            score=score,
+            **({"grid_row": index, "inward_columns": rows[index].index((x, y))} if grid is not None else {}),
         )
+
+    ranked = []
+    for index, columns in enumerate(rows):
+        for x, y in columns:  # walk inward from the output edge to the first column that fits
+            found = site(x, y, index)
+            if found is not None:
+                ranked.append(found)
+                break
     ranked.sort(key=lambda q: (q["score"], q["x"], q["y"]), reverse=True)
     if frame.identity:
         return ranked[:maximum]
@@ -717,7 +752,7 @@ def _grid_at(ore, other, blocked, reserved, bounds, ox, oy, radius):
     rows, covered, drills = [], set(), 0
     border = []
     for top in tops[:MAX_GRID_ROWS]:
-        used, placed, edge_cells = [], [], []
+        used, placed, edge_cells, pairs = [], [], [], []
         for x in columns:
             hit, rim = [], []
             for y in (top, top + 4):
@@ -731,9 +766,12 @@ def _grid_at(ore, other, blocked, reserved, bounds, ox, oy, radius):
                 placed += [(x, y) for x, y, _ in hit]
                 for _, _, cells in hit:
                     covered.update(cells)
+            if len(hit) == 2:
+                # A full pair column: both drill rows of the shared collector stand here.
+                pairs.append((x, sum(len(cells) for _, _, cells in hit)))
             edge_cells += rim
         if used:
-            rows.append({"top_y": top, "columns": used, "drills": placed})
+            rows.append({"top_y": top, "columns": used, "drills": placed, "pairs": pairs})
             drills += len(placed)
             border.append((top, edge_cells))
     if not rows:
@@ -835,12 +873,17 @@ def patch_grid(snapshot, policy, reservations=(), *, forbidden=(), origin=None, 
         edge = row["border"]
         foreign = edge["foreign"][0] if edge["foreign"] else ""
         device = filter_device(port, resource, foreign, sink="chest")
+        # Full pair columns, edge-most first: where a bank of this row can start (candidate_sites walks
+        # them inward; the edge-most column of a ragged edge often holds one drill only).
+        full = sorted(row["pairs"], key=lambda q: -q[0])
         record = {
             "index": index,
             "anchor": world(right, top),
             "columns": len(row["columns"]),
             "drills": [world(x, y) for x, y in row["drills"]],
             "port": world(*port),
+            "pair_anchors": [world(x, top) for x, _ in full],
+            "pair_ore_tiles": [tiles_ for _, tiles_ in full],
         }
         if edge["drills"]:
             lane = decide_border_lane(
@@ -880,10 +923,19 @@ def grid_summary(grid) -> dict:
     keys = ("origin", "flow", "drills", "covered_tiles", "unreachable_tiles", "score", "shifts_scored")
     optional = ("frame_rects", "mixed_ore_zone")
     row_keys = ("index", "anchor", "columns", "port", "border_lane")
+
+    def row(r):
+        out = {k: deepcopy(r[k]) for k in row_keys if k in r}
+        if "pair_anchors" in r:
+            out["full_pairs"] = len(r["pair_anchors"])
+            if r["pair_anchors"]:
+                out["start"] = deepcopy(r["pair_anchors"][0])
+        return out
+
     return (
         {k: deepcopy(grid[k]) for k in keys}
         | {k: deepcopy(grid[k]) for k in optional if k in grid}
-        | {"rows": [{k: deepcopy(r[k]) for k in row_keys if k in r} for r in grid["rows"]]}
+        | {"rows": [row(r) for r in grid["rows"]]}
     )
 
 
@@ -1135,23 +1187,39 @@ def _adopt_growth_poles(entities, future) -> None:
             e.update({k: slot[k] for k in ("mining_resource", "mining_footprint") if k in slot})
 
 
-def _relaxed_attempts(snapshot, selected, sites, count, reservations, site_exit, policy, grid=None):
-    """``(sites, policy, relaxed)`` to evaluate in order: the planned sites, then relaxed rows.
+def _attempts(snapshot, selected, count, reservations, site_exit, policy, grid=None):
+    """``(sites, policy, relaxed, on_grid)`` to evaluate in order: grid rows first, then the lattice.
 
+    The patch grid is the source of banks: its rows (``candidate_sites(grid=)``, each row walked
+    inward from the output edge to its first full pair) come first, then the planned lattice.
     A patch is mined whenever a bank fits (fleet all-1113-2155: a 217-tile coal patch between
     an iron and a copper patch had no site with a full row and a growth pair, the bank blocked
     and the run died). Relaxations, cheapest loss first, each only reached when nothing before
     it gave a bank: no reserved growth pair (``minimum_growth_pairs`` 0: growth then comes
     from a connected bank), then a single pair (fewer drills now, the rate is re-measured and
-    the outpost adds banks). Each is searched on the patch grid's lattice first (its shift was
-    chosen to cover this patch; the grid's own sites start at a row's edge-most column, which on a
-    ragged edge is often too thin for a full pair), then on the planned one. A caller's explicit
-    ``policy`` is never relaxed.
+    the outpost adds banks). Each relaxation is tried on the grid rows first, then on the grid's
+    lattice and the planned one. A caller's explicit ``policy`` is never relaxed (and has no grid).
     """
-    yield sites, selected, None
+    pairs = math.ceil(count / 2)
+
+    def lattice(origin, growth):
+        return make_policy(
+            selected["world_id"],
+            selected["catalog_fingerprint"],
+            selected["resource"],
+            flow=selected["flow"],
+            grid_origin=origin,
+            minimum_growth_pairs=growth,
+            site_oriented=selected.get("orientation_source") == "site-plan",
+        )
+
+    if grid is not None:
+        gridded = lattice(grid["origin"], selected["minimum_growth_pairs"])
+        sites = candidate_sites(snapshot, gridded, pairs, reservations, site_exit=site_exit, grid=grid)
+        yield sites, gridded, None, True
+    yield candidate_sites(snapshot, selected, pairs, reservations, site_exit=site_exit), selected, None, False
     if policy is not None:
         return
-    pairs = math.ceil(count / 2)
     steps = []
     if selected["minimum_growth_pairs"] > 0:
         steps.append(("no_growth_pair", pairs))
@@ -1161,17 +1229,17 @@ def _relaxed_attempts(snapshot, selected, sites, count, reservations, site_exit,
     if grid is not None and grid.get("origin") and grid["origin"] != selected["grid_origin"]:
         origins.insert(0, grid["origin"])
     for label, wanted in steps:
-        for origin in origins:
-            relaxed = make_policy(
-                selected["world_id"],
-                selected["catalog_fingerprint"],
-                selected["resource"],
-                flow=selected["flow"],
-                grid_origin=origin,
-                minimum_growth_pairs=0,
-                site_oriented=selected.get("orientation_source") == "site-plan",
+        if grid is not None:
+            relaxed = lattice(grid["origin"], 0)
+            yield (
+                candidate_sites(snapshot, relaxed, wanted, reservations, site_exit=site_exit, grid=grid),
+                relaxed,
+                label,
+                True,
             )
-            yield candidate_sites(snapshot, relaxed, wanted, reservations, site_exit=site_exit), relaxed, label
+        for origin in origins:
+            relaxed = lattice(origin, 0)
+            yield candidate_sites(snapshot, relaxed, wanted, reservations, site_exit=site_exit), relaxed, label, False
 
 
 def prepare_new_bank(
@@ -1259,25 +1327,6 @@ def prepare_new_bank(
             mixed_record = planned_grid.get("mixed_ore_zone")
             if planned_grid.get("ok"):
                 grid = planned_grid
-        sites = []
-        if grid is not None:
-            gridded = make_policy(
-                obs["world_id"],
-                catalog.fingerprint,
-                resource,
-                flow=selected["flow"],
-                grid_origin=grid["origin"],
-                site_oriented=selected.get("orientation_source") == "site-plan",
-            )
-            sites = candidate_sites(
-                snapshot, gridded, math.ceil(count / 2), reservations, site_exit=site_exit, grid=grid
-            )
-            if sites:
-                selected = gridded
-            else:
-                grid = dict(grid, fallback="no grid row pair fits; historical lattice used")
-        if not sites:
-            sites = candidate_sites(snapshot, selected, math.ceil(count / 2), reservations, site_exit=site_exit)
         failures = []
         product = catalog.entities[resource]["mining_products"]
         if len(product) != 1 or product[0]["name"] != resource:
@@ -1285,10 +1334,21 @@ def prepare_new_bank(
         base = snapshot["native"]["mining_speed"] * 60 / snapshot["native"]["mining_time"] * _yield(product[0])
         counts = []
         evaluated = []  # (candidate, relaxation) in order; each failed candidate adds one failure
-        attempts = _relaxed_attempts(snapshot, selected, sites, count, reservations, site_exit, policy, grid)
-        for sites, selected, relaxed in attempts:
-            counts.append({"relaxed": relaxed, "candidates": len(sites)} if relaxed else {"candidates": len(sites)})
+        tried = set()  # a site already checked (grid and lattice attempts can offer the same one)
+        attempts = _attempts(snapshot, selected, count, reservations, site_exit, policy, grid)
+        for sites, selected, relaxed, on_grid in attempts:
+            row = {"candidates": len(sites)} | ({"relaxed": relaxed} if relaxed else {})
+            counts.append(row | ({"grid": True} if on_grid else {}))
             for candidate in sites:
+                key = (
+                    candidate["x"],
+                    candidate["y"],
+                    candidate["plan"]["pair_count"],
+                    candidate["reserved_pair_slots"],
+                )
+                if key in tried:
+                    continue
+                tried.add(key)
                 evaluated.append((candidate, relaxed))
                 core = candidate["plan"]
                 future = candidate["future_plan"]
@@ -1410,7 +1470,21 @@ def prepare_new_bank(
                     wire_hops=bridge["wire_hops"],
                     layout_contract=contract,
                     capacity_profile=profile,
-                    **({"patch_grid": grid_summary(grid) | {"fallback": grid.get("fallback")}} if grid else {}),
+                    **(
+                        {
+                            "patch_grid": grid_summary(grid)
+                            | {
+                                "fallback": None if on_grid else "no grid row pair fits; historical lattice used",
+                                **(
+                                    {"row": candidate["grid_row"], "inward_columns": candidate["inward_columns"]}
+                                    if on_grid
+                                    else {}
+                                ),
+                            }
+                        }
+                        if grid
+                        else {}
+                    ),
                     patch_diagnostic=dict(
                         tick=snapshot["tick"],
                         unique_resource_tiles=candidate["unique_resource_tiles"],
