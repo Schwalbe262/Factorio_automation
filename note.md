@@ -252255,3 +252255,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: offline only; no fleet started.
 - failure reason / open: hypothesis for mining_patch_native_receipt_changed: an empty Lua table serialises as {} (not a list) so the tiles check fails; the new mining_patch_receipt note (tiles_type) will confirm on the next problem run.
 - next action: next round: read the "problem runs" section and one probes/<job>.json per blocker class.
+
+## 2026-11-14 01:50 Part 53 - self-recovery, seed failures, bandwidth, layout families
+- goal: stop one-off debugging per blocked reason; make every seed reach the bus; raise output.
+- actions: merged remedy ladder (needs contract, resolver, read-only what-if), seed-dependent mine/district fixes, district split feed head + rework job, belt flow model + bandwidth audit, science/green/mine/smelting layout families, patch grid as bank source, post-mortem snapshots for fleets, roadmap unfreeze, growth packages + build-ahead, science growth chain/frame, return feed.
+- metrics: round all-1113-2332 (915cf18): logistics 18.7, smelting 27.8 (9/12), bus 31.4 (6/12); queries 20% of command time (was 46%).
+- failure: a Lua `--` comment I added inside the insert body cut the one-line script and blocked every run started on 19859cc (long fleet lost 22 min); fixed by stripping line comments before send + test. GUI maps froze twice on undispatchable ready research nodes and on blocked reasons that were never re-planned.
+- result: v2 c9acd07; GUI map eval-1575138435 and long fleet long-1114-0039 running.
+- next: verify the ladder on the GUI map; read all-1114-0020 and the long fleet.
