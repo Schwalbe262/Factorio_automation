@@ -256,12 +256,56 @@ class RecordTests(unittest.TestCase):
                 },
             }
             (Path(tmp) / "production-row-pipe.json").write_text(json.dumps(state), encoding="utf-8")
-            found_rows = selection.run_layouts(Path(tmp))
+            found_rows = selection.run_layouts(Path(tmp), milestones={"main_bus": 1.0, "logistic_science": 3.5})
             self.assertEqual(found_rows[0]["build_seconds"], 100)
+            self.assertEqual(found_rows[0]["followup_seconds"], 100)  # proof at 110 s, next milestone at 210 s
             lines = selection.format_variants(found_rows + found_rows)
             self.assertIn("layout variants used", lines[0])
-            self.assertIn("row-am1-default", lines[1])
-            self.assertIn("2/2", lines[1])
+            self.assertEqual(lines[1].strip(), "produce:pipe")
+            self.assertIn("row-am1-default", lines[2])
+            self.assertIn("2/2", lines[2])
+
+    def test_variants_of_one_block_are_compared_and_the_leader_named(self):
+        rows = []
+        for variant, proofs, follow in (
+            ("sci-single-row", (1, 1, 1), (300, 320, 340)),
+            ("sci-direct-row", (1, 0, 1), (200, None, 220)),
+        ):
+            for proof, seconds in zip(proofs, follow):
+                rows.append(
+                    {
+                        "block": "automation_science",
+                        "variant": variant,
+                        "explored": variant == "sci-direct-row",
+                        "proof": bool(proof),
+                        "build_seconds": 400,
+                        "followup_seconds": seconds,
+                        "power_kw": 477.3,
+                        "pollution_per_min": None,
+                    }
+                )
+        summary = selection.variant_summary(rows)
+        single = summary[("automation_science", "sci-single-row")]
+        self.assertEqual((single["proof_rate"], single["median_followup_seconds"]), (1.0, 320))
+        self.assertEqual(summary[("automation_science", "sci-direct-row")]["median_followup_seconds"], 210)
+        lines = selection.format_variants(rows)
+        self.assertEqual(lines[1].strip(), "automation_science")
+        self.assertIn("-> leading: sci-single-row", lines[-1])  # every proof passed beats the quicker follow-up
+
+    def test_science_records_and_a_template_block_are_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            red = {"science": {"template": "permanent_red_science_row"}, "labs": {}, "stage": {}}
+            (Path(tmp) / "automation-science.json").write_text(json.dumps(red), encoding="utf-8")
+            rows = selection.run_layouts(Path(tmp))
+            self.assertEqual(rows[0]["block"], "automation_science")
+            self.assertEqual(rows[0]["variant"], "sci-single-row-template")
+            self.assertFalse(rows[0]["proof"])
+            red["layout"] = {"variant": "sci-direct-row", "chosen_tick": 3600, "verified_tick": 3600 * 3}
+            (Path(tmp) / "automation-science.json").write_text(json.dumps(red), encoding="utf-8")
+            rows = selection.run_layouts(Path(tmp), milestones={"research_logistics": 5.0, "main_bus": 4.0})
+            self.assertEqual(
+                (rows[0]["proof"], rows[0]["build_seconds"], rows[0]["followup_seconds"]), (True, 120, 120)
+            )
 
     def test_cluster_line_pins_a_genome_and_rejects_a_bad_one(self):
         c = catalog()

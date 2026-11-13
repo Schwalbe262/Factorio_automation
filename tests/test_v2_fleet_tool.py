@@ -190,6 +190,24 @@ class ReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.assertIsNone(fleet.git_commit(directory))
 
+    def test_exploration_is_switched_per_fleet_and_shown(self):
+        from factorio_agent import layout_selection as selection
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fleet.layout_settings(root, True)
+            self.assertTrue(selection.settings(root, env={}).explore)
+            fleet.layout_settings(root, False)  # an explicit off wins over an inherited environment switch
+            self.assertFalse(selection.settings(root, env={selection.ENV_EXPLORE: "1"}).explore)
+        self.assertTrue(fleet.explore_requested(True, env={}))
+        self.assertFalse(fleet.explore_requested(False, env={}))
+        self.assertTrue(fleet.explore_requested(False, env={selection.ENV_EXPLORE: "1"}))
+        rows = [dict(seed=1, alive=True, game_minutes=30.0, milestones={}, furthest=None)]
+        header = fleet.format_report(dict(name="f", explore=True), rows, fleet.aggregate(rows), window_text="0-30")[0]
+        self.assertIn("layout EXPLORATION on", header)
+        status = fleet._status_lines(dict(name="f", explore=True, runs=[]))[0]
+        self.assertIn("EXPLORATION", status)
+
     def test_the_report_prints_the_median_rcon_query_load(self):
         import report_run
 

@@ -240,6 +240,26 @@ def milestones(jobs, ends, roadmap, same):
     return reached, furthest
 
 
+def layout_settings(root, explore):
+    """Write the run's ``layout-settings.json`` (``layout_selection.settings``) before its supervisor starts.
+
+    ``explore`` True: candidate layouts are explored, deterministically per (world id, block);
+    False writes an explicit off, so an inherited ``FACTORIO_LAYOUT_EXPLORE`` cannot switch it on.
+    """
+    from factorio_agent.layout_selection import SETTINGS_FILE
+
+    path = Path(root) / SETTINGS_FILE
+    _atomic_json(path, {"explore": bool(explore)})
+    return path
+
+
+def explore_requested(flag, env=None):
+    """``--explore``, or the older switch ``FACTORIO_LAYOUT_EXPLORE=1`` in the environment of ``start``."""
+    from factorio_agent.layout_selection import settings
+
+    return bool(flag) or settings(None, env=env).explore
+
+
 def blocked_rows(jobs):
     """(normalized reason, capability) of every blocked or failed job."""
     return [
@@ -318,6 +338,8 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     tests = [r for r in runs if r.get("test_mode")]
     if tests:
         lines[0] += f" | TEST MODE client_free in {len(tests)} runs (script-credited hand-craft triggers; not a proof)"
+    if fleet.get("explore"):
+        lines[0] += " | layout EXPLORATION on (runner-up variants by seed)"
     lines.append(
         "seed".ljust(11)
         + " up "
@@ -593,7 +615,9 @@ class Fleet:
             source="max(cost.json, default)" if saved else "default",
         )
 
-    def start(self, count, seeds_text, minutes, name, *, force=False, parallel=4, stagger=10.0, out=print):
+    def start(
+        self, count, seeds_text, minutes, name, *, force=False, parallel=4, stagger=10.0, explore=False, out=print
+    ):
         seeds = parse_seeds(seeds_text, count)
         name = name or time.strftime("fleet-%Y%m%d-%H%M%S")
         path = self.manifest_path(name)
@@ -624,6 +648,7 @@ class Fleet:
             target_minutes=minutes,
             planner=self.planner,
             client=self.client,
+            explore=bool(explore),
             runs=[
                 dict(seed=s, runtime=str(r), server_port=u, rcon_port=t, status="planned")
                 for s, r, (u, t) in zip(seeds, roots, pairs)
@@ -650,6 +675,7 @@ class Fleet:
                     )
                 if self.client != actor_client.ALWAYS:
                     actor_client.set_mode(root, self.client)
+                layout_settings(root, explore)
                 self._set_run(name, run["seed"], status="starting")
                 result = self.lifecycle()._start(root, visible=False, automation_config=options, select=False)
                 records = run_records(root)
@@ -739,7 +765,9 @@ class Fleet:
                     parts_of_largest=max(costs, key=lambda c: c["mb"])["parts"],
                 ),
             )
-        return dict(name=fleet["name"], target_minutes=fleet.get("target_minutes"), runs=rows)
+        return dict(
+            name=fleet["name"], target_minutes=fleet.get("target_minutes"), explore=fleet.get("explore"), runs=rows
+        )
 
     def enforce(self, name, out=print):
         """Stop every running run that reached the fleet's target game minutes."""
@@ -834,12 +862,12 @@ class Fleet:
             return row
         from factorio_agent.layout_selection import run_layouts
 
-        row["layouts"] = run_layouts(root)
         tick = run_tick(root)
         row["game_minutes"] = round(tick / TICKS_PER_MINUTE, 1) if tick is not None else None
         timeline = cp_tool.Run(root)
         reached, far = milestones(timeline.jobs, timeline.end, ROADMAP, _same)
         row["milestones"] = reached
+        row["layouts"] = run_layouts(root, milestones=reached)
         row["furthest"] = dict(step=far[1], minute=far[2], index=far[0]) if far else None
         row["blocked_reasons"] = blocked_rows(timeline.jobs)
         summary = report_run.report(root, jobs=timeline.jobs)
@@ -880,6 +908,8 @@ def _status_lines(value):
     ]
     if any(r.get("test_mode") for r in value["runs"]):
         lines[0] += " TEST MODE client_free (C: n = no client by design, d = detached)"
+    if value.get("explore"):
+        lines[0] += " | layout EXPLORATION on"
     lines.append("seed        state          S C V  gmin  act blk done  last milestone")
     for r in value["runs"]:
         mark = dict(none="n ", detached="d ")
@@ -921,6 +951,12 @@ def main(argv=None):
         " around the actor as a player would); always: a hidden client per run (proof runs); until_lab_trigger",
     )
     start.add_argument("--keep-client", action="store_true", help="same as --client always")
+    start.add_argument(
+        "--explore",
+        action="store_true",
+        help="explore layout candidates: each run writes layout-settings.json {explore: true}; a seed from"
+        " (world id, block) picks among the best candidates within the margin (recorded in the manifest)",
+    )
     for command in ("status", "report", "stop", "watch"):
         one = sub.add_parser(command)
         one.add_argument("--name")
@@ -943,6 +979,7 @@ def main(argv=None):
             force=args.force,
             parallel=args.parallel,
             stagger=args.stagger,
+            explore=explore_requested(args.explore),
         )
         print(f"fleet {value['name']}: manifest {fleet.manifest_path(value['name'])}")
         for run in value["runs"]:

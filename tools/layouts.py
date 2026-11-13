@@ -226,28 +226,54 @@ def evidence(runs: list[str], directory: Path | None = None, out=print) -> None:
     rows_ = [row for run in runs for row in selection.run_layouts(Path(run))]
     summary = selection.variant_summary(rows_)
     by_item: dict = {}
-    for (block, _variant), entry in summary.items():
+    science_rows = []
+    for (block, variant), entry in summary.items():
         if block.startswith("produce:"):
             by_item.setdefault(block.split(":", 1)[1], []).append(entry)
+        elif block == "automation_science" and not variant.endswith("-template"):
+            science_rows.append(entry)  # a template block is not the generated genome's geometry
+    if science_rows:
+        doc = variants.load_library(science.RED, directory)
+        section = (doc or {}).get(science.SECTION)
+        if section:
+            changed = _merge_evidence(section["entries"], science_rows)
+            variants.library_path(science.RED, directory).write_text(
+                json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            out(f"science block: evidence merged into {changed} entries")
     for item, entries in by_item.items():
         doc = variants.load_library(item, directory)
         if doc is None:
             continue
-        changed = 0
-        for lib in doc["entries"].values():
-            for entry in entries:
-                if json.dumps(lib["genome"], sort_keys=True) == json.dumps(entry["genome"], sort_keys=True):
-                    old = lib.get("evidence") or {}
-                    lib["evidence"] = {
-                        "runs": int(old.get("runs") or 0) + entry["runs"],
-                        "proof_passed": int(old.get("proof_passed") or 0) + entry["proofs"],
-                        "median_build_seconds": entry["median_build_seconds"],
-                    }
-                    changed += 1
+        changed = _merge_evidence(doc["entries"], entries)
         variants.library_path(item, directory).write_text(
             json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8"
         )
         out(f"{item}: evidence merged into {changed} entries")
+
+
+def _merge_evidence(library_entries: dict, entries: list[dict]) -> int:
+    """Add each summary entry's runs / proofs / follow-up to the library entry of the same genome."""
+
+    def same(a, b):
+        keep = ("form", "machines", "labs", "lab_slots")
+        if (a or {}).get("form") == "science":  # the science genome's frame is the request's, not stored
+            return {k: a.get(k) for k in keep} == {k: (b or {}).get(k) for k in keep}
+        return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+    changed = 0
+    for lib in library_entries.values():
+        for entry in entries:
+            if same(lib.get("genome"), entry.get("genome")):
+                old = lib.get("evidence") or {}
+                lib["evidence"] = {
+                    "runs": int(old.get("runs") or 0) + entry["runs"],
+                    "proof_passed": int(old.get("proof_passed") or 0) + entry["proofs"],
+                    "median_build_seconds": entry["median_build_seconds"],
+                    "median_followup_seconds": entry.get("median_followup_seconds"),
+                }
+                changed += 1
+    return changed
 
 
 def main(argv=None) -> int:
