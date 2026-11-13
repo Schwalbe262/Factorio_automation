@@ -19,7 +19,9 @@ def write_run(root: Path, jobs: dict, events: list, slices: list):
     (root / "jobs.json").write_text(json.dumps({"jobs": jobs}), encoding="utf-8")
     (root / "job-events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
     rows = [dict(s, event="slice") for s in slices]
-    (root / "logs" / "controller-events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in rows), encoding="utf-8")
+    (root / "logs" / "controller-events.jsonl").write_text(
+        "".join(json.dumps(e) + "\n" for e in rows), encoding="utf-8"
+    )
 
 
 def act(key, tick, **action):
@@ -38,14 +40,50 @@ class WasteReportTests(unittest.TestCase):
         events = [{"key": "b", "event": "submitted", "time": 0, "tick": 0}]
         tick = 10
         for _ in range(4):  # wood in / wood out, the boiler loop
-            events.append(act("b", tick, type="insert", name="boiler", item="wood", count=3, position=boiler, reason="hand-fed boiler: refill"))
-            events.append(act("b", tick + 60, type="take", name="boiler", item="wood", count=3, position=boiler, reason="take wood back"))
+            events.append(
+                act(
+                    "b",
+                    tick,
+                    type="insert",
+                    name="boiler",
+                    item="wood",
+                    count=3,
+                    position=boiler,
+                    reason="hand-fed boiler: refill",
+                )
+            )
+            events.append(
+                act(
+                    "b",
+                    tick + 60,
+                    type="take",
+                    name="boiler",
+                    item="wood",
+                    count=3,
+                    position=boiler,
+                    reason="take wood back",
+                )
+            )
             tick += 120
         events.append(act("x", tick, type="build", name="stone-furnace", position={"x": 9, "y": 9}, reason="build"))
-        events.append(act("x", tick + 600, type="mine", name="stone-furnace", position={"x": 9, "y": 9}, reason="recover"))
-        events.append({"key": "x", "event": "terminal", "time": tick + 700, "status": "blocked", "reason": "no_site", "evidence": {"tick": tick + 700}})
+        events.append(
+            act("x", tick + 600, type="mine", name="stone-furnace", position={"x": 9, "y": 9}, reason="recover")
+        )
+        events.append(
+            {
+                "key": "x",
+                "event": "terminal",
+                "time": tick + 700,
+                "status": "blocked",
+                "reason": "no_site",
+                "evidence": {"tick": tick + 700},
+            }
+        )
         events.append(act("b", 400 * S, type="build", name="pipe", position={"x": 0, "y": 0}, reason="build"))
-        slices = [{"tick": t * S, "jobs": {"w": {"status": "waiting", "reason": "waiting for district plates"}}} for t in range(0, 301, 25)]
+        slices = [
+            {"tick": t * S, "jobs": {"w": {"status": "waiting", "reason": "waiting for district plates"}}}
+            for t in range(0, 301, 25)
+        ]
         slices.append({"tick": 325 * S, "jobs": {"w": {"status": "succeeded", "reason": "done"}}})
         write_run(run, jobs, events, slices)
         return run
@@ -61,7 +99,9 @@ class WasteReportTests(unittest.TestCase):
             self.assertEqual(loop["count"], 8)
             self.assertIn("take/insert wood on boiler", loop["example"]["reason"])
             wait = waste["long_wait"]["example"]
-            self.assertEqual((wait["job"], wait["reason"], wait["seconds"]), ("planned_main_bus", "waiting for district plates", 300))
+            self.assertEqual(
+                (wait["job"], wait["reason"], wait["seconds"]), ("planned_main_bus", "waiting for district plates", 300)
+            )
             self.assertEqual(waste["rework"]["count"], 1)
             self.assertEqual(waste["blocked_unretried"]["example"]["job"], "supply_cell")
             self.assertGreater(waste["actor_idle"]["seconds"], 0)

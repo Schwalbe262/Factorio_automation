@@ -50,7 +50,6 @@ import json
 from pathlib import Path
 import re
 import statistics
-import sys
 
 TICKS = 60
 SPAN_CAP = 60.0
@@ -157,7 +156,12 @@ def analyse(root: Path) -> dict:
             looped.update(idx)
             seconds = sum(spans[i] for i in idx)
             tick = actions[idx[0]][0]
-            w.add("action_loop", seconds, {"tick": tick, "job": cap(key), "reason": f"take/insert {item} on {name} {pos} x{len(idx)}"}, len(idx))
+            w.add(
+                "action_loop",
+                seconds,
+                {"tick": tick, "job": cap(key), "reason": f"take/insert {item} on {name} {pos} x{len(idx)}"},
+                len(idx),
+            )
     tiny = defaultdict(list)
     for i, (tick, key, a) in enumerate(actions):
         count = a.get("count")
@@ -167,7 +171,16 @@ def analyse(root: Path) -> dict:
             tiny[(key, a.get("type"), a.get("item"), str(a.get("reason"))[:60])].append(i)
     for (key, kind, item, reason), idx in tiny.items():
         if len(idx) >= TINY_MIN:
-            w.add("action_loop", sum(spans[i] for i in idx), {"tick": actions[idx[0]][0], "job": cap(key), "reason": f"{len(idx)}x {kind} {item} count<={TINY_COUNT}: {reason}"}, len(idx))
+            w.add(
+                "action_loop",
+                sum(spans[i] for i in idx),
+                {
+                    "tick": actions[idx[0]][0],
+                    "job": cap(key),
+                    "reason": f"{len(idx)}x {kind} {item} count<={TINY_COUNT}: {reason}",
+                },
+                len(idx),
+            )
 
     # --- critical membership (10 s samples, the critical_path tool's rule) -----
     critical_at = {}
@@ -181,7 +194,15 @@ def analyse(root: Path) -> dict:
         reason = str(a.get("reason") or "")
         if _hand(a) and last_critical_build:
             if (tick - last_critical_build[0]) / TICKS <= CRITICAL_BUILD_WINDOW and key not in crit:
-                w.add("hand_logistics_during_critical", spans[i], {"tick": tick, "job": cap(key), "reason": f"{reason[:60]} while {cap(last_critical_build[1])} builds"})
+                w.add(
+                    "hand_logistics_during_critical",
+                    spans[i],
+                    {
+                        "tick": tick,
+                        "job": cap(key),
+                        "reason": f"{reason[:60]} while {cap(last_critical_build[1])} builds",
+                    },
+                )
 
     # --- slow construction ------------------------------------------------------
     per_job = defaultdict(lambda: [0, 0.0, None])
@@ -196,15 +217,28 @@ def analyse(root: Path) -> dict:
             lost = seconds - builds * TARGET_BUILD_SECONDS
             if lost > 0:
                 rate = builds / max(seconds / 60.0, 1e-9)
-                w.add("slow_construction", lost, {"tick": first, "job": cap(key), "reason": f"{builds} entities in {seconds:.0f} actor-s ({rate:.1f}/actor-min)"})
+                w.add(
+                    "slow_construction",
+                    lost,
+                    {
+                        "tick": first,
+                        "job": cap(key),
+                        "reason": f"{builds} entities in {seconds:.0f} actor-s ({rate:.1f}/actor-min)",
+                    },
+                )
 
     # --- lab idle -----------------------------------------------------------
     lab = cp.lab_idle(run, 0, end)
     if lab.get("lab_idle_seconds"):
-        w.add("lab_idle", lab["lab_idle_seconds"], {"tick": int(lab["from_minute"] * 3600), "job": "lab", "reason": f"{lab['labs_built']} labs built"})
+        w.add(
+            "lab_idle",
+            lab["lab_idle_seconds"],
+            {"tick": int(lab["from_minute"] * 3600), "job": "lab", "reason": f"{lab['labs_built']} labs built"},
+        )
 
     # --- slices: statuses over time -------------------------------------------
     slices = [s for s in run.slices if isinstance(s.get("tick"), int)]
+
     def waits_at(tick):
         best = None
         for s in slices:
@@ -213,7 +247,11 @@ def analyse(root: Path) -> dict:
                 break
         if best is None:
             return ""
-        rs = [f"{cap(k)}: {str(v.get('reason'))[:50]}" for k, v in (best.get("jobs") or {}).items() if v.get("status") in ("waiting", "blocked")]
+        rs = [
+            f"{cap(k)}: {str(v.get('reason'))[:50]}"
+            for k, v in (best.get("jobs") or {}).items()
+            if v.get("status") in ("waiting", "blocked")
+        ]
         return "; ".join(rs[:3])
 
     # --- actor idle and stalled tail ----------------------------------------------
@@ -224,7 +262,11 @@ def analyse(root: Path) -> dict:
     if actions:
         tail = (end - actions[-1][0]) / TICKS
         if tail > SPAN_CAP:
-            w.add("run_stalled", tail, {"tick": actions[-1][0], "job": "-", "reason": waits_at(actions[-1][0] + 1) or "no slice"})
+            w.add(
+                "run_stalled",
+                tail,
+                {"tick": actions[-1][0], "job": "-", "reason": waits_at(actions[-1][0] + 1) or "no slice"},
+            )
 
     # --- long waits per (capability, reason) ------------------------------------
     # Upkeep (fuel, collect, feed) by a waiting job is not progress on what it waits for.
@@ -300,7 +342,12 @@ def analyse(root: Path) -> dict:
                 blocked_s = 0.0
                 if ticks and retries:
                     blocked_s = (max(retries) - min(ticks)) / TICKS
-                w.add("repeated_block", max(0.0, blocked_s), {"tick": min(ticks) if ticks else None, "job": cap(key), "reason": f"{n}x {reason[:100]}"}, n)
+                w.add(
+                    "repeated_block",
+                    max(0.0, blocked_s),
+                    {"tick": min(ticks) if ticks else None, "job": cap(key), "reason": f"{n}x {reason[:100]}"},
+                    n,
+                )
 
     # Dispatch latency of on-path roadmap steps only (a fixed priority keeps a step off the path on purpose):
     # ready = the later of every `requires` capability's and every `after` step's first success.
@@ -329,7 +376,15 @@ def analyse(root: Path) -> dict:
         latency = (submitted - max(ready)) / TICKS
         if latency > DISPATCH_SLACK:
             names = ", ".join(list(requires) + list(step.after))
-            w.add("dispatch_latency", latency - DISPATCH_SLACK, {"tick": max(ready), "job": step.id, "reason": f"submitted {latency:.0f}s after {names} were done (research gates not checked)"})
+            w.add(
+                "dispatch_latency",
+                latency - DISPATCH_SLACK,
+                {
+                    "tick": max(ready),
+                    "job": step.id,
+                    "reason": f"submitted {latency:.0f}s after {names} were done (research gates not checked)",
+                },
+            )
 
     # --- rework --------------------------------------------------------------
     built = {}
@@ -342,7 +397,15 @@ def analyse(root: Path) -> dict:
         elif a.get("type") == "mine" and (a.get("name"), pos) in built:
             btick, bi, bkey = built.pop((a.get("name"), pos))
             if (tick - btick) / TICKS <= REWORK_WINDOW:
-                w.add("rework", spans[bi] + spans[i], {"tick": btick, "job": cap(bkey), "reason": f"{a.get('name')} at {pos} built, mined {(tick - btick) / TICKS:.0f}s later by {cap(key)}: {str(a.get('reason'))[:60]}"})
+                w.add(
+                    "rework",
+                    spans[bi] + spans[i],
+                    {
+                        "tick": btick,
+                        "job": cap(bkey),
+                        "reason": f"{a.get('name')} at {pos} built, mined {(tick - btick) / TICKS:.0f}s later by {cap(key)}: {str(a.get('reason'))[:60]}",
+                    },
+                )
 
     return {"run": str(root), "seed": seed, "end_minute": round(end / 3600, 1), "waste": w.as_dict()}
 
@@ -411,14 +474,18 @@ def main(argv=None) -> int:
             f"{ex.get('job')}: {str(ex.get('reason'))[:90]}"
         )
         for cause in row["causes"][:3]:
-            print(f"{'':34s}{cause['seconds']:>6}s {cause['runs']:>2} runs x{cause['count']:<4} {cause['job']}: {cause['reason']}")
+            print(
+                f"{'':34s}{cause['seconds']:>6}s {cause['runs']:>2} runs x{cause['count']:<4} {cause['job']}: {cause['reason']}"
+            )
     if len(results) > 1:
         return 0
     print("top items per type:")
     for kind, row in results[0]["waste"].items():
         print(f"  {kind} {row['seconds']}s x{row['count']}")
         for item in row["top"]:
-            print(f"      {item['seconds']:>5}s @{round((item.get('tick') or 0) / 3600, 1)}m {item['job']}: {str(item['reason'])[:110]}")
+            print(
+                f"      {item['seconds']:>5}s @{round((item.get('tick') or 0) / 3600, 1)}m {item['job']}: {str(item['reason'])[:110]}"
+            )
     return 0
 
 
