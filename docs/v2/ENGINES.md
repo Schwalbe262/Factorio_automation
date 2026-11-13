@@ -1,5 +1,21 @@
 # Automatic engines
 
+Planned world (site service + planned bus, no `engine-production.json`):
+`EngineProduction(..., rows=ProductionRows)` hands over to a generic `produce`
+row `{"item": "engine-unit", "rate_per_minute": 6}` (`planned_products.py`).
+`production_layout` designs it from the recipe tree: steel is sourced (the
+planned steel block's free board output port, routed and recorded as a
+connection with `demand_per_minute`), gears and pipes are made in-line by twin
+sub-rows sharing one iron input belt (one planned-bus tap); the gear row is
+the pipe row mirrored, its belt side-loads onto the other lane of the mixed
+belt that runs straight into the engine row's far input (`audit_line` checks
+the lanes). The engine row reserves as many machine slots again as it builds;
+proof = the produce proof over all three rows plus stock in the chest. A
+locked recipe waits (`planned_products.step`). Not on this path yet:
+`engine_capacity` (dev-map `engine_capacity.py`), chemical science's engine
+input (it reads `engine-production.json`), defense coverage. The rest of this
+file is the development-map path.
+
 `EngineProduction(game, builder, catalog, perimeter, *, bus_factory=None,
 science=None, green=None, tap=None, steel=None)` exposes `prepare(obs)`,
 `step(obs)` and `proof(obs)`. The optional components keep existing bus and steel

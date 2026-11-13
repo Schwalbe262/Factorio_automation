@@ -573,6 +573,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed: list[dict] = capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit)]
     proposed += produce_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     proposed += smelting_capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    proposed += steel_capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     from .early_start import early_ready
     from .supply_cell import supply_cell_nodes  # temporary hand-fed cell: build once, retire once
 
@@ -892,6 +893,68 @@ def smelting_capacity_nodes(jobs, queue_nodes, observation, capabilities) -> lis
             }
         )
     return nodes
+
+
+STEEL_CAPACITY = "steel_capacity"
+
+
+def steel_capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
+    """``steel_capacity`` nodes when consumers claim most of the planned steel block's output.
+
+    Same trigger as ``smelting_capacity_nodes``: reads the receipt's
+    ``furnace_block_claims`` (``planned_furnaces.furnace_block_claims``: built
+    and full nameplate, declared demand on the product port); grows when the
+    claims reach ``SMELTING_GROW_AT`` of the built rate, to the claims times
+    ``SMELTING_HEADROOM`` capped by the reserved slots. One open or stalled
+    row at a time; a full block proposes nothing.
+    """
+    if STEEL_CAPACITY not in capabilities:
+        return []
+    succeeded = {job.get("capability") for job in jobs if job.get("status") == "succeeded"}
+    if not set(capabilities[STEEL_CAPACITY].get("requires", [])) <= succeeded:
+        return []
+    claims = observation.get("furnace_block_claims")
+    rows = claims.get("blocks") if isinstance(claims, Mapping) else None
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, Mapping) or row.get("kind") != "steel":
+            continue
+        values = [
+            row.get(k)
+            for k in ("nominal_capacity_per_minute", "full_block_capacity_per_minute", "claimed_port_demand_per_minute")
+        ]
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in values):
+            continue
+        nominal, full, claimed = (float(v) for v in values)
+        if nominal <= 0 or claimed < nominal * SMELTING_GROW_AT or nominal >= full:
+            continue
+        target = round(min(full, claimed * SMELTING_HEADROOM), 1)
+        if target <= nominal:
+            continue
+
+        def covers(r):
+            parameters = r.get("parameters")
+            if r.get("capability") != STEEL_CAPACITY or not isinstance(parameters, Mapping):
+                return False
+            rate = parameters.get("rate_per_minute")
+            done = isinstance(rate, (int, float)) and not isinstance(rate, bool) and rate >= target
+            return r.get("status") != "succeeded" or done
+
+        if any(covers(r) for r in list(jobs) + list(queue_nodes)):
+            continue
+        return [
+            {
+                "id": f"{NODE_PREFIX}steel_capacity_{int(target)}",
+                "capability": STEEL_CAPACITY,
+                "parameters": {"rate_per_minute": target},
+                "priority": SMELTING_CAPACITY_PRIORITY,
+                "depends_on": [],
+                "reason": (
+                    f"consumers claim {claimed:g}/min of steel, block nominal {nominal:g}/min; "
+                    f"grow in reserved slots to {target:g}/min (block full at {full:g})"
+                )[:300],
+            }
+        ]
+    return []
 
 
 def _net_rate(observation: Mapping, item: str) -> float | None:

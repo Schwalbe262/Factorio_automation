@@ -21,7 +21,7 @@ from factorio_agent.core.deterministic_builder import _plan
 from .manufacturing import connect_power_groups
 from .planning import overlap, preflight
 from . import planned_tap
-from .production_layout import audit_line, design_line, input_demand
+from .production_layout import audit_line, design_line, input_demand, rows
 from .production_sources import resolve
 from .site.fit import orientations
 from .site.placement import block_wants, settle
@@ -119,14 +119,16 @@ def _routes(game, builder, obs, board, line, owner, product, block=None, catalog
         routes.append(route)
         entities = merge_entities(entities, route["entities"])
         sources.append({"item": port["item"], "kind": found["kind"], "block": found["block"]})
-        connections.append(
-            {
-                "item": port["item"],
-                "source": found["source"]["position"],
-                "destination": port["position"],
-                "owner": owner,
-            }
-        )
+        connection = {
+            "item": port["item"],
+            "source": found["source"]["position"],
+            "destination": port["position"],
+            "owner": owner,
+        }
+        if catalog is not None:
+            # Declared claim on the source port (planned_furnaces.furnace_block_claims reads it).
+            connection["demand_per_minute"] = round(input_demand(catalog, line, port["item"]), 3)
+        connections.append(connection)
     return {
         "ok": True,
         "entities": entities,
@@ -177,7 +179,7 @@ def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner:
             if not routed["ok"]:
                 failures.append({"allocation": block.name, **routed})
                 continue
-            groups = [line["main"]] + ([line["sub"]] if line["sub"] else [])
+            groups = rows(line)
             power = connect_power_groups(game, builder, obs, groups, routed["entities"])
             if not power.get("ok"):
                 failures.append({"allocation": block.name, "reason": power.get("reason", "power_failed")})

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from factorio_agent.core.world_catalog import _yield
+from . import planned_products
 from .board import entity
 from .bus_tap import BusTap, reconstruct_bus
 from .compact_green import _machine_at, _spread, _transport
@@ -378,9 +379,22 @@ def _plan_cells(builder, plan):
 
 class EngineProduction:
     def __init__(
-        self, game, builder, catalog, perimeter, *, bus_factory=None, science=None, green=None, tap=None, steel=None
+        self,
+        game,
+        builder,
+        catalog,
+        perimeter,
+        *,
+        bus_factory=None,
+        science=None,
+        green=None,
+        tap=None,
+        steel=None,
+        rows=None,
     ):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
+        # Planned world: a generic produce row (planned_products.py); the rest is the development map.
+        self.rows = rows
         self.tap = (
             tap
             if tap is not None
@@ -1214,7 +1228,16 @@ return {ok=true}"""
             _atomic_json(path, board)
         return None
 
+    def planned(self, obs):
+        """The produce rows on a planned world without a development-map engine state, else None."""
+        if self.state or not planned_products.active(self.rows, obs, planned_products.ENGINE_ROW["item"]):
+            return None
+        return self.rows
+
     def step(self, obs):
+        rows = self.planned(obs)
+        if rows is not None:
+            return planned_products.step(rows, obs, planned_products.ENGINE_ROW)
         if not self.state:
             ready = self.prepare(obs)
             if not ready.get("ok"):
@@ -1312,6 +1335,9 @@ return {ok=true}"""
 
     def proof(self, obs):
         self.last_proof_failure = None
+        rows = self.planned(obs)
+        if rows is not None:
+            return rows.proof(obs, dict(planned_products.ENGINE_ROW))
         if not self.state or not self._identity(obs, self.state) or self.state.get("phase") == "tap":
             return None
         if not self._preserved_foreign_valid(obs):
