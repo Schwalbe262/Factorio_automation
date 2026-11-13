@@ -10,8 +10,10 @@ from types import SimpleNamespace
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from .board import entity
-from .manufacturing import green_core, raw_demand, connect_power_groups, lab_green_entry
+from .manufacturing import GREEN_CORE_DEPTH, GREEN_CORE_LENGTH, green_core, raw_demand
+from .manufacturing import connect_power_groups, lab_green_entry, lab_green_entry_outside
 from .planning import preflight, overlap, survey_slots
+from .science import nominal_plate_supply
 from .smelting import merge_entities
 from .site.placement import allocated_placements, settle
 from .site.transform import Transform, apply as apply_transform, in_canonical, plan_transform
@@ -27,7 +29,12 @@ def validate_rate(parameters):
         raise ValueError("green science target must be finite in (0,30]")
 
 
-GREEN_BLOCK = (54, 54)  # green core reserved area (54 x 53) padded to a square for turning
+# Narrow green core footprint (canonical x across, y along its plate edge)
+# and the district block it needs: GREEN_CORE_LENGTH along the bus by
+# GREEN_CORE_DEPTH deep, so the west (plate) edge can face the bus.
+GREEN_FOOTPRINT = (GREEN_CORE_DEPTH, GREEN_CORE_LENGTH)
+GREEN_BLOCK = (GREEN_CORE_LENGTH, GREEN_CORE_DEPTH)
+# Development-map anchors, only for a controller built without a site service.
 LEGACY_GREEN_ANCHORS = (
     (40.5, -72.5),
     (56.5, -72.5),
@@ -40,23 +47,31 @@ LEGACY_GREEN_ANCHORS = (
 
 
 def planned_green_cores(site, world_id, count):
-    """Allocator blocks for the green core, turned so plate inputs face the bus edge.
+    """Allocator blocks for the narrow green core, turned so plate inputs face the bus edge.
 
-    The core's reserved area is ``[x - 10.5, x + 43.5) x [y - 10.5, y + 42.5)``
-    for anchor ``(x, y)``; the block square starts at its north-west corner.
-    With the default 48-tile district depth no block is deep enough, so this
-    returns nothing and the legacy anchors are used.
+    The narrow core (``green_core(..., narrow=True)``) reserves
+    ``GREEN_FOOTPRINT`` from its north-west corner with both plate inputs on
+    its west edge, so the block is requested ``GREEN_CORE_LENGTH`` along the
+    bus by ``GREEN_CORE_DEPTH`` deep and the fit turns the west edge to the bus.
+    Empty when the plan's district strips are shallower or the bus is full.
     """
 
     def build(x0, y0):
-        return green_core(x0 + 10.5, y0 + 10.5, count)
+        return green_core(x0 + 10.5, y0 + 10.5, count, narrow=True)
 
     def inputs(core):
         return [p for p in core["ports"] if p["direction"] == "input"]
 
     found = []
     placements = allocated_placements(
-        site, world_id, kind="science", name="logistic_science", size=GREEN_BLOCK, build=build, inputs=inputs
+        site,
+        world_id,
+        kind="science",
+        name="logistic_science",
+        size=GREEN_FOOTPRINT,
+        block=GREEN_BLOCK,
+        build=build,
+        inputs=inputs,
     )
     for allocation, placement in placements:
         core = placement.plan
@@ -92,6 +107,10 @@ class LogisticScience:
         count = math.ceil(parameters["rate_per_minute"] * 1.15 / each)
         if count > 7:
             return {"ok": False, "reason": "green_science_row_exceeds_seven_slots"}
+        sized = self.supply_sized_count(count, each)
+        if not sized.get("ok"):
+            return sized
+        count = sized["count"]
         demand = raw_demand(self.catalog, "logistic-science-pack", count * each)
         for recipe, equivalent in demand["machine_equivalents"].items():
             if recipe != "logistic-science-pack" and equivalent > 1:
@@ -103,11 +122,18 @@ class LogisticScience:
         # The branch is defined in the district's canonical frame (plates
         # leaving east) and turned like the district (identity when unturned).
         turn = Transform.from_dict(source_plan.get("site_transform"))
+        canonical = apply_transform(turn.inverse(), {"reserved_area": source_plan["reserved_area"]})
+        district_x1 = canonical["reserved_area"][1][0]  # east edge, where the plate ports sit
+        taken = self.builder._occupied_by_plan(obs["entities"] + source_plan["entities"])
+
+        def mapped(x, y):
+            return xy({"position": transform_point(turn, {"x": x, "y": y})})
+
         for p in source_plan["ports"]:
             if p["item"] not in ("iron-plate", "copper-plate"):
                 continue
             x, y = xy(apply_transform(turn.inverse(), p))
-            anchor = xy({"position": transform_point(turn, {"x": x - 1, "y": y})})
+            anchor = mapped(x - 1, y)
             heading = turn.direction(4)
             old = next(
                 (
@@ -121,15 +147,25 @@ class LogisticScience:
                 return {"ok": False, "reason": "owned_plate_branch_anchor_missing", "item": p["item"]}
             if not any(e["name"] == "transport-belt" and xy(e) == xy(old) for e in source_plan["entities"]):
                 return {"ok": False, "reason": "plate_branch_anchor_not_owned"}
+            # The splitter's second lane runs east beside the port row until
+            # its first tile outside the district reservation: a route may
+            # only start from a registered, built port inside a reservation.
+            stub = [x]
+            while stub[-1] - 0.49 < district_x1:
+                stub.append(stub[-1] + 1)
+            side = next(
+                (s for s in (-1, 1) if not any(mapped(bx, y + s) in taken for bx in [x - 1, *stub])),
+                None,
+            )
+            if side is None:
+                return {"ok": False, "reason": "plate_branch_lane_blocked", "item": p["item"]}
             removed.append(old)
             branches += apply_transform(
                 turn,
-                [
-                    dict(entity("splitter", x - 1, y - 0.5, 4), _width=2, _height=1),
-                    entity("transport-belt", x, y - 1, 0),
-                ],
+                [dict(entity("splitter", x - 1, y + side * 0.5, 4), _width=2, _height=1)]
+                + [entity("transport-belt", bx, y + side, 4) for bx in stub],
             )
-            sources[p["item"]] = apply_transform(turn, dict(p, position={"x": x, "y": y - 1}, facing=0))
+            sources[p["item"]] = apply_transform(turn, dict(p, position={"x": stub[-1], "y": y + side}, facing=4))
         ignored = {e["unit_number"] for e in removed}
         source_plan["entities"] = [
             e for e in source_plan["entities"] if not any(e["name"] == r["name"] and xy(e) == xy(r) for r in removed)
@@ -142,7 +178,11 @@ class LogisticScience:
             },
         )
         labs_plan = self.science.state["labs"]
-        entry = in_canonical(labs_plan, lab_green_entry)
+        if self.site is not None:
+            entry = in_canonical(labs_plan, lab_green_entry_outside)
+        else:  # development-map lab rows without a board reservation contract
+            entry = in_canonical(labs_plan, lab_green_entry)
+            entry["pairs"] = [entry["pair"]]
         lab_heading = plan_transform(labs_plan).direction(12)
         jx, jy = xy({"position": entry["join"]})
         join = next(
@@ -157,15 +197,22 @@ class LogisticScience:
             return {"ok": False, "reason": "straight_lab_lane_join_anchor_missing"}
         lab_port = entry["port"]
         join_es = entry["entities"]
-        join_pair = entry["pair"]
+        join_pairs = entry["pairs"]
         virtual = {**obs, "entities": [e for e in obs["entities"] if e.get("unit_number") not in ignored]}
         adapter = SimpleNamespace(
             _occupied_by_plan=self.builder._occupied_by_plan,
             can_place=lambda es: preflight(self.game, self.builder, obs, es, ignored_units=ignored),
         )
         candidates = []
-        planned = planned_green_cores(self.site, obs["world_id"], count)
-        for core in planned or [green_core(x, y, count) for x, y in LEGACY_GREEN_ANCHORS]:
+        # Sites come from the master plan; the fixed development-map anchors
+        # are only for a controller built without a site service.
+        if self.site is not None:
+            cores = planned_green_cores(self.site, obs["world_id"], count)
+            if not cores:
+                return self.no_allocation(obs["world_id"])
+        else:
+            cores = [green_core(x, y, count) for x, y in LEGACY_GREEN_ANCHORS]
+        for core in cores:
             if not any(overlap(core["reserved_area"], b["reserved_area"]) for b in board["blocks"].values()):
                 candidates.append(core)
         survey = survey_slots(self.game, [[c["reserved_area"]] for c in candidates])
@@ -216,7 +263,7 @@ class LogisticScience:
                 failures.append(check)
                 continue
             obstacles.update({(e["name"], *xy(e)): e for e in check["clear_obstacles"]})
-            pairs = [join_pair] + [p for r in routes for p in r["underground_pairs"]]
+            pairs = join_pairs + [p for r in routes for p in r["underground_pairs"]]
             plan = _plan(
                 es,
                 core["ports"],
@@ -244,6 +291,53 @@ class LogisticScience:
             }
         settle(self.site, obs["world_id"], "logistic_science", None)
         return {"ok": False, "reason": "no_green_science_site_with_clean_connections", "failures": failures}
+
+    def supply_sized_count(self, count, each):
+        """Green machines the connected plates can feed, at most ``count``.
+
+        The splitter branch shares each district plate belt with red science:
+        green may use what red's row leaves, and never less than the half a
+        saturated splitter hands each branch. Like red science, the row is
+        sized down to that budget; only a budget below one machine blocks.
+        """
+        root = self.path.parent
+        mining = json.loads((root / "mining-outposts.json").read_text(encoding="utf-8"))
+        smelting = self.smelting.state
+        if mining.get("world_id") != smelting.get("world_id"):
+            return {"ok": False, "reason": "green_raw_supply_world_changed"}
+        per_machine = raw_demand(self.catalog, "logistic-science-pack", each)["raw_items_per_minute"]
+        red = raw_demand(self.catalog, "automation-science-pack", self.science.state.get("nominal_machine_rate", 0))
+        available = nominal_plate_supply(self.catalog, mining, smelting, per_machine)
+        budget = {
+            item: max(available[item] - red["raw_items_per_minute"].get(item, 0), available[item] / 2)
+            for item in per_machine
+        }
+        fit = min(count, *(int(budget[item] / rate + 1e-9) for item, rate in per_machine.items()))
+        if fit < 1:
+            item = min(per_machine, key=lambda name: budget[name] / per_machine[name])
+            return {
+                "ok": False,
+                "reason": "green_science_needs_connected_supply_headroom",
+                "item": item,
+                "needed": per_machine[item],
+                "available_nominal": budget[item],
+            }
+        return {"ok": True, "count": fit}
+
+    def no_allocation(self, world_id):
+        """Blocked reason when the master plan has no block for the core."""
+        try:
+            depth = self.site.plan(world_id).district_depth
+        except Exception:  # noqa: BLE001 - the reason is diagnostic only
+            depth = None
+        reason = "green_science_needs_deeper_district" if depth is not None and depth < GREEN_CORE_DEPTH else None
+        return {
+            "ok": False,
+            "reason": reason or "no_green_science_district_block",
+            "block_along": GREEN_CORE_LENGTH,
+            "block_depth": GREEN_CORE_DEPTH,
+            "district_depth": depth,
+        }
 
     def repair_lab_join(self, obs):
         """Migrate an early development join that omitted the upstream lab."""
@@ -421,8 +515,13 @@ class LogisticScience:
             self.state["commissioned_lab_units"] = lab_units
         if self.state.get("commissioned_lab_units") != lab_units:
             return None
+        turn = plan_transform(self.science.state["labs"])
+        heading = turn.direction(12)
         belts = [e for e in self.science.state["labs"]["entities"] if e["name"] == "transport-belt"]
-        payload = json.dumps(json.dumps({"join": join, "belts": belts}, separators=(",", ":")))
+        # Green side-loads onto the lab belt's left lane in the canonical
+        # (westbound) frame; a mirrored lab row carries it on the right lane.
+        green_lane, red_lane = ("right", "left") if turn.mirror else ("left", "right")
+        payload = json.dumps(json.dumps({"join": join, "belts": belts, "heading": heading}, separators=(",", ":")))
         lane = self.game.query(
             """
 local args=helpers.json_to_table("""
@@ -431,7 +530,7 @@ local args=helpers.json_to_table("""
 if not e or e.unit_number~=spec.unit_number or e.direction~=spec.direction then return {ok=false} end
 local result={ok=true,tick=game.tick,left={},right={}}
 for _,b in ipairs(args.belts) do
- local belt=target(b.position,b.name);if not belt or belt.direction~=12 then return {ok=false} end
+ local belt=target(b.position,b.name);if not belt or belt.direction~=args.heading then return {ok=false} end
  for _,row in ipairs({{"left",defines.transport_line.left_line},{"right",defines.transport_line.right_line}}) do
   for _,v in pairs(belt.get_transport_line(row[2]).get_contents()) do result[row[1]][v.name]=(result[row[1]][v.name] or 0)+v.count end
  end
@@ -439,11 +538,12 @@ end
 return result
 """
         )
-        if not lane.get("ok") or not isinstance(lane.get("left"), dict):
+        if not lane.get("ok") or not isinstance(lane.get(green_lane), dict):
             return None
-        if set(lane["left"]) - {"logistic-science-pack"} or set(lane.get("right", {})) - {"automation-science-pack"}:
+        mixed = set(lane[green_lane]) - {"logistic-science-pack"}
+        if mixed or set(lane.get(red_lane) or {}) - {"automation-science-pack"}:
             return None
-        if lane["left"].get("logistic-science-pack", 0) > 0:
+        if lane[green_lane].get("logistic-science-pack", 0) > 0:
             self.state["lab_lane_evidence"] = dict(lane, receiver_unit=join["unit_number"])
             _atomic_json(self.path, self.state)
         recent = self.state.get("lab_lane_evidence")

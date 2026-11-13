@@ -9,8 +9,8 @@ orientation per block, in allocator order. The caller keeps the block it
 builds with :func:`settle` and every other candidate is released.
 
 Every failure (no service, survey failure, bus exhausted, footprint deeper
-than the district strips) returns an empty list so callers fall back to
-their older candidate lists.
+than the district strips) returns an empty list; callers with a site
+service report that as their blocked reason.
 """
 
 from __future__ import annotations
@@ -48,16 +48,19 @@ def allocated_placements(
     outputs=lambda plan: (),
     returns_to_bus=False,
     count=DEFAULT_COUNT,
+    block=None,
 ):
     """Oriented template placements on fresh allocations ``<name>#<i>``.
 
     ``size`` is the template footprint ``(w, h)``; blocks are requested as
     ``w`` along the bus by ``h`` deep (a quarter turn of the template fits
-    whichever way the bus runs).
+    whichever way the bus runs). ``block=(along, depth)`` requests another
+    block shape of the same area, e.g. ``(h, w)`` for a template whose
+    input edge is its ``h`` side.
     """
     if site is None:
         return []
-    w, h = size
+    w, h = block or size
     try:
         blocks = site.allocate_candidates(
             kind, w, h, name=name, count=count, returns_to_bus=returns_to_bus, world_id=world_id

@@ -236,7 +236,12 @@ prerequisite-ready costs; unsupported science tiers block explicitly.
 
 Green science uses seven science assemblers plus local gear, cable, circuit,
 belt and inserter machines. The requested30/minute has35/minute nominal machine
-capacity. It consumes normally belt-fed plates and joins the other lane of the
+capacity, sized down (like red science) to the plates the district can spare:
+what red's row leaves, but at least the half of each plate belt its splitter
+branch hands over; below one machine it blocks with
+`green_science_needs_connected_supply_headroom`. On a site plan the narrow
+core (48 deep, 54 along the bus) takes a district block with its plate edge
+on the bus. It consumes normally belt-fed plates and joins the other lane of the
 existing lab belt upstream of all eight pickups. Commissioning requires actual
 products, powered machines, native routes and evidence that every lab received
 green; it does not establish a sustained rate. Research supports red and green

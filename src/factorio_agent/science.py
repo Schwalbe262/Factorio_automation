@@ -97,6 +97,27 @@ def science_block(x0, y0, count):
     return {"science": science_row(x0 + 8.5, y0 + 22.5, count), "labs": lab_row(x0 + 1.5, y0 + 8.5)}
 
 
+def nominal_plate_supply(catalog, mining, smelting, items):
+    """Nominal plates per minute the district delivers for each of ``items``.
+
+    The smaller of the ready mining banks' ore rate and the furnace bank's
+    smelting rate (``mining-outposts.json`` / ``smelting-district.json`` states).
+    """
+    available = {}
+    for item in items:
+        bank = next(b for b in smelting["banks"] if b["product"] == item)
+        ore = sum(
+            b["nominal_rate_per_minute"]
+            for b in mining["banks"]
+            if b.get("ready") and b["plan"]["resource"] == bank["resource"]
+        )
+        plates = (
+            bank["count"] * catalog.entities["stone-furnace"]["crafting_speed"] * 60 / catalog.recipes[item]["energy"]
+        )
+        available[item] = min(ore, plates)
+    return available
+
+
 def legacy_science_candidates(count):
     """The development-map candidate list, used when no master plan site is available."""
     found = []
@@ -169,21 +190,7 @@ class AutomaticScience:
             "iron-plate": nominal_each * ingredients["iron-gear-wheel"] * iron_per_gear,
             "copper-plate": nominal_each * ingredients["copper-plate"],
         }
-        available = {}
-        for item in per_machine:
-            bank = next(b for b in smelting["banks"] if b["product"] == item)
-            ore = sum(
-                b["nominal_rate_per_minute"]
-                for b in mining["banks"]
-                if b.get("ready") and b["plan"]["resource"] == bank["resource"]
-            )
-            plates = (
-                bank["count"]
-                * self.catalog.entities["stone-furnace"]["crafting_speed"]
-                * 60
-                / self.catalog.recipes[item]["energy"]
-            )
-            available[item] = min(ore, plates)
+        available = nominal_plate_supply(self.catalog, mining, smelting, per_machine)
         # Size the row to what the connected supply carries instead of blocking:
         # a smaller row that runs beats a full row that cannot be planned.
         count = min(count, *(int(available[item] / rate + 1e-9) for item, rate in per_machine.items()))
