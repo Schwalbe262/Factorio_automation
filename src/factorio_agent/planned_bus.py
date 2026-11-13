@@ -692,9 +692,17 @@ class PlannedBus:
             or state.get("phase") not in ("commission", "verified")
         ):
             return None
-        plan = effective_plan(state)
+        # Built taps only: a consumer records its tap before it cuts it in, and
+        # until then the trunk belt stays under it (a blocked row's recorded tap
+        # must not hold the bus proof).
+        plan = build_plan(state, state["plan"])
         if not underground_proof(obs, plan):
             return None
+        # A built tap that dives one lane under its branch puts that branch's
+        # belt (another item, crossing) on the dived lane's trunk tile: that tile
+        # is tap hardware now, not trunk (all-1113-2107: 4 of 12 buses waited
+        # 10-15 minutes on the crossing belt of their own produce rows' taps).
+        replaced = {_at(p) for tap in state.get("taps", []) if tap.get("built") for p in tap.get("remove", ())}
         live = {(e["name"], *xy(e)): e for e in obs["entities"]}
         for wanted in plan["entities"]:
             found = live.get((wanted["name"], *xy(wanted)))
@@ -706,7 +714,7 @@ class PlannedBus:
                 found = _splitter_over(live, wanted)
             if found is None or (wanted["name"] in BELTS and found.get("direction") != wanted.get("direction")):
                 return None
-        splitters = wanted_splitters(state)
+        splitters = wanted_splitters(dict(state, taps=[t for t in state.get("taps", []) if t.get("built")]))
         if not all(priorities_match(live.get(("splitter", *xy(s))), wanted) for s, wanted in splitters):
             return None
         bus = Bus.from_dict(state["bus"])
@@ -714,15 +722,19 @@ class PlannedBus:
         evidence = []
         for trunk in state["trunks"]:
             item = trunk["item"]
-            belts = [
-                live[("transport-belt", *_at(row["position"]))]
+            tiles = [
+                _at(row["position"])
                 for row in trunk_segments(bus, lanes[trunk["lane"]], trunk["length"])
-                if ("transport-belt", *_at(row["position"])) in live
+                if _at(row["position"]) not in replaced
             ]
+            if not tiles:
+                return None
+            belts = [live[("transport-belt", *tile)] for tile in tiles if ("transport-belt", *tile) in live]
             contents = [e.get("belt_inventory") or {} for e in belts]
             if any(set(c) - {item} for c in contents):
                 return None
-            tail = live.get(("transport-belt", *_at(trunk["tail"])))
+            # The last trunk tile still a trunk belt (a tap may have replaced the tail tile).
+            tail = live.get(("transport-belt", *tiles[-1]))
             if tail is None or (tail.get("belt_inventory") or {}).get(item, 0) < 1:
                 return None
             evidence.append(
