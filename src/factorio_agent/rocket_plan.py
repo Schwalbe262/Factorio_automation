@@ -584,7 +584,7 @@ def _produce_row(catalog, recipe, key, belt_sources, belt_output, *, fluid=None)
     if fluid:
         layout["fluid"] = fluid
         parameters["fluid_source"] = fluid_source_key(key[1], fluid)
-        row["note"] = "fluid row: header layout ready, fluid input routing blocks (production_row_fluid_input_unrouted)"
+        row["note"] = "fluid row: typed pipe from fluid_source to the header port (production_fluids)"
     return row
 
 
