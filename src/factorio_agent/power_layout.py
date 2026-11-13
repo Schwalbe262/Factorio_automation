@@ -167,6 +167,19 @@ class V2FactoryBuilder(FactoryBuilder):
             self.paid_burner_seed = PaidBurnerSeed(self.game, self.catalog)
         return self.paid_burner_seed.step(observation, key, entity, count, bootstrap=self.bootstrap, move=self._move)
 
+    def _power_plan_clear(self, entities):
+        """No power plan entity on ore or a mining reservation (the policy ``ensure_plan`` enforces).
+
+        Fleet all-1113-2332 seed 1561968568: the boiler's coal stub belt was planned on ore
+        (native ``can_place`` allows it) and ``power`` stayed blocked from 4 to 45 game minutes.
+        """
+        from .resource_policy import resource_preflight
+
+        world = self.state.get("world_id")
+        if not world:
+            return True
+        return bool(resource_preflight(self.game, self, {"world_id": world, "entities": []}, entities).get("ok"))
+
     def _choose_coal_plan(self, power):
         """Choose a new boundary cell and complete resource-free boiler route.
 
