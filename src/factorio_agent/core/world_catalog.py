@@ -323,16 +323,20 @@ return {version=helpers.game_version, active_mods=script.active_mods,
 
     @property
     def fingerprint(self) -> str:
-        # Hashing only reads nested structures. Copy just the rows whose force
-        # availability fields are omitted, keeping every call fresh without
-        # deep-copying the complete prototype catalog.
+        # Prototype data never changes after construction (only the omitted
+        # force-availability fields do), so hash the 1.2 MB payload once: it
+        # was half of all planning time when recomputed on every identity check.
+        cached = getattr(self, "_fingerprint", None)
+        if cached is not None:
+            return cached
         data = dict(self._data)
         for table, fields in (("recipes", ("enabled",)), ("technologies", ("enabled", "researched"))):
             data[table] = {
                 name: {key: value for key, value in row.items() if key not in fields}
                 for name, row in data[table].items()
             }
-        return self._hash(data)
+        self._fingerprint = self._hash(data)
+        return self._fingerprint
 
     @property
     def state_fingerprint(self) -> str:
