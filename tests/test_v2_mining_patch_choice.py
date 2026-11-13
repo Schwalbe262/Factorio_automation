@@ -311,7 +311,8 @@ end
 function pos(p) return {x=p.x,y=p.y} end
 """
         )
-        found = lua.execute(snippet + " return resources")
+        # As the RCON client sends it: one line (a Lua line comment would swallow the rest).
+        found = lua.execute(" ".join(snippet.splitlines()) + " return resources")
         position = found["iron-ore"]["position"]
         self.assertEqual((position["x"], abs(position["y"])), (25.5, 0.5))
 

@@ -480,6 +480,9 @@ return success{world_id=storage.deterministic_player.world_id,position=pos(actor
         )
 
     def observe(self, radius: float = 384) -> dict[str, Any]:
+        # Patch seeds (``resources``) come from growing search rings: one capped search over the
+        # whole radius returns an arbitrary 2000 tiles, and with more ore than that the "nearest"
+        # tile could lie on a far, uncharted patch (seed 3442106081, fleet all-1113-2155).
         started = time.perf_counter()
         observation = self.query(
             OBSERVE_UNDERGROUND_LUA
@@ -544,8 +547,6 @@ for name,r in pairs(f.recipes) do if r.enabled then enabled[name]=true end end
 local resources={}
 for _,name in ipairs({'iron-ore','copper-ore','coal','stone','crude-oil'}) do
  local best=nil;local dist=math.huge
- -- Growing rings: a capped search over the whole radius returns an arbitrary 2000 tiles, and with
- -- more ore than that the "nearest" can lie on a far, uncharted patch (seed 3442106081).
  for _,r in ipairs({"""
             + ",".join(str(float(r)) for r in sorted({min(r, float(radius)) for r in (48, 96, 192, float(radius))}))
             + """}) do
