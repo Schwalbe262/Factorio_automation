@@ -475,6 +475,8 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "research_capacity": obs.get("research_capacity"),
         "research_capacity_error": obs.get("research_capacity_error"),
         "science_growth": obs.get("science_growth"),
+        # Plate throughput growth (throughput_growth.py): the autopilot reads it from this summary.
+        "throughput_growth": obs.get("throughput_growth"),
         "science_growth_error": obs.get("science_growth_error"),
         "defense_growth": obs.get("defense_growth"),
         "early_start_inputs": obs.get("early_start_inputs"),

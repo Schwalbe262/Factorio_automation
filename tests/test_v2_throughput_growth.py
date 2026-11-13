@@ -318,5 +318,16 @@ class ReceiptTests(unittest.TestCase):
         self.assertEqual(row["parameters"], {"resource": "copper-ore", "rate_per_minute": 60.0})
 
 
+class SummaryCarriesTheReceiptTests(unittest.TestCase):
+    def test_the_observe_summary_passes_the_growth_receipt_to_the_autopilot(self):
+        # Seed 2644599892: the rule decided to grow, but the summary dropped the
+        # receipt, so no node was ever proposed and the bus waited 40 minutes.
+        import inspect
+
+        from factorio_agent import jobs
+
+        self.assertIn('"throughput_growth": obs.get("throughput_growth")', inspect.getsource(jobs))
+
+
 if __name__ == "__main__":
     unittest.main()
