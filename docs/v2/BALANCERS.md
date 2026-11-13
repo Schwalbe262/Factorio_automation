@@ -31,6 +31,11 @@ An N-to-M balancer takes N belts and delivers to M belts.
 Belt balancers do not balance lanes. Lane balance is a separate small device (split a belt,
 side-load both halves back onto one belt from opposite sides).
 
+Lanes also limit what a branch gets: a side-load puts a whole feeder onto one lane, and a
+splitter then halves each lane, so side-load then split gives each branch a quarter belt. Split
+first (head-on, both lanes), side-load after. The lane flow model and the audit that checks
+every plan for this are in `LAYOUT_PRINCIPLES.md`, "Belt lanes and bandwidth".
+
 ## How they are built
 
 - 1-to-2 and 2-to-2: one splitter.

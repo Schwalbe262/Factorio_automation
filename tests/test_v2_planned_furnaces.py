@@ -201,6 +201,11 @@ class SitePlanTests(unittest.TestCase):
         self.assertLessEqual(vx * normal[0] + vy * normal[1], 0)
         self.assertEqual(state["owner"], kind.owner)
         self.assertEqual([c["owner"] for c in state["connections"]], [kind.owner, kind.owner])
+        # The flow model chose the split feed head (each row a full lane); its tunnel is a plan pair.
+        self.assertEqual(
+            (bank["feed_head"], state["bandwidth"]["head"], state["bandwidth"]["findings"]), ("split", "split", [])
+        )
+        self.assertTrue(all(p in plan["underground_pairs"] for p in bank["underground_pairs"]))
         return allocation
 
     def test_steel_block_taps_bus_iron_and_routes_dedicated_coal_on_every_orientation(self):
