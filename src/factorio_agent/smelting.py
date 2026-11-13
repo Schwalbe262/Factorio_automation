@@ -408,6 +408,20 @@ def feed_lanes_ok(lanes) -> bool:
 
 # District sources: (resource, nominal ore/min the bank must offer).
 DISTRICT_SOURCES = (("iron-ore", 60), ("copper-ore", 30), ("coal", 30))
+SEARCH_INTERRUPTIONS_PER_SITE = 2  # budget cut-offs before one candidate counts as failed
+SEARCH_FAILURES_KEPT = 12  # failure records the resumable sweep carries between passes
+
+
+def _site_key(site):
+    """A stable identity of one district candidate for the resumable sweep."""
+    import hashlib
+
+    body = json.dumps(
+        [site["area"], site.get("site_transform"), [(e["name"], *xy(e)) for e in site["entities"]]],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha1(body.encode()).hexdigest()[:16]
 
 
 def district_sources(mining):
@@ -793,11 +807,24 @@ return {ok=true,legal=legal}
         )
         if not survey.get("ok"):
             return survey
-        failures = []
+        # The search resumes where the last pass's wall-clock budget ran out:
+        # a candidate that already failed is not routed again in the same sweep
+        # (fleet auto-1113-1758: two seeds restarted the whole search for 12-15
+        # game minutes on a loaded machine and never reached the good site).
+        cursor = self._search_cursor(obs)
+        failures = list(cursor["failures"])
+        pending = None  # the candidate being evaluated; it failed when the loop moves on in budget
         for index in survey.get("legal", []):
+            if pending is not None and not budget.expired():
+                cursor["tried"].append(pending)
+                pending = None
             if budget.expired():
                 break
             site = candidates[index - 1]
+            site_key = _site_key(site)
+            if site_key in cursor["tried"]:
+                continue
+            pending = site_key
             es = site["entities"]
             routes = []
             good = True
@@ -892,6 +919,7 @@ return {ok=true,legal=legal}
                 growth_entities=[e for b in site["banks"] for e in b.get("growth_entities", [])],
                 **({"site_transform": site["site_transform"]} if "site_transform" in site else {}),
             )
+            self._save_search_cursor(None)
             return {
                 "ok": True,
                 "world_id": obs["world_id"],
@@ -904,6 +932,21 @@ return {ok=true,legal=legal}
                 # The bank ports this plan was routed from (re-plan or block when one changes).
                 "source_ports": dict(sources),
             }
+        if pending is not None:
+            if not budget.expired():
+                cursor["tried"].append(pending)
+            else:
+                # Cut short by the budget: retried first next pass, but a candidate that
+                # alone outlasts the budget twice counts as failed so the sweep moves on.
+                count = cursor["interrupted"].get(pending, 0) + 1
+                cursor["interrupted"][pending] = count
+                if count >= SEARCH_INTERRUPTIONS_PER_SITE:
+                    cursor["tried"].append(pending)
+                    failures.append({"stage": "planning_budget", "reason": "site_outlasted_planning_budget"})
+        untried = [i for i in survey.get("legal", []) if _site_key(candidates[i - 1]) not in cursor["tried"]]
+        exhausted = budget.expired() and bool(untried)
+        cursor["failures"] = failures[-SEARCH_FAILURES_KEPT:]
+        self._save_search_cursor(cursor if exhausted else None)
         stages = {
             stage: sum(f["stage"] == stage for f in failures) for stage in dict.fromkeys(f["stage"] for f in failures)
         }
@@ -918,9 +961,38 @@ return {ok=true,legal=legal}
                 "candidate_count": len(candidates),
                 "failure_stage_counts": stages,
                 "last_failure_reason": failures[-1]["reason"] if failures else "no_legal_land_site",
-                "planning_budget_exhausted": budget.expired(),
+                "planning_budget_exhausted": exhausted,
+                "sites_tried": len(cursor["tried"]),
+                "sites_untried": len(untried),
             },
         }
+
+    def _search_path(self):
+        return self.path.parent / "smelting-district-search.json"
+
+    def _search_cursor(self, obs):
+        """The resumable site sweep of this world: candidates that failed, and budget cut-offs."""
+        try:
+            cursor = json.loads(self._search_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cursor = {}
+        if not isinstance(cursor, dict) or cursor.get("world_id") != obs["world_id"]:
+            cursor = {}
+        return {
+            "world_id": obs["world_id"],
+            "tried": list(cursor.get("tried", [])),
+            "interrupted": dict(cursor.get("interrupted", {})),
+            "failures": list(cursor.get("failures", [])),
+        }
+
+    def _save_search_cursor(self, cursor):
+        """Keep the sweep while it is unfinished; a finished sweep (found or exhausted) starts afresh."""
+        path = self._search_path()
+        if cursor is None:
+            if path.exists():
+                path.unlink()
+            return
+        _atomic_json(path, cursor)
 
     def _coming(self, obs):
         from .early_start import ledger_jobs, technologies_coming

@@ -116,6 +116,62 @@ class PrepareOnPlanTests(unittest.TestCase):
         feeders = [c for c in PLAN.corridors if c.target == "smelting" and c.material in feeds and c.segments]
         self.assertEqual(len(guided), len(feeders))
 
+    def test_site_sweep_resumes_after_the_planning_budget_runs_out(self):
+        # Fleet auto-1113-1758: on a loaded machine the 20 s budget ran out every pass and
+        # the sweep restarted at the first (failing) candidate for 12-15 game minutes.
+        site = SimpleNamespace(plan=Mock(return_value=PLAN))
+        clock = {"expired": False, "calls": []}
+        good = _plan([], [], underground_pairs=[], route_metrics={"length": 5})
+
+        def belts(game, builder, obs, source, destination, *args, **kwargs):
+            clock["calls"].append(destination["position"])
+            if len(clock["calls"]) == 1:
+                return {"ok": False, "reason": "no_route"}  # first candidate fails on its own
+            if len(clock["calls"]) == 2:
+                clock["expired"] = True  # second candidate is cut short by the budget
+                return {"ok": False, "reason": "industrial_planning_budget_exhausted"}
+            return good
+
+        class Budget:
+            def __init__(self, game):
+                self.game = game
+
+            def expired(self):
+                return clock["expired"]
+
+        catalog = SimpleNamespace(
+            fingerprint="c",
+            recipes={"iron-plate": {"energy": 3.2}, "copper-plate": {"energy": 3.2}},
+            entities={"stone-furnace": {"crafting_speed": 1}},
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.prepare(root, SimpleNamespace(plan=Mock(side_effect=RuntimeError("seed files only"))))
+            game = SimpleNamespace(
+                cfg=SimpleNamespace(runtime_dir=root), query=Mock(return_value={"ok": True, "legal": [1, 2, 3]})
+            )
+            routine = SmeltingDistrict(game, None, FactoryBuilder.__new__(FactoryBuilder), catalog, site=site)
+            obs = {"world_id": "w", "technologies": {"logistics": True}, "entities": []}
+            with (
+                patch("factorio_agent.industrial.PlanningBudget", Budget),
+                patch("factorio_agent.smelting.belt_connection", side_effect=belts),
+                patch("factorio_agent.smelting.power_connection", return_value=_plan([], [])),
+                patch("factorio_agent.smelting.preflight", return_value={"ok": True, "clear_obstacles": []}),
+            ):
+                first = routine.prepare(obs)
+                self.assertFalse(first["ok"])
+                self.assertTrue(first["evidence"]["planning_budget_exhausted"])
+                self.assertEqual(first["evidence"]["sites_tried"], 1)
+                self.assertTrue((root / "smelting-district-search.json").exists())
+                clock["expired"] = False
+                after_first = len(clock["calls"])
+                second = routine.prepare(obs)
+            self.assertTrue(second["ok"], second)
+            # The second pass starts at the interrupted candidate, not at the failed first one.
+            self.assertEqual(clock["calls"][after_first], clock["calls"][1])
+            self.assertNotEqual(clock["calls"][after_first], clock["calls"][0])
+            self.assertFalse((root / "smelting-district-search.json").exists())
+
     def test_failing_site_service_falls_back_to_legacy_anchors(self):
         site = SimpleNamespace(plan=Mock(side_effect=RuntimeError("no survey")))
         with TemporaryDirectory() as directory:
