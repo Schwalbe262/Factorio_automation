@@ -430,6 +430,11 @@ may add labs     = every lab working and free lab slots; without a backlog only 
 how many: plan_research_capacity(queue, observed hardware + pack stock,
           max_labs = labs + free if may add labs else labs,
           max_assemblers = machines + free if may add machines else machines)   (max_step 2)
+build ahead (once that grows): expected = research_capacity recommended_rates[red] (rate, labs over
+          the next 12 roadmap technologies); coverage(o) = min over the kinds this room may grow of
+          rate(o) / rate, labs(o) / labs; full = best coverage in the room; among the chosen option and
+          larger ones with T < wait: min T + revisit_seconds(coverage) (throughput_growth); no
+          expected rate -> the planner's option stands
 ```
 
 eval-4177156614 at 82 min: lab_status [missing_science_packs, working], belt 2 packs, both machines
@@ -475,17 +480,33 @@ packages (k drill pairs, f furnace slots per row) along drills -> ore belt -> fu
          k <= free reserved pairs + MODULE_PAIRS_MAX (4, one connected module, outposts.prepare_connected_bank),
          f <= free reserved slots; after = min(ore + 2k drill, 2 (per_side + f) furnace, belt, 450)
          efficient only (dropping a pair or a slot lowers `after`), with a unit of the bottleneck stage;
-         demand cap: nothing above the smallest `after` >= demand x COVER_MARGIN
+         cap: nothing above the smallest `after` >= expected x COVER_MARGIN (expected: build ahead below)
 time     the bill is served after the taps: S(bill, rate) = 60 bill / (rate - taps)   (inf when rate <= taps)
          T0   = S(bill, capacity)
          prep = max(fund of other inputs (stock then production, wood 2 s),
                     fund_seconds(claimed + own plates, plate stock, capacity))  + stages x 30 s + 3 s per entity
          T1   = prep + S(bill + own - (capacity - taps) prep / 60, after)     (the plant keeps producing meanwhile)
 usable   gain (T1 - prep) / 60 >= own plates (the known demand repays the package's plates)
-choose   smallest package first; a larger one wins only with T1 >= 60 s lower (ties -> smaller)
-grow     T0 - T1 >= 60 s and T1 <= 0.85 T0, or T0 > payback = prep + 60 own / gain and T1 < T0
+quickest among packages up to the smallest `after` >= demand x COVER_MARGIN: smallest first; a larger
+         one wins only with T1 >= 60 s lower (ties -> smaller)
+grow     judged on the quickest (build ahead never justifies a growth):
+         T0 - T1 >= 60 s and T1 <= 0.85 T0, or T0 > payback = prep + 60 own / gain and T1 < T0
          (a wait longer than the package's own payback is never accepted on a thin margin);
          taps above every package: the largest package (none exceeds the taps)
+build ahead (owner, 2026-11-13: a new block raises demand again; a margin built in one go beats a
+         second expansion trip while the work stalls; surplus nothing will use still wastes):
+         G  = unbuilt declared bus taps (not production_row_*) + running rates of the next
+              LOOKAHEAD_STEPS (8) roadmap blocks without a station yet (`upcoming_rates`: red/green
+              science = raw plates x rate, steel/engine/advanced circuits = their rated draw;
+              PLATE_NEUTRAL blocks = 0) + science growth targets (extra pack machines x plates/pack)
+              an upcoming block of unknown draw -> G >= DEFAULT_GROWTH_SHARE (0.25) x demand
+         E  = demand + G; F = smallest package >= E x 1.1 in the reserved frame (no connected-module
+              pair beyond the quickest's), else the largest in the frame
+         R(p) = 0 if after(p) >= after(F), else trip + short (SETTLE_SECONDS 60 + trip + d_entities x 3 s)
+              trip = 30 s x stages F still needs; short = max(0, 1 - after(p) / E)
+         chosen = min T1 + R over the quickest and the frame packages up to F with T1 < T0; ties ->
+              smaller; with a critical claim > 0 a larger package may not fund longer than the quickest
+         flat demand (G = 0): F is the quickest's own cap, so the minimal package stands
 stages   mining_outpost {rate: ore + reserved pairs} -> mining_outpost {rate: ore + 2k drill} (connected module)
          -> smelting_capacity {rate: min(after furnaces, ore after, 450)}; chained by depends_on
 node     auto_throughput_<resource>_<capability>_<rate> per stage, after smelting_district succeeded,
@@ -496,20 +517,27 @@ node     auto_throughput_<resource>_<capability>_<rate> per stage, after smeltin
            -> slack:    SCIENCE_GROWTH_PRIORITY + 1 (-599), after the roadmap
 ```
 
-Receipt `throughput_growth.plates[]` holds demand (incl. claimed), supply (incl. the measured
-split), signals, bottleneck, step (first stage, valued_with = later stages, gain, cost), package
-(chosen or best losing package, its stages, demand cap), alternatives (best 5 by T1), times
-(wait, expand, fund, build, saving, payback) and the reason; a wait names the best package and why it loses.
+Receipt `throughput_growth.plates[]` holds demand (incl. claimed), expected (growth, sources,
+unquantified steps, allowance), supply (incl. the measured split), signals, bottleneck, step (first
+stage, valued_with = later stages, gain, cost), package (chosen or best losing package, its stages,
+demand and expected caps), build_ahead (expected demand, margin, full/quickest/chosen package,
+revisit costs, why, excluded), alternatives (best 5 by T1), times (wait, expand, fund, build, saving,
+payback) and the reason; a wait names the best package and why it loses.
 
 eval-4177156614 at ~67 min (iron: taps 24/min, bill 937.7, furnaces 112.5, ore 120, pairs 2/3): the
 single-step rule valued one furnace slot (+7.5/min, the ore binds next) and pessimistically assumed no
 production during the build: "wait 628 s, expand 675 s" -> wait. Packages on the same numbers: T0 636 s;
 +1 furnace slot -> 120/min T1 608 s; +1 drill pair +1 slot per row -> 150/min T1 533 s (saves 103 s, chosen);
-180/min and up are above the demand cap. Its measured 148.9/min was 112.5 district + ~36 starter cells
-being retired (rate samples fell to 112.5 by tick 246000), not bus supply.
-Not modelled yet: roadmap steps without `builds` add no lookahead demand; bus lanes filling and
-science/production-row growth beyond their declared taps are not demand; mine_trunk growth sizes
-to the trunk demand directly (no time comparison).
+180/min and up were above the demand cap. Its measured 148.9/min was 112.5 district + ~36 starter cells
+being retired (rate samples fell to 112.5 by tick 246000), not bus supply. With build ahead the next
+eight roadmap steps held logistic_science (30/min: 165 iron/min): E = 282.8/min, the frame stops at
++1 pair +2 slots per row -> 180/min (T1 496 s, no revisit) against 150/min (T1 533 s + revisit 92 s);
+the run grew iron to 180/min anyway at ~74 min (mining_outpost/smelting_capacity 180) and steel_production
+then tapped another 37.5/min.
+Not modelled yet: roadmap steps without `builds` add no lookahead bill; bus lanes filling and
+production-row growth beyond their declared taps are not demand; mine_trunk growth sizes to
+`ahead_target` = max(demand, min(demand x (1 + DEFAULT_GROWTH_SHARE), the bank's reserved-pair
+frame)) without a time comparison (the trunk knows no lookahead).
 `bottleneck_blocks_critical_path` is the single swap point for the shared
 critical-path rule. Furnace growth adds coal burn (1.35/min per stone furnace)
 that this rule does not size. Pinned by `tests/test_v2_throughput_growth.py`.

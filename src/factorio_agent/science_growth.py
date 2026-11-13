@@ -20,7 +20,10 @@ supply is the limit when they lack ingredients); labs grow only when packs pile
 up, or every lab works and ``research_capacity`` finds labs the limit. Only units
 idle for lack of demand (no research, low power) hold growth back. How many is
 decided by ``research_capacity.plan_research_capacity`` (the receipt's time
-comparison) with those permissions as its limits. Pure functions, no IO.
+comparison) with those permissions as its limits; once that growth is justified,
+``build_ahead`` may take a larger option of the same room when it covers the
+longer-horizon science rate (``recommended_rates``) and its time now plus the
+revisit cost (``throughput_growth.revisit_seconds``) is lower. Pure functions, no IO.
 """
 
 from __future__ import annotations
@@ -199,14 +202,95 @@ def growth_receipt(root, catalog, jobs, observation):
     if not isinstance(state, dict) or not state.get("stage") or state.get("world_id") != observation.get("world_id"):
         return None
     targets = queue_targets(catalog, jobs, observation)
-    return growth_decision(catalog, state, observation, targets, _evidence_from_supply(observation))
+    recommended = ((observation.get("research_capacity") or {}).get("recommended_rates") or {}).get(RED_PACK)
+    return growth_decision(
+        catalog, state, observation, targets, _evidence_from_supply(observation), expected=recommended
+    )
 
 
-def growth_decision(catalog, state, observation, targets, evidence):
+def build_ahead(decision, expected, *, machines, labs):
+    """``(extra_machines, extra_labs, receipt)``: the option minimising T + revisit cost (build ahead).
+
+    A justified growth (``decision.expand``) may take a larger option of the same
+    ``plan_research_capacity`` call (its room = the permitted reserved slots) when its
+    time now plus the revisit cost (``throughput_growth.revisit_seconds``) is lower:
+    ``expected`` is the longer-horizon red rate and lab count (``recommended_science_rate``,
+    research_capacity receipt ``recommended_rates``); coverage of an option =
+    min(pack rate / expected rate, labs / expected labs), the full option is the best
+    coverage in the room (capped at 1); never slower than waiting. Without ``expected``
+    the decision stands (flat demand).
+    """
+    from .throughput_growth import revisit_seconds
+
+    base = next(
+        (
+            o
+            for o in decision.options
+            if o["extra_assemblers"] == decision.target_assemblers - decision.current_assemblers
+            and o["extra_labs"] == decision.target_labs - decision.current_labs
+        ),
+        None,
+    )
+    rate = expected.get("rate_per_minute") if isinstance(expected, Mapping) else None
+    want_labs = expected.get("labs") if isinstance(expected, Mapping) else None
+    if base is None or not decision.expand or not rate or rate <= 0 or not want_labs or want_labs <= 0:
+        return None
+
+    # Coverage counts only what this decision may grow (a kind without room is not its gap).
+    grow_machines = any(o["extra_assemblers"] for o in decision.options)
+    grow_labs = any(o["extra_labs"] for o in decision.options)
+
+    def cover(o):
+        shares = [1.0]
+        if grow_machines:
+            shares.append(o["pack_rate_per_minute"] / rate)
+        if grow_labs:
+            shares.append((labs + o["extra_labs"]) / want_labs)
+        return min(shares)
+
+    wait = decision.wait_seconds
+    larger = [
+        o
+        for o in decision.options
+        if o["extra_assemblers"] >= base["extra_assemblers"]
+        and o["extra_labs"] >= base["extra_labs"]
+        and o is not base
+        and math.isfinite(o["seconds"])
+        and (not math.isfinite(wait) or o["seconds"] < wait)
+    ]
+    pool = [base] + larger
+    full = max(pool, key=lambda o: (cover(o), -(o["extra_assemblers"] + o["extra_labs"])))
+
+    def revisit(o):
+        machines_left = max(0, full["extra_assemblers"] - o["extra_assemblers"])
+        labs_left = max(0, full["extra_labs"] - o["extra_labs"])
+        entities = machines_left * len(MACHINE_SLOT) + labs_left * len(LAB_SLOT)
+        return revisit_seconds(cover(o), cover(full), 1.0, (machines_left > 0) + (labs_left > 0), entities)
+
+    chosen = min(pool, key=lambda o: (round(o["seconds"] + revisit(o), 6), o["extra_assemblers"] + o["extra_labs"]))
+    return (
+        chosen["extra_assemblers"],
+        chosen["extra_labs"],
+        {
+            "expected_rate_per_minute": rate,
+            "expected_labs": want_labs,
+            "quickest": f"+{base['extra_assemblers']} machines +{base['extra_labs']} labs",
+            "quickest_seconds": round(base["seconds"]),
+            "quickest_revisit_seconds": round(revisit(base)),
+            "chosen": f"+{chosen['extra_assemblers']} machines +{chosen['extra_labs']} labs",
+            "chosen_seconds": round(chosen["seconds"]),
+            "chosen_revisit_seconds": round(revisit(chosen)),
+            "coverage": round(cover(chosen), 2),
+        },
+    )
+
+
+def growth_decision(catalog, state, observation, targets, evidence, *, expected=None):
     """Labs and science machines to add into reserved slots now (module rule), as a JSON-safe dict.
 
     ``targets`` is the research queue (``research_capacity.queue_targets``),
-    ``evidence`` raw item rows as ``resource_supply_options[item]["evidence"]``.
+    ``evidence`` raw item rows as ``resource_supply_options[item]["evidence"]``,
+    ``expected`` the longer-horizon red rate and labs (build ahead, ``build_ahead``).
     ``grow`` is True only when ``target_labs``/``target_machines`` exceed the
     built stage; ``reason`` names the rule that held growth back.
     """
@@ -282,10 +366,23 @@ def growth_decision(catalog, state, observation, targets, evidence):
         # Busy labs without a pack backlog: labs grow only when research_capacity finds them the limit.
         decision = plan(0)
     target_machines = decision.target_assemblers if decision.pack == RED_PACK else machines
+    target_labs = decision.target_labs
+    reason = decision.reason
+    ahead = build_ahead(decision, expected, machines=machines, labs=labs) if decision.pack == RED_PACK else None
+    if ahead is not None:
+        extra_machines, extra_labs, row["build_ahead"] = ahead
+        if (extra_machines, extra_labs) != (target_machines - machines, target_labs - labs):
+            target_machines, target_labs = machines + extra_machines, labs + extra_labs
+            b = row["build_ahead"]
+            reason = (
+                f"build ahead for {b['expected_rate_per_minute']}/min, {b['expected_labs']} labs: {b['chosen']} "
+                f"{b['chosen_seconds']}s + revisit {b['chosen_revisit_seconds']}s < {b['quickest']} "
+                f"{b['quickest_seconds']}s + revisit {b['quickest_revisit_seconds']}s; " + reason
+            )
     row.update(
-        target_labs=max(labs, decision.target_labs),
+        target_labs=max(labs, target_labs),
         target_machines=max(machines, target_machines),
-        reason=decision.reason[:300],
+        reason=reason[:300],
         permitted={"labs": may_labs, "machines": may_machines},
     )
     row["grow"] = row["target_labs"] > labs or row["target_machines"] > machines

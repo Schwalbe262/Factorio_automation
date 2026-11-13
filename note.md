@@ -252194,3 +252194,12 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: offline only; nothing proven live.
 - failure reason / open: live science block reserved only 2 machine slots (machine_limit 2): no slot to grow; lookahead ignores steps without builds; taps of grown science not demand.
 - next action: fleet round; check auto_throughput_* chains (mining then smelting) and science_growth chain field.
+
+## 2026-11-13 23:30 Part 49 - build ahead in staged growth (worktree agent-a3f9b2c5)
+- goal: owner rule 2026-11-13: over-building can win (new blocks raise demand again; a second expansion trip stalls the work); replace "smallest package unless 60 s faster".
+- hypothesis: expected growth from the lookahead (unbuilt taps, running rates of the next 8 roadmap blocks, science growth targets, 0.25 x demand allowance for unknown blocks) plus an explicit revisit cost picks the margin by time, bounded by the reserved frame.
+- actions: throughput_growth: expected_growth/upcoming_rates/PLATE_NEUTRAL, revisit_seconds, build_ahead (min T1 + R between the quickest and the full package; T1 < T0; claim rule), grow judged on the quickest; receipt expected + build_ahead. science_growth.build_ahead over plan_research_capacity options vs recommended_rates. mine_trunk.ahead_target (allowance within reserved pairs). starter capacity untouched.
+- metrics: live iron ~67 min (cap 112.5, ore 120, bill 937.7, taps 24, 6/24 furnaces, pairs 2/3): flat -> 150/min (T1 533 s, unchanged); lookahead logistic_science 30/min = +165 iron/min -> 180/min (+1 pair +2 slots/row, T1 496 s) vs 150/min T1 533 s + revisit 92 s.
+- result: offline only; gate PASS.
+- failure reason / open: mine trunk has no time comparison; upcoming_rates knows 5 block kinds (others neutral or allowance); expected growth is assumed to come (no probability).
+- next action: fleet round; read build_ahead in throughput_growth receipts and count second-trip growth jobs per plate.

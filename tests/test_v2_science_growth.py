@@ -221,6 +221,33 @@ class GrowthRuleTests(unittest.TestCase):
         self.assertEqual(decision["target_labs"], 2)
         self.assertEqual(decision["permitted"], {"labs": False, "machines": True})
 
+    def test_build_ahead_follows_the_longer_horizon_science_rate(self):
+        row = state(machines=2)
+        obs = self.live(row, ["missing_science_packs", "working"], [0, 2], 2)
+
+        def decide(expected):
+            return sg.growth_decision(catalog(), row, obs, FAST_QUEUE, deepcopy(AMPLE), expected=expected)
+
+        # Flat (no longer-horizon rate) and 18/min expected: +1 machine (3 x 6 = 18/min) already covers it.
+        self.assertEqual(decide(None)["target_machines"], 3)
+        self.assertEqual(decide({"rate_per_minute": 18, "labs": 2})["target_machines"], 3)
+        # 24/min expected: +2 machines (1120 s, no revisit) beat +1 (1100 s + revisit 56 s) in one go;
+        # labs are not permitted (a lab idles for packs), so their gap does not count.
+        rising = decide({"rate_per_minute": 24, "labs": 3})
+        self.assertTrue(rising["grow"], rising["reason"])
+        self.assertEqual((rising["target_machines"], rising["target_labs"]), (4, 2))
+        self.assertEqual(rising["build_ahead"]["quickest"], "+1 machines +0 labs")
+        self.assertGreater(rising["build_ahead"]["quickest_revisit_seconds"], 0)
+        self.assertIn("build ahead", rising["reason"])
+        # Bounded by the reserved frame: machine_limit 3 leaves one free slot whatever is expected.
+        framed = state(machines=2, machine_limit=3)
+        obs = self.live(framed, ["missing_science_packs", "working"], [0, 2], 2)
+        capped = sg.growth_decision(
+            catalog(), framed, obs, FAST_QUEUE, deepcopy(AMPLE), expected={"rate_per_minute": 30, "labs": 4}
+        )
+        self.assertEqual(capped["target_machines"], 3)
+        json.dumps(rising, allow_nan=False)
+
     def test_labs_follow_once_packs_are_no_longer_the_limit(self):
         row = state(machines=3)
         decision = self.decide(row, self.live(row, ["working", "working"], [3, 3], 12))
