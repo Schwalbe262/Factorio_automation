@@ -538,8 +538,11 @@ class ProductionRows:
         if not state or state["world_id"] != obs["world_id"] or not underground_proof(obs, state["plan"]):
             return None
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
+        released = planned_tap.released_tiles(self.root, obs["world_id"])
         for wanted in state["plan"]["entities"]:
             live = actual.get((wanted["name"], *xy(wanted)))
+            if live is None and planned_tap.released_belt_stands(actual, released, wanted):
+                continue  # a later bus tap's splitter replaced this lane-extension belt
             if live is None:
                 self.last_proof_failure = {"reason": "planned_entity_missing", "entity": wanted["name"]}
                 return None

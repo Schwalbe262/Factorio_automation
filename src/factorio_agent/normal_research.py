@@ -64,6 +64,44 @@ class NormalResearch:
         self.path = Path(game.cfg.runtime_dir) / "normal-research.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
 
+    def _plates_of(self, recipes) -> list[str]:
+        """Plates the ``recipes`` take, directly or through one intermediate recipe (catalog)."""
+        plates = set()
+        for name in recipes:
+            for ingredient in (self.catalog.recipes.get(name) or {}).get("ingredients", []):
+                item = ingredient.get("name", "")
+                if item.endswith("-plate"):
+                    plates.add(item)
+                    continue
+                inner = self.catalog.recipe_for_product(item) or {}
+                plates |= {i.get("name") for i in inner.get("ingredients", []) if str(i.get("name")).endswith("-plate")}
+        return sorted(plates)
+
+    def _supply_wait(self, colour: str, pack: str, failure) -> dict:
+        """The research wait while a commissioned pack supply fails its proof, with the gate named.
+
+        The waste reports read the job reason: a supply short of packs because its machines wait for
+        plates names ``plates_wait`` and the plate (``waiting for iron-plate: ...``); any other proof
+        failure names the failed check, so a broken block is not mistaken for slow science.
+        """
+        failure = dict(failure or {"reason": "proof_failure_unknown"})
+        check = str(failure.get("reason"))
+        plates = self._plates_of(failure.get("starved_recipes") or ())
+        if plates:
+            gate = "plates_wait"
+            reason = f"waiting for {', '.join(plates)}: {colour} packs starved ({check})"
+        elif check in ("labs_without_green_packs", "no_green_on_the_lab_lane"):
+            gate = "packs_wait"
+            reason = f"waiting for {colour} packs on the labs ({check})"
+        else:
+            gate = f"{colour}_proof"
+            reason = f"waiting for commissioned {colour} supply to recover: {check}"
+        return {
+            "status": "waiting",
+            "reason": reason,
+            "evidence": {"pack": pack, "gate": gate, "plates": plates, "proof_failure": failure},
+        }
+
     def step(self, obs, parameters, *, plan=None):
         """Wait while the technology sits in the native queue; otherwise queue it (``plan`` = policy order)."""
         validate_parameters(parameters)
@@ -95,20 +133,18 @@ class NormalResearch:
             if green_supply:
                 supported.add("logistic-science-pack")
             elif getattr(self.green, "state", {}).get("phase") == "verified":
-                return {
-                    "status": "waiting",
-                    "reason": "waiting for commissioned green supply and powered labs to recover",
-                }
+                return self._supply_wait(
+                    "green", "logistic-science-pack", getattr(self.green, "last_proof_failure", None)
+                )
         blue_supply = None
         if "chemical-science-pack" in packs and getattr(self, "blue", None):
             blue_supply = self.blue.proof(obs)
             if blue_supply:
                 supported.add("chemical-science-pack")
             elif getattr(self.blue, "state", {}).get("phase") == "verified":
-                return {
-                    "status": "waiting",
-                    "reason": "waiting for commissioned blue supply and powered labs to recover",
-                }
+                return self._supply_wait(
+                    "blue", "chemical-science-pack", getattr(self.blue, "last_proof_failure", None)
+                )
         unsupported = packs - supported
         if unsupported:
             # The pack's permanent factory is a later roadmap step; wait for it

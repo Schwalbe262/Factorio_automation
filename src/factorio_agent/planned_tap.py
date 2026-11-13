@@ -530,6 +530,39 @@ def publish(root, world_id: str, taps) -> dict | None:
     return None
 
 
+def released_tiles(root, world_id: str) -> dict:
+    """Tile -> splitter of every built bus tap that replaced a trunk belt there (``remove``).
+
+    A consumer's plan may hold trunk belts (the lane extension its own tap laid); a later tap
+    of another consumer mines one of them by unit and builds its splitter there, and only the bus
+    publication forgets the belt. A proof reading that consumer's plan treats the belt as the
+    tap's (eval-1575138435: the steel tap at 82.0,-119.5 replaced a trunk belt of the green
+    block's extension; the green proof failed for good and plastics research never started).
+    """
+    state = _read(Path(root) / STATE_FILE)
+    if state.get("world_id") != world_id:
+        return {}
+    tiles = {}
+    for tap in state.get("taps", []):
+        splitter = tap.get("splitter")
+        if not tap.get("built") or not isinstance(splitter, dict):
+            continue
+        for p in tap.get("remove") or ():
+            tiles[_tile(p)] = {k: splitter[k] for k in ("name", "position", "direction")}
+    return tiles
+
+
+def released_belt_stands(actual: dict, released: dict, wanted: dict) -> bool:
+    """``wanted`` is a plan transport belt a built tap replaced and that tap's splitter stands."""
+    if wanted.get("name") != "transport-belt":
+        return False
+    splitter = released.get(_tile(wanted["position"]))
+    if splitter is None:
+        return False
+    live = actual.get(("splitter", *_tile(splitter["position"])))
+    return live is not None and live.get("direction", 0) == splitter.get("direction", 0)
+
+
 def tap_plan(taps, *, clear_obstacles=(), world_id=None) -> dict:
     entities = merge_entities(*(tap["entities"] for tap in taps))
     return _plan(
