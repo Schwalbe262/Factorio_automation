@@ -248,6 +248,7 @@ function s.find_entities_filtered(q)
  end
  return rows
 end
+function s.find_tiles_filtered(q)return {} end -- no water on the fake surface
 function s.can_place_entity(q)
  local p=q.position
  for _,e in ipairs(s.find_entities_filtered{area={{p.x-.4,p.y-.4},{p.x+.4,p.y+.4}}})do
@@ -378,10 +379,15 @@ class LiveGeometryAcceptanceTests(unittest.TestCase):
 
                 # The exit belts leave the bank's own ore and end on the first clear tile.
                 exit_cells = [e for e in plan["entities"] if e.get("mining_exit")]
-                path = exit_cells[0]["mining_exit"]["path"]
-                self.assertEqual(path[0], collector["position"])
-                self.assertEqual(path[-1], port["position"])
-                self.assertTrue(all(ore.get(tile(p), ("",))[0] == resource for p in path[:-1]))
+                if exit_cells:
+                    path = exit_cells[0]["mining_exit"]["path"]
+                    self.assertEqual(path[0], collector["position"])
+                    self.assertEqual(path[-1], port["position"])
+                    self.assertTrue(all(ore.get(tile(p), ("",))[0] == resource for p in path[:-1]))
+                else:
+                    # A patch-grid bank at the patch edge needs no exit belts: the port is the next tile.
+                    c = collector["position"]
+                    self.assertEqual(port["position"], {"x": c["x"] + ux, "y": c["y"] + uy})
                 self.assertNotIn(tile(port["position"]), ore)
                 validate_annotations(plan["entities"], self.builder)
                 # Fringe: a clear run continues in the facing out of the patch zone (the feeder side).
