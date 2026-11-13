@@ -3,18 +3,20 @@
 import json
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from factorio_agent import progression, supply_demand
 from factorio_agent import supply_cell as sc
 from factorio_agent.construction_supply import HANDCRAFT_LIMIT, V2Bootstrap, _waiting_pays
 from factorio_agent.core.deterministic_bootstrap import DeterministicBootstrap
 from factorio_agent.core.deterministic_builder import FactoryBuilder
 from factorio_agent.core.world_catalog import WorldCatalog
 from factorio_agent.jobs import CAPABILITIES
-from factorio_agent.progression import autopilot_nodes
-from v2_blocks_fixture import _recipe, fake_catalog
+from factorio_agent.progression import Step, autopilot_nodes
+from v2_blocks_fixture import _recipe, fake_catalog, real_catalog
 
 BELT, INS = "transport-belt", "inserter"
 GEOMETRY = FactoryBuilder.__new__(FactoryBuilder)
@@ -100,9 +102,9 @@ class RuleTests(unittest.TestCase):
         self.assertFalse(small["qualifies"])
         self.assertIn("cheaper", small["reason"])
         self.assertTrue(sc.evaluate(c, INS, 64)["qualifies"])
-        slow = sc.evaluate(catalog(speed=0.05), BELT, 464)
+        slow = sc.evaluate(catalog(speed=0.0005), BELT, 464)
         self.assertFalse(slow["qualifies"])
-        self.assertIn("wait factor", slow["reason"])
+        self.assertIn("production window", slow["reason"])
         self.assertIn("no recipe", sc.evaluate(c, "wood", 50)["reason"])
 
     def test_time_rule(self):
@@ -177,7 +179,7 @@ class Cell(unittest.TestCase):
         self.assertNotEqual(result.get("status"), "blocked", result)
         return self.cell.state()
 
-    def live(self, state, *, stock=0, finished=1, inside=None):
+    def live(self, state, *, stock=0, finished=1, inside=None, stocks=None):
         rows, unit = [], 100
         outputs = {(r["output"]["x"], r["output"]["y"]): r["item"] for r in state["products"]}
         for e in state["plan"]["entities"]:
@@ -187,7 +189,9 @@ class Cell(unittest.TestCase):
                 row["products_finished"] = finished
             if e["name"] == "wooden-chest":
                 key = (e["position"]["x"], e["position"]["y"])
-                row["inventory"] = {outputs[key]: stock} if key in outputs else dict(inside or {})
+                item = outputs.get(key)
+                count = (stocks or {}).get(item, stock)
+                row["inventory"] = {item: count} if item else dict(inside or {})
             rows.append(row)
         return rows
 
@@ -443,6 +447,248 @@ class RetireTests(UseFixture):
         self.assertIsNone(self.cell.stock(self.obs(poles), BELT))  # no longer a stock source
         result = self.cell.step(self.obs(poles), {"products": [BELT]})
         self.assertEqual(result["reason"], "supply_cell_retired")
+
+
+GEAR, CIRCUIT, CABLE = "iron-gear-wheel", "electronic-circuit", "copper-cable"
+SHARED = [GEAR, CIRCUIT, BELT, INS]
+# Items hand crafted in the first 50 minutes of seed 283895142 (job-events craft intents, rounded up).
+LIVE_HAND_CRAFTS = {
+    BELT: 668,
+    "small-electric-pole": 112,
+    INS: 64,
+    "stone-furnace": 22,
+    "burner-mining-drill": 16,
+    "assembling-machine-1": 16,
+    "electric-mining-drill": 12,
+    "lab": 8,
+    "underground-belt": 20,
+    "splitter": 5,
+}
+
+
+def lab_catalog():
+    c = catalog().to_dict()
+    c["recipes"]["lab"] = _recipe(2, {GEAR: 10, CIRCUIT: 10, BELT: 4}, {"lab": 1})
+    return WorldCatalog.from_dict(c)
+
+
+def check_inserters(test, design):
+    """Every inserter picks from and drops into a chest or a machine, never the same entity."""
+    by_tile = {t: (e["name"], sc._xy(e)) for e in design["entities"] for t in GEOMETRY._occupied_by_plan([e])}
+    for e in design["entities"]:
+        if e["name"] == "inserter":
+            vx, vy = sc.VECTORS[e["direction"]]
+            pick = by_tile.get((e["position"]["x"] + vx, e["position"]["y"] + vy))
+            drop = by_tile.get((e["position"]["x"] - vx, e["position"]["y"] - vy))
+            test.assertIn((pick or ("",))[0], ("wooden-chest", "assembling-machine-1"), e)
+            test.assertIn((drop or ("",))[0], ("wooden-chest", "assembling-machine-1"), e)
+            test.assertNotEqual(pick, drop)
+    return by_tile
+
+
+class DemandTests(unittest.TestCase):
+    """``supply_demand``: intermediates are the sum of their content in every upcoming build."""
+
+    ROADMAP = (
+        Step("a", "cap_a", builds={INS: 10, BELT: 20}),
+        Step("b", "smelting_district", builds={"lab": 2}),
+    )
+
+    def demand(self, jobs=(), obs=None, root=None):
+        with patch.object(progression, "ROADMAP", self.ROADMAP):
+            return supply_demand.item_demand(lab_catalog(), list(jobs), obs or {}, horizon=8, root=root)
+
+    def test_intermediates_are_aggregated_over_all_upcoming_builds(self):
+        rows = self.demand()
+        # gears: 10 inserters x1 + 20 belts / 2 + 2 labs x (10 + 4 belts / 2)
+        self.assertEqual(rows[GEAR]["count"], 10 + 10 + 2 * (10 + 2))
+        self.assertEqual(rows[CIRCUIT]["count"], 10 + 2 * 10)
+        self.assertEqual(rows[BELT]["count"], 20 + 2 * 4)  # placed belts and the belts inside labs
+        self.assertEqual(rows[CABLE]["count"], 3 * 30)
+        self.assertFalse(rows[CABLE]["direct_use"])  # only circuits use cable: never collected for a hand craft
+        self.assertTrue(rows[CIRCUIT]["direct_use"])
+        self.assertEqual(rows[GEAR]["current"], 0)
+
+    def test_steps_in_flight_count_their_saved_plan_remainder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = {
+                "required_items": {"lab": 5, BELT: 2},
+                "entities": [{"name": "lab", "position": {"x": 1.5, "y": 1.5}}],
+            }
+            (Path(tmp) / "smelting-district.json").write_text(json.dumps({"world_id": "w", "plan": plan}))
+            jobs = [{"capability": "smelting_district", "parameters": {}, "status": "running"}]
+            placed = [{"name": "lab", "position": {"x": 1.5, "y": 1.5}}]
+            rows = self.demand(jobs, {"world_id": "w", "entities": placed}, root=tmp)
+            self.assertEqual(rows["lab"]["count"], 4)  # 5 planned, 1 standing; the constant said 2
+            self.assertEqual(rows["lab"]["current"], 4)
+            self.assertEqual(rows[BELT]["count"], 20 + 2 + 4 * 4)
+            other = self.demand(jobs, {"world_id": "other", "entities": placed}, root=tmp)
+            self.assertEqual(other["lab"]["count"], 2)  # a plan of another world is ignored
+
+    def test_builds_constants_cover_the_offline_plans(self):
+        """``Step.builds`` must not under-count the fixed hardware a capability's offline plan places."""
+        from factorio_agent.board import startup_science_cell
+        from factorio_agent.smelting_site import district_candidate
+
+        district = district_candidate(8, 8, {"iron-ore": 4, "copper-ore": 2})
+        offline = {
+            "smelting_district": Counter(e["name"] for e in district["entities"]),
+            "bootstrap_research": startup_science_cell(0.5, 0.5)["required_items"],
+        }
+        steps = {step.capability: step for step in progression.ROADMAP if step.builds}
+        for capability, plan in offline.items():
+            for item, count in plan.items():
+                with self.subTest(capability=capability, item=item):
+                    self.assertGreaterEqual(steps[capability].builds.get(item, 0), count)
+        # Live plans (two maps) had 19/24 poles and 319/368 belts in the district: the estimate is within them.
+        self.assertTrue(19 <= progression.SMELTING_DISTRICT_BUILDS["small-electric-pole"] <= 24)
+        self.assertTrue(319 <= progression.SMELTING_DISTRICT_BUILDS["transport-belt"] <= 368)
+        self.assertIn("lab", steps["automation_science"].builds)
+
+
+class SharedLayoutTests(unittest.TestCase):
+    def test_one_gear_machine_feeds_its_chest_the_belt_and_the_inserter_machine(self):
+        c = catalog()
+        d = sc.layout(c, SHARED, chest="wooden-chest")
+        print("\nsupply cell " + ", ".join(SHARED) + "\n" + sc.render(d))
+        recipes = Counter(e.get("recipe") for e in d["entities"] if e["name"] == "assembling-machine-1")
+        self.assertEqual(recipes, Counter({GEAR: 1, CIRCUIT: 1, CABLE: 1, BELT: 1, INS: 1}))
+        by_tile = check_inserters(self, d)
+        tiles = [GEOMETRY._occupied_by_plan([e]) for e in d["entities"]]
+        self.assertEqual(sum(map(len, tiles)), len(set().union(*tiles)))
+        rows = {r["item"]: r for r in d["products"]}
+        self.assertEqual(rows[INS]["stocked_inputs"], [CIRCUIT, GEAR])
+        self.assertEqual(rows[BELT]["stocked_inputs"], [GEAR])
+        self.assertEqual(rows[INS]["hand_seconds_per_unit"], 0.5)  # only the final assembly is left
+        gear_chest = (rows[GEAR]["output"]["x"], rows[GEAR]["output"]["y"])
+        takers = []
+        for e in d["entities"]:
+            vx, vy = sc.VECTORS[e["direction"]]
+            if e["name"] == "inserter" and (e["position"]["x"] + vx, e["position"]["y"] + vy) == gear_chest:
+                takers.append(by_tile[(e["position"]["x"] - vx, e["position"]["y"] - vy)])
+        machines = {sc._xy(e): e["recipe"] for e in d["entities"] if e["name"] == "assembling-machine-1"}
+        self.assertEqual(sorted(machines[xy] for _, xy in takers), [INS, BELT])
+        inputs = {p["item"] for p in d["ports"] if p["direction"] == "input"}
+        self.assertEqual(inputs, {"iron-plate", "copper-plate"})
+
+    def test_pricing_counts_only_the_own_machine_when_ingredients_are_stocked(self):
+        c = catalog()
+        alone = sc.evaluate(c, INS, 64)
+        shared = sc.evaluate(c, INS, 64, stocked=[GEAR, CIRCUIT])
+        self.assertLess(shared["build_hand_seconds"], alone["build_hand_seconds"])
+        self.assertEqual(shared["hand_seconds"], 32.0)  # 64 final assemblies of 0.5 s
+        parts = sc.hardware(sc.recipe_tree(c, INS, stocked={GEAR, CIRCUIT}))
+        self.assertEqual(parts, {"assembling-machine-1": 1, "inserter": 4, "chest": 2})
+
+
+class LiveLikeChoiceTests(unittest.TestCase):
+    @unittest.skipUnless(real_catalog(), "real catalog required")
+    def test_circuits_and_gears_are_stocked_on_live_like_demand(self):
+        c = real_catalog()
+        used = set(LIVE_HAND_CRAFTS) | supply_demand.direct_ingredients(c, LIVE_HAND_CRAFTS)
+        demand = {
+            item: supply_demand.contained(c, LIVE_HAND_CRAFTS, item)
+            for item in supply_demand.reachable(c, LIVE_HAND_CRAFTS)
+            if item in used
+        }
+        self.assertGreater(demand[GEAR], 600)  # far above the 64 inserters' own gears
+        products, rows = sc.choose_products(c, demand)
+        for item in (GEAR, CIRCUIT, BELT, INS):
+            self.assertIn(item, products, rows[item])
+        self.assertLessEqual(len(products), sc.MAX_PRODUCTS)
+        d = sc.layout(c, products, chest="wooden-chest")
+        print("\nlive-like supply cell " + ", ".join(products) + "\n" + sc.render(d))
+        check_inserters(self, d)
+        gears = [e for e in d["entities"] if e.get("recipe") == GEAR]
+        self.assertEqual(len(gears), 1)
+
+
+class IntermediateUseTests(UseFixture):
+    def built(self, products=(GEAR, CIRCUIT)):
+        return super().built(products)
+
+    def test_hand_craft_collects_stocked_ingredients_first(self):
+        live = self.live(self.state, stocks={GEAR: 30, CIRCUIT: 4})
+        self.bootstrap.cell_intermediates = self.cell.intermediate_take
+        result, parent = self.ensure(self.obs(live), 20, item=INS)
+        parent.assert_not_called()
+        self.assertEqual((result["type"], result["item"], result["count"]), ("take_many", GEAR, 20))
+        gear_chest = next(r["output"] for r in self.state["products"] if r["item"] == GEAR)
+        self.assertEqual([s["position"] for s in result["sources"]], [gear_chest])
+        # gears in hand: circuits are below a batch (4 < 10), so the craft queue takes over
+        result, parent = self.ensure(self.obs(live, inventory={GEAR: 20}), 20, item=INS)
+        parent.assert_called_once()
+        self.assertEqual(result["type"], "craft")
+
+    def test_feeding_leaves_plates_a_waiting_job_needs(self):
+        waiting = {
+            "world_id": "w",
+            "capability": "smelting_district",
+            "status": "waiting",
+            "reason": "waiting for drill-fed iron-plate production",
+        }
+        live = self.live(self.state)
+        with (
+            patch.object(sc.SupplyCell, "demand", return_value={GEAR: 400, CIRCUIT: 100}),
+            patch.object(sc.SupplyCell, "current_demand", return_value={GEAR: 0, CIRCUIT: 0}),
+        ):
+            free = self.cell.feed_targets(self.obs(live), self.state)
+            self.assertIn("iron-plate", {item for _, item, _ in free})  # pre-production for the next steps
+            (self.root / "jobs.json").write_text(json.dumps({"world_id": "w", "jobs": {"a": waiting}}))
+            self.assertEqual(self.cell.contested_plates(self.obs(live)), {"iron-plate"})
+            obs = self.obs(live, inventory={"iron-plate": 500, "copper-plate": 500})
+            feed = self.cell.feed_action(obs, reserve=0)
+            self.assertEqual(feed["item"], "copper-plate")  # iron goes to the waiting job
+            furnace = {
+                "name": "stone-furnace",
+                "position": {"x": 40.0, "y": 40.0},
+                "unit_number": 999,
+                "output_inventory": {"iron-plate": 50},
+            }
+            copper_fed = self.live(self.state, inside={"copper-plate": 100})
+            self.assertIsNone(self.cell.idle_feed(self.obs(copper_fed + [furnace])))  # no furnace plates taken
+
+
+class MultiProductRetireTests(UseFixture):
+    def built(self, products=(GEAR, BELT)):
+        return super().built(products)
+
+    def receipt(self, demand):
+        return {"enabled_recipes": ENABLED, "supply_cell_candidates": {"products": [], "demand": demand, "rows": {}}}
+
+    def test_retired_only_when_every_product_is_covered_then_drains_and_mines(self):
+        built = [
+            {"capability": "power", "status": "succeeded"},
+            {"capability": sc.CAPABILITY, "status": "succeeded", "parameters": {"products": [GEAR, BELT]}},
+        ]
+        self.assertEqual(sc.supply_cell_nodes(built, [], self.receipt({GEAR: 400, BELT: 4}), CAPABILITIES), [])
+        row = built + [{"capability": "produce", "status": "succeeded", "parameters": {"item": GEAR}}]
+        nodes = sc.supply_cell_nodes(row, [], self.receipt({GEAR: 400, BELT: 4}), CAPABILITIES)
+        self.assertEqual([n["id"] for n in nodes], [sc.RETIRE_NODE_ID])
+        self.state["bars"] = ["x"]
+        self.cell._save(self.state)
+        fed = self.live(self.state, inside={"iron-plate": 30})
+        result = self.cell.step(self.obs(fed, tick=1000), {"retire": True})
+        self.assertEqual(result["reason"], "supply_cell_retire_drains_input_chests")
+        result = self.cell.step(self.obs(fed, tick=1000 + sc.DRAIN_TICKS), {"retire": True})
+        self.assertEqual((result["type"], result["name"]), ("mine", "inserter"))
+        poles = [e for e in fed if e["name"] == "small-electric-pole"]
+        self.assertEqual(self.cell.step(self.obs(poles), {"retire": True})["status"], "succeeded")
+        self.assertIsNone(self.cell.stock(self.obs(poles), GEAR))
+
+    def test_a_build_left_blocked_is_retired(self):
+        blocked = {
+            "capability": sc.CAPABILITY,
+            "status": "blocked",
+            "parameters": {"products": [GEAR]},
+            "blocked_at_tick": 100,
+        }
+        jobs = [{"capability": "power", "status": "succeeded"}, blocked]
+        receipt = dict(self.receipt({GEAR: 400}), tick=100 + sc.ABANDON_TICKS - 1)
+        self.assertEqual(sc.supply_cell_nodes(jobs, [], receipt, CAPABILITIES), [])  # auto-retry may still fix it
+        receipt["tick"] = 100 + sc.ABANDON_TICKS
+        nodes = sc.supply_cell_nodes(jobs, [], receipt, CAPABILITIES)
+        self.assertEqual([(n["id"], n["parameters"]) for n in nodes], [(sc.RETIRE_NODE_ID, {"retire": True})])
 
 
 if __name__ == "__main__":

@@ -107,8 +107,8 @@ ELECTRIC_COAL_BUILDS = {"electric-mining-drill": 1, "small-electric-pole": 3}  #
 # pair (outposts.py:593-600, mining_layout_policy.py:680, paired_mining.py:23-29).
 MINING_OUTPOST_BUILDS = {
     "electric-mining-drill": 2,
-    "small-electric-pole": 8,  # 2 fixed + about 6 bridge poles (estimate)
-    "transport-belt": 10,  # 4 collector + about 6 exit belts (estimate)
+    "small-electric-pole": 13,  # 2 fixed + bridge poles; saved plans on two maps: 4..20, mean 13
+    "transport-belt": 10,  # 4 collector + about 6 exit belts (estimate; plans: 6..13)
 }
 # smelting_district: two paired banks (smelting.paired_furnace_bank), 2+2 iron and
 # 1+1 copper furnaces, 2 inserters and 1 pole per furnace, 165 fixed belts (full
@@ -116,10 +116,21 @@ MINING_OUTPOST_BUILDS = {
 SMELTING_DISTRICT_BUILDS = {
     "stone-furnace": 6,
     "inserter": 12,
-    "small-electric-pole": 10,  # 6 fixed + about 4 grid links (estimate)
-    "transport-belt": 315,  # 165 fixed + about 150 on three routes (estimate)
+    "small-electric-pole": 22,  # 6 fixed + grid links; saved plans on two maps: 19 and 24
+    "transport-belt": 345,  # 165 fixed + routes; saved plans: 368 and 319
     "splitter": 3,
-    "underground-belt": 4,  # crossings only (estimate)
+    "underground-belt": 8,  # crossings; saved plans: 8 and 6
+}
+# automation_science: science machines plus the lab block and their routes
+# (saved plans automation-science.json on two maps: 6 machines, 21 inserters,
+# 8 labs, 51/50 poles, 249/234 belts). Without it the step counted nothing.
+AUTOMATION_SCIENCE_BUILDS = {
+    "assembling-machine-1": 6,
+    "inserter": 21,
+    "lab": 8,
+    "small-electric-pole": 50,
+    "transport-belt": 240,
+    "underground-belt": 2,
 }
 
 # planned_main_bus: two trunks of planned_bus.TRUNK_TILES (64) belts, two feed
@@ -195,7 +206,13 @@ ROADMAP: tuple[Step, ...] = (
     # its own line out of the district. bus_factory's main_bus_factory is the
     # old development-map migration and is only run on explicit request.
     Step("main_bus", "planned_main_bus", {}, builds=PLANNED_BUS_BUILDS),
-    Step("automation_science", "automation_science", {"rate_per_minute": 30}, after=("main_bus",)),
+    Step(
+        "automation_science",
+        "automation_science",
+        {"rate_per_minute": 30},
+        after=("main_bus",),
+        builds=AUTOMATION_SCIENCE_BUILDS,
+    ),
     _research("logistic-science-pack"),
     _research("steel-processing"),
     _research("fast-inserter"),

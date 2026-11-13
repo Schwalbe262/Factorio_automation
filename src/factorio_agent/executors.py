@@ -137,6 +137,7 @@ class StarterExecutors:
             game, self.bootstrap, self.builder, catalog, site=self.site, rows_stock=self.bootstrap.machine_stock
         )
         self.bootstrap.machine_stock = chain_stock(self.bootstrap.machine_stock, self.supply_cell.stock)
+        self.bootstrap.cell_intermediates = self.supply_cell.intermediate_take
         from .inventory_storage import InventoryStorage
 
         self.storage = InventoryStorage(game, catalog)

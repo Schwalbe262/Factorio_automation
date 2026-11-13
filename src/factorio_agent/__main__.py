@@ -240,7 +240,9 @@ def execute(argv=None, services=None):
 
             try:
                 jobs_list = list(Ledger(root).data["jobs"].values())
-                obs["supply_cell_candidates"] = supply_cell_candidates(services.catalog(root, game), jobs_list, obs)
+                obs["supply_cell_candidates"] = supply_cell_candidates(
+                    services.catalog(root, game), jobs_list, obs, root=root
+                )
             except Exception as exc:  # a demand estimate must never break observe
                 obs["supply_cell_candidates_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .research_capacity import research_capacity_receipt
