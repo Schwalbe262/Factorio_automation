@@ -277,6 +277,15 @@ haul batch (`max(missing, haul_batch)`, <= 50) in one guarded `take_many`. No ne
 chest tap would need a site, power and an inserter (~50 plates/min) for what a backed-up trunk
 already holds (8 plates a tile; 33 tiles on the live iron lane). Pinned by `tests/test_v2_starter_retirement.py`.
 
+Bus phase gate (`construction_supply.bus_phase`, `bus_fed_plates`): the trunk tiles are
+collection points only once `planned-main-bus.json` is `verified`, and never the last
+`TAIL_KEEP` (2) rows; once the feed is spliced (`commission`/`verified`) a block output port
+of a plate the bus carries (the district port) is no longer a construction source. On
+eval-4177156614 the actor took the district iron port 42 times and the copper trunk rows
+112..130 for 10 minutes while the bus waited for plates on its tails, so the bus never
+succeeded and the iron/copper starter cells (retired only after `planned_main_bus`) were
+fuelled until the end of the run.
+
 ## Carried surplus (`carried_surplus.py`)
 
 Live map eval-2874201674: coal retirement moved 2643 coal into the character (56 takes) while
@@ -611,6 +620,31 @@ for entity in plan order:
 
 A job waiting for one item no longer holds back what it can already place.
 Pinned by `tests/test_v2_build_ahead.py`.
+
+Build batch (assisted backend, `_affordable_builds` / `_carried_batch`): one `build_many`
+(<= `BUILD_BATCH_LIMIT` 32 ordinary paid builds, per-child receipts, an uncertain child ->
+`build_batch_outcome_unknown` -> reconcile) carries every carried plan entity of a
+`BUILD_BATCH_NAMES` type (belts, poles, pipes, inserters, splitters, stone/steel furnaces)
+in plan order. An entity that cannot join (item not carried or deferred, recipe, underground
+role, other type) is passed over instead of ending the batch; after a pass-over, drills and
+inserters keep plan order. One native `can_place` of the whole batch drops rejected tiles.
+The build-ahead branch sends the same batch. Before, the batch was the contiguous carried
+prefix: 122 of 438 district placements on eval-4177156614 were single builds (one pass each).
+The assisted backend has no walking, so a placement costs a pass (~15 ticks), not a walk;
+stand-point sweeps would matter only for the character backend.
+
+District build order (`smelting.producer_first_order`): the first bank (`PRODUCER_FIRST`,
+iron) with the shared coal network, the coal source route, its coal branch, ore route and
+power, then the next bank. Before, both banks came first and every route and the power last,
+so no district furnace smelted until the whole district stood (eval-4177156614: 12 minutes
+built from starter furnace plates while the iron outpost's ore waited).
+
+Transitional layer (`progression.capacity_nodes`): no `starter_capacity` node for a resource
+whose `mining_outpost` job is active once `electric-mining-drill` is researched (the permanent
+replacement is planned and buildable; eval-4177156614 added 5 coal cells 0.2 min before the
+coal outpost succeeded). The idle lane feeds the supply cell only for `current_demand` (the
+hardware of steps whose jobs are active), not for the `DEMAND_HORIZON` pre-production
+(`SupplyCell.idle_feed`; 75 idle feeds and 36 collections while the bus waited on that map).
 
 ## Early start (`early_start.py`, "pre-build")
 

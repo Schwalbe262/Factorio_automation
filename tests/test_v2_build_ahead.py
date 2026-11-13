@@ -98,5 +98,85 @@ class BuildAheadTests(unittest.TestCase):
         self.assertEqual(self.game.queries, BUILD_AHEAD_CHECKS)
 
 
+class BlockingGame(Game):
+    """The batch placement query (``can_place`` of several specs) rejects the given positions."""
+
+    def __init__(self, root, positions):
+        super().__init__(root)
+        self.positions = positions
+
+    def query(self, body):
+        self.queries += 1
+        blocked = [
+            {"name": "transport-belt", "position": {"x": x, "y": 0}, "reason": "terrain_or_entity_collision"}
+            for x in self.positions
+            if f'\\"x\\":{x},' in body
+        ]
+        return {"ok": not blocked, "blocked": blocked}
+
+
+class BuildBatchTests(BuildAheadTests):
+    """One build_many round trip for every carried plan entity (deterministic_builder._affordable_builds)."""
+
+    def names(self, action):
+        return [(row["name"], row["position"]["x"]) for row in action["actions"]]
+
+    def test_missing_items_are_passed_over_not_a_stop(self):
+        catalog = dict(CATALOG.entities, **{"stone-furnace": {"type": "furnace"}, "splitter": {"type": "splitter"}})
+        plan = self.plan(
+            entity("transport-belt", 0),
+            entity("pipe", 1),  # not carried: passed over
+            entity("transport-belt", 2),
+            entity("stone-furnace", 3),
+            entity("inserter", 5),  # carried, but behind a passed-over entity: keeps plan order
+            entity("splitter", 6),
+        )
+        builder = self.builder()
+        builder.catalog = SimpleNamespace(fingerprint="c", entities=catalog)
+        action = builder.ensure_plan(
+            self.obs({"transport-belt": 5, "stone-furnace": 1, "inserter": 1, "splitter": 1}), plan
+        )
+        self.assertEqual(action["type"], "build_many")
+        self.assertEqual(
+            self.names(action),
+            [("transport-belt", 0), ("transport-belt", 2), ("stone-furnace", 3), ("splitter", 6)],
+        )
+        self.assertTrue(all(row["type"] == "build" for row in action["actions"]))  # ordinary paid builds
+
+    def test_waiting_entity_lets_all_carried_belts_go_in_one_trip(self):
+        belts = [entity("transport-belt", x) for x in range(1, 9)]
+        plan = self.plan(entity("inserter", 0), *belts, entity("inserter", 20))
+        action = self.builder().ensure_plan(self.obs({"transport-belt": 8, "inserter": 0}), plan)
+        self.assertEqual(action["type"], "build_many")
+        self.assertEqual([x for _, x in self.names(action)], list(range(1, 9)))
+        self.assertIn("waits for its item", action["reason"])
+        self.assertEqual(self.bootstrap.calls, [("inserter", 2)])
+
+    def test_rejected_placements_leave_the_batch(self):
+        self.builder()
+        self.game = BlockingGame(self.root, positions=(2,))
+        builder = FactoryBuilder(self.game, self.bootstrap, CATALOG)
+        plan = self.plan(*(entity("transport-belt", x) for x in range(4)))
+        action = builder.ensure_plan(self.obs({"transport-belt": 4}), plan)
+        self.assertEqual(action["type"], "build_many")
+        self.assertEqual([x for _, x in self.names(action)], [0, 1, 3])
+
+    def test_deferred_items_are_passed_over(self):
+        builder = self.builder()
+        rows = builder._affordable_builds(
+            self.obs({"transport-belt": 2, "inserter": 2}),
+            [entity("transport-belt", 0), entity("inserter", 1), entity("transport-belt", 2)],
+            skipped=frozenset({"pipe"}),
+        )
+        self.assertEqual([r["position"]["x"] for r in rows], [0, 2])
+
+    def test_batch_is_bounded(self):
+        from factorio_agent.core.deterministic_game import BUILD_BATCH_LIMIT
+
+        plan = self.plan(*(entity("transport-belt", x) for x in range(BUILD_BATCH_LIMIT + 8)))
+        action = self.builder().ensure_plan(self.obs({"transport-belt": 100}), plan)
+        self.assertEqual(len(action["actions"]), BUILD_BATCH_LIMIT)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -525,6 +525,18 @@ def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
     from .starter_retirement import retired_by_jobs  # a permanent source replaced the starter cells
 
     outposts |= retired_by_jobs(jobs)
+    from .mining import UNLOCK_TECHNOLOGY, _researched
+
+    if _researched(observation.get("technologies"), UNLOCK_TECHNOLOGY):
+        # The permanent replacement is planned and buildable: its job is active and the drill is
+        # researched. A new starter cell would compete with it for the same plates and actor
+        # time and be retired soon after (owner rule: the transitional layer does not grow;
+        # eval-4177156614 added 5 coal cells at 23.6 min, 0.2 min before the coal outpost).
+        outposts |= {
+            (job.get("parameters") or {}).get("resource")
+            for job in jobs
+            if job.get("capability") == "mining_outpost" and job.get("status") not in TERMINAL_STATUSES | {"paused"}
+        }
     from .power_coal_feed import hand_fed_coal_per_minute  # the hand-fed boiler burns starter coal too
 
     try:

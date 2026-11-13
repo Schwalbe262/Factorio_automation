@@ -655,6 +655,22 @@ class IntermediateUseTests(UseFixture):
             copper_fed = self.live(self.state, inside={"copper-plate": 100})
             self.assertIsNone(self.cell.idle_feed(self.obs(copper_fed + [furnace])))  # no furnace plates taken
 
+    def test_idle_lane_feeds_only_the_bill_in_flight(self):
+        live = self.live(self.state)
+        obs = self.obs(live, inventory={"iron-plate": 500, "copper-plate": 500})
+        with (
+            patch.object(sc.SupplyCell, "demand", return_value={GEAR: 400, CIRCUIT: 100}),
+            patch.object(sc.SupplyCell, "current_demand", return_value={GEAR: 0, CIRCUIT: 0}),
+        ):
+            self.assertIsNotNone(self.cell.feed_action(obs, reserve=0))  # pre-production exists
+            self.assertIsNone(self.cell.idle_feed(obs))  # but nothing in flight needs it
+        with (
+            patch.object(sc.SupplyCell, "demand", return_value={GEAR: 400, CIRCUIT: 100}),
+            patch.object(sc.SupplyCell, "current_demand", return_value={GEAR: 40, CIRCUIT: 0}),
+        ):
+            feed = self.cell.idle_feed(obs)
+            self.assertEqual((feed["type"], feed["item"]), ("insert", "iron-plate"))
+
 
 class MultiProductRetireTests(UseFixture):
     def built(self, products=(GEAR, BELT)):

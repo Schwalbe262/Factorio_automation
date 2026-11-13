@@ -281,6 +281,50 @@ def merge_entities(*groups):
     return list(result.values())
 
 
+# Build order of the district banks: the plate the construction bill needs most first.
+# Belts, gears, inserters and splitters, the bulk of every early block, are iron.
+PRODUCER_FIRST = ("iron-ore", "copper-ore")
+
+
+def producer_first_order(entities, site, connections, routes, powers):
+    """The district plan in producer-first build order (same entities, same values).
+
+    The plan used to list both banks, then every route, then the bank power, so
+    no furnace smelted before the last entity stood: on eval-4177156614 the
+    district (455 entities, ~700 plates) was built for 12 minutes from starter
+    furnace plates while the finished iron outpost's ore waited at the end of an
+    unbuilt route. Now each bank comes complete with what makes it run: the first
+    bank (PRODUCER_FIRST), the shared coal network and the coal source route, then
+    that bank's coal branch, ore route and power; then the next bank. Its output
+    port starts carrying plates (a public construction source until the bus feed is
+    spliced) while the rest is still being built.
+    """
+    banks = site["banks"]
+    count = len(banks)
+    if len(routes) != len(connections) or len(connections) != 2 * count + 1 or len(powers) != count:
+        return entities
+    rank = {resource: i for i, resource in enumerate(PRODUCER_FIRST)}
+    order = sorted(range(count), key=lambda i: (rank.get(banks[i].get("resource"), len(rank)), i))
+    in_banks = {(e["name"], *xy(e)) for bank in banks for e in bank["entities"]}
+    groups = []
+    for step, i in enumerate(order):
+        groups.append(banks[i]["entities"])
+        if step == 0:
+            groups.append([e for e in site["entities"] if (e["name"], *xy(e)) not in in_banks])
+            groups.append(routes[2 * count]["entities"])  # coal source -> district coal input
+        groups.extend((routes[i]["entities"], routes[count + i]["entities"], powers[i]))
+    groups.append(entities)  # anything else keeps its place at the end
+    values = {(e["name"], *xy(e)): e for e in entities}
+    ordered, seen = [], set()
+    for group in groups:
+        for e in group:
+            key = (e["name"], *xy(e))
+            if key in values and key not in seen:
+                seen.add(key)
+                ordered.append(values[key])
+    return ordered if len(ordered) == len(entities) else entities
+
+
 def bank_capacities(catalog, banks):
     """Derive planned product/minute from unique furnace entities, never row counts.
 
@@ -867,6 +911,7 @@ return {ok=true,legal=legal}
                 es = merge_entities(es, route["entities"])
             if not good:
                 continue
+            powers = []
             for bank in site["banks"]:
                 pole = next(e for e in bank["entities"] if e["name"] == "small-electric-pole")
                 power = power_connection(
@@ -880,6 +925,7 @@ return {ok=true,legal=legal}
                     failures.append({"stage": "power", "area": site["area"], "reason": power.get("reason")})
                     good = False
                     break
+                powers.append(power["entities"])
                 es = merge_entities(es, power["entities"])
             if not good:
                 continue
@@ -908,6 +954,7 @@ return {ok=true,legal=legal}
                 failures.append({"stage": "whole_preflight", "area": site["area"], "reason": whole.get("reason")})
                 continue
             pairs = [pair for route in routes for pair in route.get("underground_pairs", [])]
+            es = producer_first_order(es, site, connections, routes, powers)
             plan = _plan(
                 es,
                 [p for b in site["banks"] for p in b["ports"] if p["direction"] == "output"],
