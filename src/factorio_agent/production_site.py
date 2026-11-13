@@ -21,6 +21,7 @@ result carries the ``layout`` record (chosen genome, scores, runner-ups).
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from factorio_agent.core.deterministic_builder import _plan
@@ -117,7 +118,8 @@ def _taps(game, builder, obs, board, line, owner, block, ports, catalog):
 
 
 def _routes(game, builder, obs, board, line, owner, product, block=None, catalog=None):
-    found_by_port = [(port, resolve(board, product, port["item"], owner=owner)) for port in line["inputs"]]
+    belt_ports = [port for port in line["inputs"] if port.get("kind") != "fluid"]
+    found_by_port = [(port, resolve(board, product, port["item"], owner=owner)) for port in belt_ports]
     for _, found in found_by_port:
         if not found["ok"]:
             return {"ok": False, **found}
@@ -170,7 +172,10 @@ def _routes(game, builder, obs, board, line, owner, product, block=None, catalog
 
 def _candidate_design(design: dict, candidate: dict) -> dict:
     line = candidate["line"]
-    return dict(line, arguments=dict(design["arguments"], genome=candidate["genome"].to_dict()))
+    out = dict(line, arguments=dict(design["arguments"], genome=candidate["genome"].to_dict()))
+    if design.get("fluid_source"):
+        out["fluid_source"] = design["fluid_source"]
+    return out
 
 
 def _no_mirror(t) -> bool:
@@ -299,6 +304,11 @@ def _place_one(game, builder, obs, catalog, site, board, design: dict, *, owner:
             if not routed["ok"]:
                 failures.append({"allocation": block.name, **routed})
                 continue
+            fluid = _fluid_route(game, builder, obs, catalog, line, routed["entities"], design, product)
+            if not fluid["ok"]:
+                failures.append({"allocation": block.name, **fluid})
+                continue
+            routed["entities"] = merge_entities(routed["entities"], fluid.get("entities", []))
             intrusions = adapter_intrusions(catalog, line, routed["entities"])
             if intrusions:
                 failures.append({"allocation": block.name, "reason": "lane_merge_fed_by_route", "audit": intrusions})
@@ -320,6 +330,9 @@ def _place_one(game, builder, obs, catalog, site, board, design: dict, *, owner:
                 reserved_area=line["reserved_area"],
                 underground_pairs=[pair for r in routed["routes"] for pair in r.get("underground_pairs", [])]
                 + planned_tap.tap_pairs(routed["taps"]),
+                fluid_underground_pairs=deepcopy(fluid.get("underground_pairs", [])),
+                preserved_fluid_crossings=deepcopy(fluid.get("preserved_fluid_crossings", [])),
+                owned_fluid_crossings=deepcopy(fluid.get("owned_fluid_crossings", [])),
                 clear_obstacles=list(obstacles.values()),
                 clearance_world_id=obs["world_id"],
                 layout_policy=LAYOUT_POLICY,
@@ -338,6 +351,7 @@ def _place_one(game, builder, obs, catalog, site, board, design: dict, *, owner:
                 "sources": routed["sources"],
                 "taps": routed["taps"],
                 "route_metrics": [r.get("route_metrics") for r in routed["routes"]],
+                "fluid_handoff": fluid.get("handoff"),
             }
     settle(site, obs["world_id"], owner, None)
     return {
@@ -346,6 +360,22 @@ def _place_one(game, builder, obs, catalog, site, board, design: dict, *, owner:
         "candidates": len(blocks),
         "failures": failures[-6:],
     }
+
+
+def _fluid_route(game, builder, obs, catalog, line, entities, design, product) -> dict:
+    """The typed pipe route of a fluid row's header port (``production_fluids``); ``{"ok": True}`` without one."""
+    from pathlib import Path
+
+    from . import production_fluids
+
+    ports = [p for p in line["inputs"] if p.get("kind") == "fluid"]
+    if not ports:
+        return {"ok": True}
+    root = Path(game.cfg.runtime_dir)
+    found = production_fluids.source(root, obs, catalog, design.get("fluid_source"), ports[0]["item"], product)
+    if not found["ok"]:
+        return found
+    return production_fluids.route(game, builder, obs, line, entities, ports[0], found["source"])
 
 
 def turned(state: dict, canonical: dict) -> dict:

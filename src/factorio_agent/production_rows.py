@@ -214,17 +214,12 @@ class ProductionRows:
         ):
             return {"ok": False, "reason": "production_row_recipes_locked", "missing": ["long-handed-inserter"]}
         fluid = fluid_inputs(line)
-        if fluid:
-            # The row layout carries its header port; routing a published fluid source to it
-            # (fluid_handoffs declare/bind, typed pipe route) is not implemented yet.
-            return {
-                "ok": False,
-                "reason": "production_row_fluid_input_unrouted",
-                "item": fluid[0]["item"],
-                "fluid_source": parameters.get("fluid_source"),
-                "needs": "a typed pipe route from the published fluid source to the row's header port",
-            }
+        if fluid and not parameters.get("fluid_source"):
+            # A fluid row reads one published outlet (production_fluids); the request names it.
+            return {"ok": False, "reason": "production_row_fluid_source_required", "item": fluid[0]["item"]}
         for port in line["inputs"]:
+            if port.get("kind") == "fluid":
+                continue  # routed from the registry outlet by production_site (production_fluids)
             found = resolve(board, item, port["item"], owner=owner)
             if not found["ok"]:
                 tap = tap_parameters(board, item, port["item"], input_demand(self.catalog, line, port["item"]))
@@ -280,6 +275,7 @@ class ProductionRows:
             layout_seed=selection.seed_for(obs["world_id"], owner),
             layout_library=designed.get("layout_library"),
             layout_skipped=designed.get("layout_skipped"),
+            fluid_source=parameters.get("fluid_source"),
         )
         placed = place_line(
             self.game,
@@ -451,6 +447,12 @@ class ProductionRows:
         cut = planned_tap.cutover(self.root, self.builder, obs, taps, clear_obstacles=clear)
         if cut is not None:
             return cut
+        from . import production_fluids
+
+        # A fluid row: declare its source edge before building, bind it once the first pipe stands.
+        handoff = production_fluids.handoff_step(self.game, self.catalog, obs, item, state.get("fluid_handoff"))
+        if handoff is not None:
+            return handoff
         result = self.builder.ensure_plan(obs, state["plan"])
         if result.get("status") != "succeeded":
             return result
@@ -490,6 +492,11 @@ class ProductionRows:
                 self.last_proof_failure = {"reason": "machine_recipe_changed", "position": wanted["position"]}
                 return None
         line = state["line"]
+        from . import production_fluids
+
+        if not production_fluids.handoff_bound(self.root, obs, parameters["item"], state.get("fluid_handoff")):
+            self.last_proof_failure = {"reason": "fluid_handoff_not_bound"}
+            return None
         machines = [actual[(e["name"], *xy(e))] for row in rows(line) for e in row["entities"] if e.get("recipe")]
         if any(not m.get("electric_network_connected") or m.get("energy", 0) <= 0 for m in machines):
             self.last_proof_failure = {"reason": "machine_unpowered"}

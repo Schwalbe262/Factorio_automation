@@ -1,7 +1,9 @@
 """Fluid input rows: one fluid per row through underground risers onto a header pipe (``blocks.row``)."""
 
 import copy
+import json
 import unittest
+from unittest.mock import patch
 
 from factorio_agent import progression as pg
 from factorio_agent import rocket_plan as rp
@@ -13,6 +15,7 @@ from factorio_agent.production_rows import validate_parameters
 from factorio_agent.site.transform import Transform, apply
 from test_v2_production_layout import PLATES, catalog as base_catalog
 from test_v2_rocket_plan import RESEARCHED, space_age_catalog
+import test_v2_production_rows as rows_tests
 from v2_blocks_fixture import _entity, _recipe, real_catalog
 
 
@@ -47,6 +50,7 @@ def catalog():
     data["entities"]["chemical-plant"]["fluidbox_prototypes"] = PLANT_BOXES
     data["entities"]["pipe"] = _entity("pipe", electric=False)
     data["entities"]["pipe-to-ground"] = _entity("pipe-to-ground", electric=False)
+    data["recipes"]["pipe-to-ground"] = _recipe(0.5, {"pipe": 10, "iron-plate": 5}, {"pipe-to-ground": 2})
     data["recipes"]["chemical-plant"] = _recipe(0.5, {"iron-plate": 5}, {"chemical-plant": 1})
     data["recipes"]["solid-fuel-from-light-oil"] = _recipe(1, {"fluid:light-oil": 10}, {"solid-fuel": 1}, "chemistry")
     return WorldCatalog.from_dict(data)
@@ -161,6 +165,106 @@ class FluidRowPlanTests(unittest.TestCase):
         )
         self.assertIn(supply["id"], unit["after"])
         validate_parameters(unit["parameters"])
+
+
+class FluidRowControllerTests(unittest.TestCase):
+    """A processing-unit row on the fake site: route from the published acid outlet, handoff, proof."""
+
+    setUp_rows = rows_tests.ProductionRowsTests.setUp
+    tearDown = rows_tests.ProductionRowsTests.tearDown
+    obs = rows_tests.ProductionRowsTests.obs
+    live = rows_tests.ProductionRowsTests.live
+
+    def board(self, *, science=True, ports=(), bus=None):
+        circuits = [
+            dict(rows_tests.IRON_PORT, item=item, position={"x": 60.5, "y": 40.5 + 2 * i})
+            for i, item in enumerate(("electronic-circuit", "advanced-circuit"))
+        ]
+        rows_tests.ProductionRowsTests.board(self, science=science, ports=tuple(circuits), bus=bus)
+
+    def setUp(self):
+        import test_v2_production_rows as rows_module
+
+        rows_module_catalog = rows_module.catalog
+        rows_module.catalog = catalog
+        try:
+            self.setUp_rows()
+        finally:
+            rows_module.catalog = rows_module_catalog
+        self.game.expected_world = "w"
+        self.acid = {
+            "kind": "fluid",
+            "item": "sulfuric-acid",
+            "name": "pipe",
+            "direction": "output",
+            "facing": 4,
+            "fluidbox_index": 1,
+            "position": {"x": 80.5, "y": 70.5},
+            "unit_number": 900,
+            "world_id": "w",
+        }
+        registry = {
+            "world_id": "w",
+            "catalog_fingerprint": self.catalog.fingerprint,
+            "sources": {"processing-unit-sulfuric-acid": self.acid},
+            "handoffs": {},
+        }
+        (self.root / "fluid-sources.json").write_text(json.dumps(registry), encoding="utf-8")
+        self.game.query.return_value = {"ok": True}
+
+        def pipe_route(game, builder, obs, source, destination, core, prior_groups=(), *, owned_prior=None):
+            self.assertEqual(source, self.acid)
+            self.assertEqual(destination["item"], "sulfuric-acid")
+            first = {"name": "pipe", "position": {"x": 81.5, "y": 70.5}, "direction": 0}
+            return {
+                "ok": True,
+                "entities": [first, {"name": "pipe", "position": destination["position"], "direction": 0}],
+                "underground_pairs": [],
+                "first_neighbor": dict(first, fluidbox_index=1),
+                "maximum_underground_span": 10,
+            }
+
+        self.pipe = patch("factorio_agent.chemical_production.plan_typed_fluid_connection", side_effect=pipe_route)
+        self.pipe.start()
+        iso = patch("factorio_agent.chemical_production.chemical_plan_isolation", return_value={"ok": True})
+        iso.start()
+        self.patches += [self.pipe, iso]
+
+    def test_a_processing_unit_row_routes_declares_binds_and_proves(self):
+        parameters = {"item": "processing-unit", "rate_per_minute": 4, "fluid_source": "processing-unit-sulfuric-acid"}
+        state = self.rows.prepare(self.obs(), parameters)
+        self.assertTrue(state["ok"], state)
+        self.assertEqual(state["fluid_handoff"]["source"], self.acid)
+        self.assertIn({"name": "pipe", "position": {"x": 81.5, "y": 70.5}, "direction": 0}, state["plan"]["entities"])
+        self.rows.save("processing-unit", state)
+        self.rows.step(self.obs(), parameters)
+        registry = json.loads((self.root / "fluid-sources.json").read_text(encoding="utf-8"))
+        self.assertEqual(registry["handoffs"]["produce:processing-unit"]["sulfuric-acid"]["phase"], "declared")
+        live = self.live(state["plan"], "processing-unit")
+        done = self.rows.step(self.obs(live), parameters)
+        if done.get("type") == "bar":  # the stock chest bar first (game.query answers ok without slots)
+            self.game.query.return_value = {"ok": True, "slots": 2, "size": 32}
+            done = self.rows.step(self.obs(live), parameters)
+        self.assertEqual(done.get("status"), "succeeded", done)
+        registry = json.loads((self.root / "fluid-sources.json").read_text(encoding="utf-8"))
+        self.assertEqual(registry["handoffs"]["produce:processing-unit"]["sulfuric-acid"]["phase"], "bound")
+
+    def test_a_missing_outlet_is_a_planning_failure_naming_the_key(self):
+        from factorio_agent import plan_needs
+
+        parameters = {"item": "processing-unit", "rate_per_minute": 4, "fluid_source": "elsewhere"}
+        result = self.rows.prepare(self.obs(), parameters)
+        self.assertFalse(result["ok"])
+        reasons = {f.get("reason") for f in result.get("failures", [])} | {
+            f.get("reason") for f in result.get("layout_failures", [])
+        }
+        self.assertTrue(
+            reasons & {"production_row_fluid_source_missing", "no_production_row_site_with_complete_connections"},
+            result,
+        )
+        self.assertIsNotNone(plan_needs.from_result("produce", result, parameters))
+        without = self.rows.prepare(self.obs(), {"item": "processing-unit", "rate_per_minute": 4})
+        self.assertEqual(without["reason"], "production_row_fluid_source_required")
 
 
 STAGES = {rp.STAGE_SILO, rp.STAGE_PARTS, rp.STAGE_LAUNCH}  # another worker registers these

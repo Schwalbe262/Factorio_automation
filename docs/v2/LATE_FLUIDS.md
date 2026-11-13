@@ -54,11 +54,17 @@ output belt onto a header pipe over every slot; the header's west end is the row
 riser pair, one header network with the port, and no foreign fluid neighbour; growth extends
 risers in place. `rocket_plan` gives the row a `fluid_source` key and a `FluidSupply` row.
 
-**Not done:** routing that source to the header port. `ProductionRows.design` blocks
-`production_row_fluid_input_unrouted` (with `fluid_source`) until the row declares and binds a
-`fluid_handoffs` edge and lays the typed pipe route (`plan_typed_fluid_connection` with the
-first-neighbour gap, as `chemical_production` does). Electric engines remain a bill gap
-(`produce_unfit`): engine units leave the engine row only through its stock chest.
+**Fluid input** (`production_fluids`): `production_site` looks the row's `fluid_source` up in
+`fluid-sources.json` (missing: planning failure `production_row_fluid_source_missing` naming the
+key), routes the typed pipe to the header port with `plan_typed_fluid_connection` (other fluids
+hard, buried crossings compiled, `route_relax` rungs of `produce`) and checks
+`chemical_plan_isolation`; the plan carries the fluid underground pairs and crossings.
+`ProductionRows.step` declares the handoff (consumer `produce:<item>`) before any build and
+binds the first neighbour once it stands; the proof requires the bound edge. Offline proof:
+`test_v2_fluid_rows.FluidRowControllerTests` (fake site, patched router). Only provable live:
+the native pipe survey/router, the isolation query and the handoff declare/bind Lua.
+Electric engines remain a bill gap (`produce_unfit`): engine units leave the engine row only
+through its stock chest.
 
 ## Growth and bus lanes as data
 
