@@ -20,6 +20,15 @@ PRODUCERS = {
     "offshore-pump",
     "mining-drill",
 }
+# Below this evolution a map with no enemy near any producer needs no post
+# (``assess_risk``); attacks still raise the level through damage evidence.
+QUIET_EVOLUTION = 0.1
+# Enemy search radius around each producer in ``SURVEY_LUA``.
+THREAT_RADIUS = 96
+# Site-plan area kinds a defense post may never occupy, even as a fallback.
+NEVER_RELAXED = frozenset({"bus", "rail", "corridor"})
+# Ranked producers tried as a post's focus before the step reports no site.
+FOCUS_TRIES = 8
 SURVEY_LUA = r"""
 local x=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=x.world_id or s.name~="nauvis"then return {ok=false,reason="defense_policy_world_or_surface_changed"}end
@@ -61,6 +70,47 @@ return {ok=true,world_id=d.world_id,tick=game.tick,surface_index=s.index,force_i
 
 def _distance(a, b):
     return math.hypot(a["x"] - b["x"], a["y"] - b["y"])
+
+
+def sizing_note(level, minimum, evolution, tier):
+    """One line for job evidence: why this many posts (``assess_risk``)."""
+    if minimum == 0:
+        return (
+            f"quiet map, no posts required: no enemy within {THREAT_RADIUS} tiles of a producer "
+            f"and evolution {evolution:.3f} below {QUIET_EVOLUTION}"
+        )
+    if level == 0:
+        return f"quiet but evolution {evolution:.3f} >= {QUIET_EVOLUTION}: {minimum} {tier}-tier reserve post(s)"
+    return f"{('quiet', 'approaching', 'high', 'critical')[level]} threat: {minimum} post(s) on the threatened side"
+
+
+def _box_overlaps(a, b):
+    return a[0][0] < b[1][0] and a[1][0] > b[0][0] and a[0][1] < b[1][1] and a[1][1] > b[0][1]
+
+
+def outside_plan(position, boxes):
+    """True when the 2x2 gun footprint at ``position`` overlaps none of ``boxes``."""
+    footprint = [[position["x"] - 1, position["y"] - 1], [position["x"] + 1, position["y"] + 1]]
+    return not any(_box_overlaps(footprint, box) for box in boxes)
+
+
+def plan_exclusions(plan, protected):
+    """``(strict, relaxed)`` site-plan boxes a new post must avoid.
+
+    ``plan`` is ``site_plan_areas`` output (``None``: no site service, nothing
+    to avoid). Strict: every planned area. Relaxed (fallback when no strict
+    site covers the target): the zone or strip that hosts ``protected`` may
+    take a post on free land; bus band, rail and corridor areas never.
+    """
+    if not plan:
+        return [], []
+    strict = [row["area"] for row in plan]
+    relaxed = [
+        row["area"]
+        for row in plan
+        if row["kind"] in NEVER_RELAXED or not any(_box_overlaps(row["area"], box) for box in protected)
+    ]
+    return strict, relaxed
 
 
 def assess_risk(facts, world_id):
@@ -143,13 +193,14 @@ def assess_risk(facts, world_id):
     if facts["evolution_factor"] >= 0.4 and near_any is not None and near_any <= 64:
         level = max(level, 2)
     minimum = (0, 2, 3, 4)[level]
-    if tier == "mid" and level == 0:
-        minimum = 1
-    if tier == "advanced" and level == 0:
-        minimum = 2
+    # Tier reserve guards only once evolution says attacks from beyond the
+    # survey radius are likely; a quiet low-evolution map buys no turret.
+    if level == 0 and facts["evolution_factor"] >= QUIET_EVOLUTION:
+        minimum = {"early": 0, "mid": 1, "advanced": 2}[tier]
     return dict(
         risk=("quiet", "approaching", "high", "critical")[level],
         level=level,
+        sizing=sizing_note(level, minimum, facts["evolution_factor"], tier),
         minimum_posts=minimum,
         maximum_posts=minimum,
         ammo_target=10 if level < 2 else 20,
@@ -214,7 +265,72 @@ class DefensePolicy:
         )
         return facts
 
-    def prepare(self, obs, state, reserved):
+    def _site(self, focus, posts, targets, radius, reserved, blocked, gun_range):
+        """Nearest-to-threat legal gun site that fully covers ``focus``: ``(site, error)``."""
+        area = [
+            [focus["position"]["x"] - 2, focus["position"]["y"] - 2],
+            [focus["position"]["x"] + 2, focus["position"]["y"] + 2],
+        ]
+        cells = coverage_cells([area])
+        cx = round(focus["position"]["x"])
+        cy = round(focus["position"]["y"])
+        reach = math.floor(radius)
+
+        def key(p):
+            # Threatened side first, then the shortest guard distance.
+            side = min((_distance(p, t["position"]) for t in targets), default=0)
+            return (side, _distance(p, focus["position"]), p["x"], p["y"])
+
+        candidates = []
+        for x in range(cx - reach, cx + reach + 1, 2):
+            for y in range(cy - reach, cy + reach + 1, 2):
+                p = {"x": x, "y": y}
+                if any(_distance(p, q["position"]) < 3 for q in posts):
+                    continue
+                if not all(math.hypot(x - px, y - py) <= radius for c in cells for px, py in c["corners"]):
+                    continue
+                if any(t["type"] == "turret" and _distance(p, t["position"]) <= t.get("range", 0) + 2 for t in targets):
+                    continue
+                if not outside_plan(p, blocked):
+                    continue
+                candidates.append(p)
+        candidates.sort(key=key)
+        bounds = [[cx - reach - 3, cy - reach - 3], [cx + reach + 3, cy + reach + 3]]
+        if (bounds[1][0] - bounds[0][0] + 1) * (bounds[1][1] - bounds[0][1] + 1) > 65536:
+            return None, "adaptive_defense_survey_budget_exceeded"
+        if not candidates:
+            return None, None
+        native = native_candidate_survey(self.game, candidates[:256], [area], reserved, bounds)
+        if not native.get("ok") or native.get("range") != gun_range:
+            return None, "adaptive_defense_no_clear_current_producer_site"
+        if not native.get("candidates"):
+            return None, None
+        return min(native["candidates"], key=lambda q: key(q["position"])), None
+
+    def _first_site(self, focuses, posts, targets, radius, reserved, plan_areas, gun_range):
+        """Try ranked focuses off every planned area, then with the hosting zone relaxed."""
+        modes = ("strict", "relaxed") if plan_areas else ("board",)
+        for mode in modes:
+            for focus in focuses:
+                protected = [
+                    [
+                        [focus["position"]["x"] - 2, focus["position"]["y"] - 2],
+                        [focus["position"]["x"] + 2, focus["position"]["y"] + 2],
+                    ]
+                ]
+                strict, relaxed = plan_exclusions(plan_areas, protected)
+                if mode == "relaxed" and relaxed == strict:
+                    continue
+                blocked = relaxed if mode == "relaxed" else strict
+                site, error = self._site(focus, posts, targets, radius, reserved, blocked, gun_range)
+                if error:
+                    return {"error": error, "focus_unit": focus["unit_number"]}
+                if site:
+                    return {"site": site, "focus": focus, "placement": mode}
+        return {}
+
+    def prepare(self, obs, state, reserved, plan_areas=None):
+        """Sized post targets; ``plan_areas`` (``site_plan_areas``) is land no new post may take."""
         try:
             facts = self.survey(obs)
             risk = assess_risk(facts, obs["world_id"])
@@ -237,18 +353,16 @@ class DefensePolicy:
             chosen = []
             additions = []
             focuses = []
-            intent_key = hashlib.sha256(
-                json.dumps(
-                    [
-                        obs["world_id"],
-                        risk["level"],
-                        risk["minimum_posts"],
-                        [(a["unit_number"], a["position"]) for a in ranked],
-                        reserved,
-                    ],
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
+            keyed = [
+                obs["world_id"],
+                risk["level"],
+                risk["minimum_posts"],
+                [(a["unit_number"], a["position"]) for a in ranked],
+                reserved,
+            ]
+            if plan_areas:
+                keyed.append([row["area"] for row in plan_areas])
+            intent_key = hashlib.sha256(json.dumps(keyed, sort_keys=True).encode()).hexdigest()
             previous = state.get("adaptive_policy", {})
             by_name = {p["name"]: p for p in posts}
             if (
@@ -272,63 +386,41 @@ class DefensePolicy:
                     ),
                 )[: risk["minimum_posts"]]
             for index in range(len(chosen), risk["minimum_posts"]):
-                focus = next(
-                    (a for a in ranked if all(_distance(a["position"], q["position"]) > radius for q in focuses)),
-                    ranked[0],
-                )
-                focuses.append(focus)
+                spread = [
+                    a for a in ranked if all(_distance(a["position"], q["position"]) > radius for q in focuses)
+                ] or [ranked[0]]
                 reusable = [
-                    p for p in paid if p not in chosen and _distance(p["position"], focus["position"]) <= radius - 3
+                    p for p in paid if p not in chosen and _distance(p["position"], spread[0]["position"]) <= radius - 3
                 ]
                 if reusable:
-                    chosen.append(min(reusable, key=lambda p: (_distance(p["position"], focus["position"]), p["name"])))
+                    focuses.append(spread[0])
+                    chosen.append(
+                        min(reusable, key=lambda p: (_distance(p["position"], spread[0]["position"]), p["name"]))
+                    )
                     continue
                 if len(posts) + len(additions) >= 128:
                     return {"ok": False, "reason": "adaptive_defense_registered_post_budget_reached", "risk": risk}
-                area = [
-                    [focus["position"]["x"] - 2, focus["position"]["y"] - 2],
-                    [focus["position"]["x"] + 2, focus["position"]["y"] + 2],
-                ]
-                cells = coverage_cells([area])
-                cx = round(focus["position"]["x"])
-                cy = round(focus["position"]["y"])
-                reach = math.floor(radius)
-                candidates = []
-                for x in range(cx - reach, cx + reach + 1, 2):
-                    for y in range(cy - reach, cy + reach + 1, 2):
-                        p = {"x": x, "y": y}
-                        if any(_distance(p, q["position"]) < 3 for q in posts + additions):
-                            continue
-                        if not all(math.hypot(x - px, y - py) <= radius for c in cells for px, py in c["corners"]):
-                            continue
-                        if any(
-                            t["type"] == "turret" and _distance(p, t["position"]) <= t.get("range", 0) + 2
-                            for t in targets
-                        ):
-                            continue
-                        candidates.append(p)
-                candidates.sort(key=lambda p: (_distance(p, focus["position"]), p["x"], p["y"]))
-                bounds = [[cx - reach - 3, cy - reach - 3], [cx + reach + 3, cy + reach + 3]]
-                if (bounds[1][0] - bounds[0][0] + 1) * (bounds[1][1] - bounds[0][1] + 1) > 65536:
-                    return {"ok": False, "reason": "adaptive_defense_survey_budget_exceeded", "risk": risk}
-                native = native_candidate_survey(self.game, candidates[:256], [area], reserved, bounds)
-                if not native.get("ok") or native.get("range") != facts["gun_range"] or not native.get("candidates"):
+                found = self._first_site(
+                    spread[:FOCUS_TRIES], posts + additions, targets, radius, reserved, plan_areas, facts["gun_range"]
+                )
+                if found.get("error"):
+                    return {"ok": False, "reason": found["error"], "risk": risk, "focus_unit": found["focus_unit"]}
+                if not found.get("site"):
                     return {
                         "ok": False,
                         "reason": "adaptive_defense_no_clear_current_producer_site",
                         "risk": risk,
-                        "focus_unit": focus["unit_number"],
+                        "focus_unit": spread[0]["unit_number"],
                     }
-                site = min(
-                    native["candidates"],
-                    key=lambda q: (_distance(q["position"], focus["position"]), q["position"]["x"], q["position"]["y"]),
-                )
+                focus = found["focus"]
+                focuses.append(focus)
                 name = "adaptive_" + str(focus["unit_number"]) + "_" + str(len(posts) + len(additions) + 1)
                 post = dict(
-                    site,
+                    found["site"],
                     name=name,
                     anchor=deepcopy(focus["position"]),
                     focus=deepcopy(focus["position"]),
+                    placement=found["placement"],
                     commissioned=False,
                 )
                 additions.append(post)

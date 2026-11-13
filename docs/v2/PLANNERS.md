@@ -295,6 +295,33 @@ A lab is never added while a built lab is idle. The startup cell (`industry._ext
 `_grow_cell`) adds no slot lab while research runs and a powered lab is idle without packs.
 Pinned by `tests/test_v2_science_growth.py`, `tests/test_v2_template_power.py`.
 
+## Threat-sized defense (`defense_policy.py`, `defense_perimeter.py`, capabilities `defense_perimeter`, `defense_growth`)
+
+Posts follow the live threat, never a fixed list (doc: `DEFENSE_POLICY.md`):
+
+```
+risk  = assess_risk(survey): enemies within 96 tiles of a producer, evolution, damage, tier
+posts = 0                                   quiet and evolution < QUIET_EVOLUTION (0.1)
+      = tier reserve (early 0, mid 1, adv 2) quiet and evolution >= 0.1
+      = 2 / 3 / 4                           approaching (<=64) / high (<=40, damage) / critical
+quiet and posts == 0: defense_perimeter succeeds "quiet map, no posts required"
+each new post:
+  focus     = producers ranked (damaged, nearest threat, density), FOCUS_TRIES (8) tried
+  forbidden = board reserved areas + port exits + site_plan_areas (zones, strips,
+              corridors, allocations, taps); relaxed only as a fallback: the zone/strip
+              hosting the focus may take it, bus/rail/corridor never
+  site      = legal native candidate covering the focus, nearest the threat, then the focus
+growth:
+  other job's background step: build at once only if risk level >= URGENT_RISK_LEVEL (2)
+  else receipt defense_growth.grow = risk.minimum_posts > policy active posts
+    -> defense_growth_nodes: one {"posts": N} node at DEFENSE_GROWTH_PRIORITY
+       (SCIENCE_GROWTH_PRIORITY - 1), requires defense_perimeter succeeded, id bucketed
+       per DEFENSE_GROWTH_PERIOD_TICKS (36000) so it is re-evaluated periodically
+no site plan for this world: legacy POSTS / FUTURE_AREAS (development map only)
+```
+
+Pinned by `tests/test_v2_defense_sizing.py`, `tests/test_v2_defense_policy.py`.
+
 ## Native research queue (`research_queue.py`)
 
 The labs never wait between technologies: the game's own research queue is

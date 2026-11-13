@@ -19,6 +19,22 @@ def defense_perimeter_proof(ex, obs, result, parameters):
     return ex.perimeter.proof(obs)
 
 
+def defense_growth_step(ex, obs, parameters):
+    # The same sized rule as defense_perimeter; the node only says when (defense_growth_nodes).
+    ex.builder._sync(obs)
+    return ex._defense_with_fuel(obs, ex.perimeter.step(obs))
+
+
+def defense_growth_proof(ex, obs, result, parameters):
+    return ex.perimeter.proof(obs)
+
+
+def validate_defense_growth(parameters):
+    posts = (parameters or {}).get("posts") if isinstance(parameters, dict) else None
+    if set(parameters or {}) != {"posts"} or type(posts) is not int or not 1 <= posts <= 16:
+        raise ValueError("defense_growth needs posts: integer [1,16]")
+
+
 def radar_network_step(ex, obs, parameters):
     ex.builder._sync(obs)
     result = ex.radars.step(obs, parameters or {})
@@ -189,6 +205,7 @@ def ammo_production_proof(ex, obs, result, parameters):
 
 
 register("defense_perimeter", step=defense_perimeter_step, proof=defense_perimeter_proof)
+register("defense_growth", step=defense_growth_step, proof=defense_growth_proof, validate=validate_defense_growth)
 # defense_watch never succeeds on its own; the generic flow proof applies.
 register("defense_watch", step=defense_watch_step)
 register("defense_hardening", step=defense_hardening_step, proof=defense_hardening_proof)

@@ -261,6 +261,14 @@ def execute(argv=None, services=None):
                     obs["science_growth"] = growth
             except Exception as exc:  # a growth estimate must never break observe
                 obs["science_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .defense_perimeter import growth_receipt as defense_growth_receipt
+
+            try:
+                defense = defense_growth_receipt(root, obs)
+                if defense is not None:
+                    obs["defense_growth"] = defense
+            except (OSError, ValueError, KeyError, TypeError) as exc:  # a growth estimate must never break observe
+                obs["defense_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
         from .early_start import inputs_receipt
 
         # Early start: which blocks have their inputs planned (progression.autopilot_nodes).
