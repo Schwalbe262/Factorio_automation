@@ -1901,7 +1901,12 @@ class BootstrapLogistics:
             else:
                 plan = self.board.reserve_startup_science(obs)
             if not plan.get("ok"):
-                return {"status": "blocked", "reason": plan.get("reason", "bootstrap_science_reservation_failed")}
+                needs = {"plan_needs": plan["plan_needs"]} if plan.get("plan_needs") else {}
+                return {
+                    "status": "blocked",
+                    "reason": plan.get("reason", "bootstrap_science_reservation_failed"),
+                    **needs,
+                }
         if self.state:
             error = self._binding_error(obs, plan, historical=bool(researched))
             if error:

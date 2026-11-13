@@ -403,6 +403,28 @@ def external_hardware(blocks, *, exclude=()):
     return rows
 
 
+def reserved_growth_hardware(block):
+    """Hardware a block reserves for its own later growth (not in ``entities``): its ``growth_entities``
+    (furnace slots of a smelting bank) and, for a startup science cell, the lab slots with their poles
+    and the west extension while the cell can still grow (:func:`science_extension_error`).
+
+    Fleet aud-1114-0526 seed 1723389324: the supply cell's power link put a pole at (-11.5, 38.5), the
+    tile of the science cell's second lab slot; since the cell starts with two labs
+    (``industry.start_floor``) that lab was built 5000 ticks later and the supply cell blocked
+    ``reserved block placement is obstructed`` for 30 minutes.
+    """
+    rows = [e for e in block.get("growth_entities", []) if isinstance(e, dict)]
+    if block.get("template") == "startup_science_cell":
+        try:
+            slots = lab_slot_entities(block)
+            rows += (list(slots[0]["poles"]) if slots else []) + [slot["lab"] for slot in slots]
+            if science_extension_error(block) is None:
+                rows += science_extension_entities(block)
+        except (KeyError, TypeError, ValueError):
+            pass
+    return rows
+
+
 def planned_unbuilt_hardware(builder, obs, blocks, *, exclude=()):
     """Tiles of planned-but-unbuilt entities of every registered block, ``{tile: owner row}``.
 
@@ -416,15 +438,15 @@ def planned_unbuilt_hardware(builder, obs, blocks, *, exclude=()):
     entity of the same name stands on its exact position with a unit number.
     Blocks named in ``exclude`` (the caller's own) are skipped. Each value is
     ``{"block", "name", "position"}`` of the planned entity on that tile.
-    A block's ``growth_entities`` (reserved furnace slots of a smelting bank)
-    count as planned hardware too.
+    A block's reserved growth (:func:`reserved_growth_hardware`) counts as
+    planned hardware too.
     """
     built = built_keys(obs)
     tiles = {}
     for name, block in blocks.items():
         if name in exclude or not isinstance(block, dict):
             continue
-        for e in list(block.get("entities", [])) + list(block.get("growth_entities", [])):
+        for e in list(block.get("entities", [])) + reserved_growth_hardware(block):
             if not isinstance(e, dict) or not isinstance(e.get("position"), dict):
                 continue
             if (e["name"], e["position"]["x"], e["position"]["y"]) in built:
@@ -615,6 +637,56 @@ local function keepout_hit(l,t,r,b)
  return false
 end
 """
+
+
+# Lua: ``link_closed(entities, zones)`` is true when a new small electric pole of ``entities`` would
+# stand on a resource tile or inside a mining reservation (``zones`` from
+# ``resource_policy.mining_reservations``). A same-force pole already standing on the exact position is
+# adopted, not built, and annotated mining poles are the mining policy's own. Fixed pole chains
+# (``pole_chain``) leave their block's reserved area, which is the only area a block survey checks for
+# ore: fleet aud-1114-0526 seed 1032498969 planned the startup science cell's grid chain across iron
+# ore at (33.5, 12.5) and (33.5, 10.5); the builder refused it (resource_policy) and research stopped.
+LINK_POLE_LUA = """
+local function link_closed(entities,zones)
+ for _,e in ipairs(entities) do
+  local q=e.position
+  if e.name=="small-electric-pole" and not e.mining_resource then
+   local old=target(q,e.name)
+   if not (old and old.force==f and old.position.x==q.x and old.position.y==q.y) then
+    if s.count_entities_filtered{area={{q.x-.49,q.y-.49},{q.x+.49,q.y+.49}},type="resource"}>0 then return true end
+    for _,z in ipairs(zones or {}) do local b=z.area
+     if q.x+.49>b[1][1] and q.x-.49<b[2][1] and q.y+.49>b[1][2] and q.y-.49<b[2][2] then return true end
+    end
+   end
+  end
+ end
+ return false
+end
+"""
+
+
+def _mining_zones(game, obs):
+    """``resource_policy.mining_reservations`` for ``LINK_POLE_LUA``; an unreadable board gives none (the
+    builder's resource policy still refuses at build time)."""
+    from .resource_policy import mining_reservations
+
+    try:
+        return mining_reservations(game, obs.get("world_id", ""))
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def link_needs(reason, closed, candidates):
+    """The ``plan_needs`` (kind ``power``) of a site search whose power links all met ore or a mine."""
+    from .plan_needs import make
+
+    return make(
+        "power",
+        reason,
+        tried=int(candidates),
+        rejected_by={"link_pole_on_resource_or_mining_reservation": int(closed)},
+        change="a site whose power link stays off ore and mining reservations",
+    )
 
 
 CROSSABLE_BELTS = ("transport-belt", "underground-belt")
@@ -881,12 +953,20 @@ class Board:
             slot_entities = (slots[0]["poles"] if slots else []) + [slot["lab"] for slot in slots]
             surveys.append(dict(plan, slots=slot_entities))
         # Trees and rocks are cleared, not avoided: a site is "clearable" when only nature is in the way.
+        # The grid chain leaves the reserved area, so every new entity is also checked against ore and
+        # mining reservations (resource_policy refuses them at build time; LINK_POLE_LUA).
         payload = json.dumps(json.dumps(surveys, separators=(",", ":")))
+        zones = json.dumps(json.dumps(_mining_zones(self.game, obs), separators=(",", ":")))
         surveyed = self.game.query(
             """
 local plans=helpers.json_to_table("""
             + payload
-            + """);local out={};local roomy={};local clearable={}
+            + """);local zones=helpers.json_to_table("""
+            + zones
+            + """);local out={};local roomy={};local clearable={};local ore_links={}
+"""
+            + LINK_POLE_LUA
+            + """
 for i,p in ipairs(plans) do
  local legal=true
  if s.count_entities_filtered{area=p.reserved_area,type="resource"}>0 then legal=false end
@@ -896,6 +976,7 @@ for i,p in ipairs(plans) do
    if e.type~="character" and e.type~="electric-pole" and q.x>lo[1]+.5 and q.x<hi[1]-.5 and q.y>lo[2]+.5 and q.y<hi[2]-.5 then legal=false;break end
   end
  end
+ if legal and link_closed(p.entities,zones) then legal=false;ore_links[#ore_links+1]=i end
  local natural=false
  if legal then for _,e in ipairs(p.entities) do
   local old=target(e.position,e.name)
@@ -916,11 +997,12 @@ for i,p in ipairs(plans) do
   if free then roomy[#roomy+1]=i end
  end
 end
-return {ok=true,legal=out,roomy=roomy,clearable=clearable}
+return {ok=true,legal=out,roomy=roomy,clearable=clearable,ore_links=ore_links}
 """
         )
         if not surveyed.get("ok"):
             return {"ok": False, "reason": surveyed.get("reason", "block_survey_failed")}
+        ore_links = surveyed.get("ore_links") or []
         indices = surveyed.get("legal") or []
         roomy = [i for i in surveyed.get("roomy") or [] if i in indices]
         plan = candidates[(roomy or indices)[0] - 1] if indices else None
@@ -934,7 +1016,10 @@ return {ok=true,legal=out,roomy=roomy,clearable=clearable}
                     plan = dict(candidate, clear_obstacles=check["clear_obstacles"], clearance_world_id=obs["world_id"])
                     break
         if plan is None:
-            return {"ok": False, "reason": "no_clear_reserved_science_slot", "candidates": len(candidates)}
+            failure = {"ok": False, "reason": "no_clear_reserved_science_slot", "candidates": len(candidates)}
+            if ore_links:
+                failure["plan_needs"] = link_needs(failure["reason"], len(ore_links), len(candidates))
+            return failure
         self.state["blocks"]["startup_science"] = plan
         _atomic_json(self.path, self.state)
         self._stamp = self._file_stamp()

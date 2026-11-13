@@ -125,14 +125,17 @@ def supplied_networks(obs) -> set:
     return {e.get("electric_network_id") for e in obs.get("entities", []) if generating(e)}
 
 
-def plan_connection(game, builder, obs, destination, reserved=()):
+def plan_connection(game, builder, obs, destination, reserved=(), *, keep_out=()):
+    """Pole hops from the supplied network to ``destination``; no new pole on ore, in a mining
+    reservation, on another block or its planned hardware, on ``reserved`` tiles, or touching a
+    ``keep_out`` area (``[[x0, y0], [x1, y1]]``, e.g. belt corridors a caller must keep free)."""
     networks = supplied_networks(obs)
     sources = [
         e for e in obs["entities"] if e["name"] == "small-electric-pole" and e.get("electric_network_id") in networks
     ]
     if not sources:
         return {"ok": False, "reason": "no_supplied_pole_network"}
-    result = _connect(game, builder, obs, destination, reserved, sources, sources)
+    result = _connect(game, builder, obs, destination, reserved, sources, sources, keep_out)
     if result.get("reason") != "no_bounded_pole_hop_connection":
         return result
     # The nearest supplied pole can sit deep inside another block (a smelting
@@ -144,13 +147,13 @@ def plan_connection(game, builder, obs, destination, reserved=()):
     outside = [e for e in sources if (e["position"]["x"], e["position"]["y"]) not in inside]
     if not inside or not outside:
         return result
-    return _connect(game, builder, obs, destination, reserved, sources, outside)
+    return _connect(game, builder, obs, destination, reserved, sources, outside, keep_out)
 
 
 HOP_GRID_PITCHES = (4, 2, 1)  # candidate pole tiles every N tiles around the goal, coarse first
 
 
-def _connect(game, builder, obs, destination, reserved, sources, anchors):
+def _connect(game, builder, obs, destination, reserved, sources, anchors, keep_out=()):
     """Pole hops from supplied ``sources`` to ``destination``; the search box spans the nearest of ``anchors``.
 
     Candidate tiles lie on a grid around the goal. A coarse grid can miss the
@@ -160,7 +163,7 @@ def _connect(game, builder, obs, destination, reserved, sources, anchors):
     """
     result = None
     for pitch in HOP_GRID_PITCHES:
-        attempt = _connect_on_grid(game, builder, obs, destination, reserved, sources, anchors, pitch)
+        attempt = _connect_on_grid(game, builder, obs, destination, reserved, sources, anchors, pitch, keep_out)
         if attempt.get("reason") not in ("no_bounded_pole_hop_connection", "power_connection_survey_budget_exceeded"):
             return attempt
         # A finer grid that is only too large to survey says nothing about the coarse grid's
@@ -172,7 +175,7 @@ def _connect(game, builder, obs, destination, reserved, sources, anchors):
     return result
 
 
-def _connect_on_grid(game, builder, obs, destination, reserved, sources, anchors, pitch):
+def _connect_on_grid(game, builder, obs, destination, reserved, sources, anchors, pitch, keep_out=()):
     goal = (destination["x"], destination["y"])
     mining_goal = None
     for spec in reserved:
@@ -255,6 +258,7 @@ return {ok=true,clear=clear}
     legal = {ordered[i - 1] for i in result.get("clear", [])}
     legal -= builder._occupied_by_plan(list(reserved))
     legal -= _foreign_block_points(game, builder, goal, legal) - set(starts)
+    legal -= {p for p in legal if p != goal and p not in starts and _in_areas(keep_out, p)}
     if goal not in legal:
         return {"ok": False, "reason": "power_target_footprint_obstructed"}
     zone_costs = _plan_zone_costs(game, obs.get("world_id"), goal)
@@ -313,6 +317,12 @@ return {ok=true,clear=clear}
         wire_hops=len(path) - 1,
         maximum_hop_tiles=7,
     )
+
+
+def _in_areas(areas, point) -> bool:
+    """``point`` (a pole tile centre) touches one of ``areas`` (``[[x0, y0], [x1, y1]]``)."""
+    x, y = point
+    return any(a[0][0] < x + 0.5 and x - 0.5 < a[1][0] and a[0][1] < y + 0.5 and y - 0.5 < a[1][1] for a in areas)
 
 
 def _key(e):
