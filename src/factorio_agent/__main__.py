@@ -306,6 +306,14 @@ def execute(argv=None, services=None):
                     obs["mine_trunks"] = trunks
             except Exception as exc:  # a growth estimate must never break observe
                 obs["mine_trunks_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .trunk_return_feed import receipt as return_feed_receipt
+
+            try:  # surplus trips vs a return feed on the patch trunk (trunk_return_feed.trunk_return_feed_nodes)
+                feeds = return_feed_receipt(root, obs, services.catalog(root, game))
+                if feeds is not None:
+                    obs["trunk_return_feeds"] = feeds
+            except Exception as exc:  # an estimate must never break observe
+                obs["trunk_return_feeds_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .defense_perimeter import growth_receipt as defense_growth_receipt
 
             try:

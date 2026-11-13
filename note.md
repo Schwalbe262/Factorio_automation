@@ -252185,3 +252185,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - failure: round auto-1113-1848 invalid (ImportError CHUNK_CHARTED_LUA: main checkout merged during the round); a stopped loop shell kept running and started a second fleet; GUI supervisor was untracked by lifecycle (stale pid) and had to be killed before new-map.
 - result: v2 at 3e8669f, gate PASS 2751; GUI map eval-4177156614 and round all-1113-2047 started on it.
 - next: read all-1113-2047; fix production_row_input_source_missing and bus reach.
+
+## 2026-11-13 Part 48 - return feed (shared block) and trunk surplus return
+- goal: owner idea: large carried surplus dumped into a chest + input-priority splitter at the mine trunk head instead of walked to consumers.
+- actions: return_feed.py shared geometry/splice/seed/register/stock/standing (column + elbow shapes); wood_burner_feed refactored onto it (behaviour and tests unchanged); trunk_return_feed.py capability (receipt trunk_return_feeds, wait-vs-spend trigger, prepare at trunk row r below every tap, electric arm under a bank pole else burner for coal, ledger `returns` station, board block, release before mine, proof with trunk trace); carried_surplus: feed chest first for coal/ore, trip log carried-surplus.json, opportunistic depot drain, feed chest never a depot; mine_trunk stations/passthrough/lane side know `return`.
+- metrics: tests test_v2_trunk_return_feed (14); wood, carried surplus, mine trunk, power tap, starter retirement unchanged.
+- result: offline only; nothing proven live.
+- open: no site when a tap already sits at trunk row 1-2 beside bank poles/drills (blocks with no_return_feed_site_at_the_trunk_head); TRIP_SECONDS/BUILD_SECONDS are estimates; stone excluded (no carry allowance).
+- next: fleet: check trunk-return-feeds.json phase done, chest stock falls, coal carried near allowance, recent trips drop.

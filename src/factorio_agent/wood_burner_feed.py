@@ -9,6 +9,10 @@ replaced one feed belt, its INPUT priority on the wood side: wood is taken
 first, coal fills only what wood does not. The actor deposits carried wood
 into that chest (``carried_surplus``: the chest is the wood depot).
 
+The geometry, splice, arm seed, chest registration and standing check are the
+shared return feed (``return_feed.py``, column shape); this module keeps the
+wood-specific site search, trigger and power-flow proof.
+
 Layout (``layouts``), flow direction ``v``, feed belt tile ``T`` on a straight
 run (its upstream and downstream neighbours are feed belts of the same
 direction), side tile ``S = T + s`` (``s`` one of the two lateral vectors)::
@@ -45,10 +49,10 @@ from __future__ import annotations
 
 import json
 import math
-from copy import deepcopy
 from pathlib import Path
 
-from .core.deterministic_builder import BELT_FED, HAND_FED, _plan, coal_feed_mode, power_flow_ready
+from . import return_feed
+from .core.deterministic_builder import BELT_FED, HAND_FED, coal_feed_mode, power_flow_ready
 from .core.deterministic_state import _atomic_json
 
 CAPABILITY = "wood_burner_feed"
@@ -57,13 +61,15 @@ STATE_FILE = "wood-burner-feed.json"
 NODE_ID = "auto_wood_burner_feed"
 # Wood worth one disposal trip: about 50 MJ (half a minute of one boiler at full load).
 WOOD_BATCH = 25
-ARM_SEED = 2  # wood put into the burner arm once; it then fuels itself from the wood it moves
+ARM_SEED = return_feed.ARM_SEED  # wood put into the burner arm once; it then fuels itself from the wood it moves
 CELL_CLEARANCE = 2.5  # feed tiles this close to the feed drill or its fuel arm are not candidates
-CHEST = "wooden-chest"
-ARM = "burner-inserter"
-VECTORS = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
-BELTS = frozenset({"transport-belt", "underground-belt", "splitter"})
-PRIORITY_KEYS = ("splitter_input_priority", "splitter_output_priority")
+CHEST = return_feed.CHEST
+ARM = return_feed.BURNER_ARM
+VECTORS = return_feed.VECTORS
+BELTS = return_feed.BELTS
+PRIORITY_KEYS = return_feed.PRIORITY_KEYS
+splitter_side = return_feed.splitter_side
+reserved_area = return_feed.reserved_area
 
 
 def _xy(entity) -> tuple:
@@ -71,75 +77,16 @@ def _xy(entity) -> tuple:
     return (p["x"], p["y"])
 
 
-def _pos(x, y) -> dict:
-    return {"x": round(x, 3), "y": round(y, 3)}
-
-
-def splitter_side(splitter: dict, point: dict) -> str:
-    """``"left"`` / ``"right"`` of ``point`` seen along the splitter's facing (``planned_bus.splitter_side``)."""
-    from .planned_bus import splitter_side as side
-
-    return side(splitter, point)
-
-
 def layouts(coal_plan: dict) -> list[dict]:
-    """Every wood feed layout on a straight run of the feed belt (module doc), unsorted."""
+    """Every wood feed layout (column shape) on a straight run of the feed belt (module doc), unsorted."""
     entities = coal_plan.get("entities") or []
-    belts = {_xy(e): e for e in entities if e["name"] == "transport-belt"}
     cell = [_xy(e) for e in entities if e["name"] in (ARM, "inserter", "burner-mining-drill", "electric-mining-drill")]
-    taken = {_xy(e) for e in entities}
-    rows = []
-    for (x, y), belt in belts.items():
-        d = belt.get("direction", 0)
-        if d not in VECTORS:
-            continue
-        vx, vy = VECTORS[d]
-        before, after = belts.get((x - vx, y - vy)), belts.get((x + vx, y + vy))
-        if not before or not after or before.get("direction") != d or after.get("direction") != d:
-            continue
-        if any(max(abs(px - x), abs(py - y)) <= CELL_CLEARANCE for px, py in cell):
-            continue
-        for sign in (1, -1):
-            sx, sy = -vy * sign, vx * sign
-            side = (x + sx, y + sy)
-            tiles = [(side[0] - k * vx, side[1] - k * vy) for k in (-1, 0, 1, 2, 3)]  # S+v, S, S-v, S-2v, S-3v
-            if any(t in taken for t in tiles):
-                continue
-            splitter = {"name": "splitter", "position": _pos(x + sx / 2, y + sy / 2), "direction": d}
-            splitter["splitter_input_priority"] = splitter_side(splitter, _pos(*side))
-            splitter["splitter_output_priority"] = splitter_side(splitter, _pos(x, y))
-            rows.append(
-                {
-                    "belt": deepcopy(belt),
-                    "splitter": splitter,
-                    "free": _pos(*tiles[0]),
-                    "side": _pos(*side),
-                    "entities": [
-                        {"name": "transport-belt", "position": _pos(*tiles[2]), "direction": d},
-                        {"name": ARM, "position": _pos(*tiles[3]), "direction": (d + 8) % 16},  # pickup side
-                        {"name": CHEST, "position": _pos(*tiles[4]), "direction": 0},
-                    ],
-                }
-            )
-    return rows
-
-
-def reserved_area(layout: dict) -> list:
-    """The side column ``S + v`` .. ``S - 3v`` (the feed belt at ``T`` stays the feed's own hardware)."""
-    free = layout["free"]
-    tiles = [_xy(e) for e in layout["entities"]] + [(free["x"], free["y"])]
-    xs, ys = [t[0] for t in tiles], [t[1] for t in tiles]
-    return [[math.floor(min(xs)), math.floor(min(ys))], [math.ceil(max(xs)), math.ceil(max(ys))]]
+    return return_feed.layouts(entities, cell=cell, clearance=CELL_CLEARANCE)
 
 
 def spliced_coal_plan(coal_plan: dict, layout: dict) -> dict:
     """The feed plan with the belt at ``T`` replaced by the wood splitter (idempotent)."""
-    at = _xy(layout["belt"])
-    kept = [e for e in coal_plan["entities"] if not (e["name"] == "transport-belt" and _xy(e) == at)]
-    if not any(e["name"] == "splitter" and _xy(e) == _xy(layout["splitter"]) for e in kept):
-        kept.append(deepcopy(layout["splitter"]))
-    extra = {k: v for k, v in coal_plan.items() if k not in ("ok", "reason", "entities", "ports", "required_items")}
-    return _plan(kept, coal_plan["ports"], **extra)
+    return return_feed.spliced_plan(coal_plan, layout)
 
 
 def _read(path: Path) -> dict:
@@ -222,17 +169,9 @@ class WoodBurnerFeed:
     # ----- the wood depot ---------------------------------------------------------
     def chest(self, obs) -> dict | None:
         """The built, registered wood chest standing in this world, else None."""
-        saved = self.state.get("chest")
-        if self.state.get("world_id") != obs.get("world_id") or not saved:
+        if self.state.get("world_id") != obs.get("world_id"):
             return None
-        return next(
-            (
-                e
-                for e in obs.get("entities", [])
-                if e.get("name") == saved["name"] and e.get("unit_number") == saved["unit_number"]
-            ),
-            None,
-        )
+        return return_feed.find_chest(obs, self.state.get("chest"))
 
     # ----- planning -----------------------------------------------------------------
     def prepare(self, obs) -> dict:
@@ -287,13 +226,10 @@ class WoodBurnerFeed:
         return {"ok": False, "reason": "no_wood_feed_site_on_the_coal_feed", "rejected": sorted(set(reasons))[:8]}
 
     def _side_plan(self) -> dict:
-        layout = self.state["layout"]
-        return _plan(
-            deepcopy(layout["entities"]),
-            [],
-            reserved_area=reserved_area(layout),
-            clear_obstacles=deepcopy(self.state.get("clear_obstacles") or []),
-            clearance_world_id=self.state["world_id"],
+        return return_feed.side_plan(
+            self.state["layout"],
+            clear_obstacles=self.state.get("clear_obstacles") or [],
+            world_id=self.state["world_id"],
             template=BLOCK,
         )
 
@@ -310,13 +246,7 @@ class WoodBurnerFeed:
             }
         if board.get("world_id") != obs["world_id"]:
             return {"status": "blocked", "reason": "wood_feed_board_world_changed"}
-        layout = self.state["layout"]
-        wanted = dict(
-            _plan(deepcopy(layout["entities"]) + [deepcopy(layout["splitter"])], []),
-            reserved_area=reserved_area(layout),
-            template=BLOCK,
-            owner="power",
-        )
+        wanted = return_feed.block(self.state["layout"], template=BLOCK, owner="power")
         blocks = board.setdefault("blocks", {})
         if blocks.get(BLOCK) != wanted:
             blocks[BLOCK] = wanted
@@ -329,33 +259,15 @@ class WoodBurnerFeed:
         The plan is republished right before the mine, so no other job's feed
         repair sees a planned splitter while the old belt still stands.
         """
-        layout = self.state["layout"]
-        live = {(e["name"], *_xy(e)): e for e in obs.get("entities", [])}
-        if ("splitter", *_xy(layout["splitter"])) not in live:
-            if int((obs.get("inventory") or {}).get("splitter", 0)) < 1:
-                result = self.builder.bootstrap.ensure_item(obs, "splitter", 1)
-                if result.get("type") or result.get("status") != "succeeded":
-                    return result
-            old = live.get(("transport-belt", *_xy(layout["belt"])))
-            if old is not None:
-                if old.get("unit_number") != layout["belt_unit"]:
-                    return {"status": "blocked", "reason": "wood_feed_belt_identity_changed"}
-                move = self.builder._move(obs, old["position"])
-                if move:
-                    return move
-                self._republish_feed()
-                return {
-                    "type": "mine",
-                    "name": old["name"],
-                    "position": old["position"],
-                    "count": 1,
-                    "expected_entity_unit": old["unit_number"],
-                    "expected_entity_world_id": obs["world_id"],
-                    "reason": "normally recover one owned coal feed belt for the paid wood feed splitter",
-                }
-        self._republish_feed()
-        result = self.builder.ensure_plan(obs, _plan([deepcopy(layout["splitter"])], []))
-        return None if result.get("status") == "succeeded" else result
+        return return_feed.splice(
+            self.builder,
+            obs,
+            self.state["layout"],
+            self._republish_feed,
+            belt_unit=self.state["layout"]["belt_unit"],
+            reason="normally recover one owned coal feed belt for the paid wood feed splitter",
+            identity_reason="wood_feed_belt_identity_changed",
+        )
 
     def _republish_feed(self) -> None:
         builder = self.builder.state
@@ -365,65 +277,41 @@ class WoodBurnerFeed:
             self.builder._save()
 
     def _seed(self, obs) -> dict | None:
-        layout = self.state["layout"]
-        spec = next(e for e in layout["entities"] if e["name"] == ARM)
-        arm = next((e for e in obs.get("entities", []) if e.get("name") == ARM and _xy(e) == _xy(spec)), None)
-        if arm is None:
-            return {"status": "waiting", "reason": "reobserve the paid wood feed arm"}
-        if sum((arm.get("inventory") or {}).values()) > 0 or float(arm.get("remaining_burning_fuel") or 0) > 0:
-            return None
-        carried = int((obs.get("inventory") or {}).get("wood", 0))
-        if carried < 1:
-            result = self.builder.bootstrap.ensure_item(obs, "wood", ARM_SEED)
-            return result if result.get("type") or result.get("status") != "succeeded" else None
-        move = self.builder._move(obs, spec["position"])
-        if move:
-            return move
-        return {
-            "type": "insert",
-            "name": ARM,
-            "position": deepcopy(spec["position"]),
-            "item": "wood",
-            "inventory": "fuel",
-            "count": min(ARM_SEED, carried),
-            "reason": "wood feed: start the burner arm once; it then fuels itself from the wood it moves",
-        }
+        return return_feed.seed_arm(
+            self.builder,
+            obs,
+            self.state["layout"],
+            "wood",
+            "wood feed: start the burner arm once; it then fuels itself from the wood it moves",
+        )
 
     def _register(self, obs) -> dict | None:
-        spec = next(e for e in self.state["layout"]["entities"] if e["name"] == CHEST)
-        found = next((e for e in obs.get("entities", []) if e.get("name") == CHEST and _xy(e) == _xy(spec)), None)
-        if found is None or type(found.get("unit_number")) is not int:
-            return {"status": "waiting", "reason": "reobserve the paid wood feed chest"}
-        self.state["chest"] = {"name": CHEST, "position": dict(found["position"]), "unit_number": found["unit_number"]}
+        found = return_feed.register_chest(obs, self.state["layout"])
+        if "chest" not in found:
+            return found
+        self.state["chest"] = found["chest"]
         return None
 
     def _stock(self, obs) -> dict | None:
         """Carried wood, then depot wood, into the chest; None once nothing is left to move or the chest is full."""
-        from .carried_surplus import DEPOSIT_LIMIT, chest_room
+        from .carried_surplus import chest_room
 
         chest = self.chest(obs)
         if chest is None:
             return {"status": "blocked", "reason": "wood_feed_chest_missing"}
         room = chest_room(chest, "wood", self.catalog)
-        carried = int((obs.get("inventory") or {}).get("wood", 0))
         if room <= 0:
             return None
-        if carried > 0:
-            move = self.builder._move(obs, chest["position"])
-            if move:
-                return move
-            return {
-                "type": "deposit",
-                "name": chest["name"],
-                "position": dict(chest["position"]),
-                "item": "wood",
-                "count": int(min(carried, room, DEPOSIT_LIMIT)),
-                "expected_entity_unit": chest["unit_number"],
-                "expected_entity_world_id": obs["world_id"],
-                "reason": "wood feed: carried wood into the boiler wood chest",
-            }
-        take = self.surplus.depot_take(obs, "wood", room) if self.surplus is not None else None
-        return take
+        if int((obs.get("inventory") or {}).get("wood", 0)) > 0:
+            return return_feed.stock_action(
+                self.builder,
+                obs,
+                chest,
+                "wood",
+                self.catalog,
+                reason="wood feed: carried wood into the boiler wood chest",
+            )
+        return self.surplus.depot_take(obs, "wood", room) if self.surplus is not None else None
 
     # ----- controller contract ----------------------------------------------------
     def step(self, obs, parameters=None) -> dict:
@@ -475,16 +363,8 @@ class WoodBurnerFeed:
         state = self.state
         if not state or state.get("world_id") != obs.get("world_id") or state.get("phase") not in ("stock", "done"):
             return None
-        layout = state["layout"]
-        live = {(e["name"], *_xy(e)): e for e in obs.get("entities", [])}
-        for spec in [*layout["entities"], layout["splitter"]]:
-            found = live.get((spec["name"], *_xy(spec)))
-            if found is None or (spec["name"] != CHEST and found.get("direction") != spec.get("direction")):
-                return None
-        split = live[("splitter", *_xy(layout["splitter"]))]
-        if any(split.get(k) != layout["splitter"][k] for k in PRIORITY_KEYS):
-            return None
-        if ("transport-belt", *_xy(layout["belt"])) in live or self.chest(obs) is None:
+        split = return_feed.standing(obs, state["layout"])
+        if split is None or self.chest(obs) is None:
             return None
         builder = self.builder.state
         coal, power = builder.get("coal_plan") or {}, builder.get("power_plan")

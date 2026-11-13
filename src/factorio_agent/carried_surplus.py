@@ -36,12 +36,23 @@ furnaces follow, then depots. Wood is moved only once more than one stack is
 carried (owner, 2026-11-13: not as it comes in), so a clearing batch is not
 interrupted for every tree.
 
+Return feed (owner, 2026-11-13; ``trunk_return_feed``): once a patch trunk of
+coal or ore has a return feed, its chest is the first sink of that item: the
+whole surplus goes there in one deposit, then consumers, then depots. Depots
+holding that item are emptied towards it only opportunistically (idle pass, or
+the depot is within ``PASSING_DISTANCE``; ``drain_depot``). A feed chest only
+ever receives its own item and is never a depot. Every move to a consumer or
+depot is logged (``log_trip``, ``carried-surplus.json``): the return feed
+trigger counts the recent trips.
+
 Plates are construction stock and stay with ``inventory_storage.KEEP``.
 """
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 SURPLUS_STACKS = 1  # dispose once the surplus fills this many stacks
 FUELS = ("coal", "wood")
@@ -55,6 +66,11 @@ DEPOSIT_LIMIT = 1000  # storage_transfer.validate_deposit envelope
 DEFAULT_STACK = 50
 WOOD = "wood"
 MIN_GIVE = 10  # a consumer takes surplus only with room for at least this many (owner: give 10 or a stack, not 1)
+TRIP_LOG = "carried-surplus.json"  # disposal trips per item (trunk_return_feed trigger)
+TRIP_WINDOW_TICKS = 36000  # recent window of the trip count: 10 game minutes
+TRIP_LOG_LIMIT = 64  # ticks kept per item
+PASSING_DISTANCE = 10.0  # a depot this close to the actor is drained towards a return feed in any pass
+DRAIN_TAKE = 50  # one take envelope (starter_retirement.TAKE_LIMIT)
 
 
 def stack_size(catalog, item) -> int:
@@ -151,11 +167,53 @@ def chest_room(chest, item, catalog) -> int:
     return max(0, (slots - used) * stack_size(catalog, item) - int(held.get(item, 0)))
 
 
+def _trip_log_path(root):
+    return Path(root) / TRIP_LOG
+
+
+def recent_trips(root, obs, item) -> int:
+    """Disposal trips of ``item`` to consumers or depots in the last ``TRIP_WINDOW_TICKS`` (``log_trip``)."""
+    if root is None:
+        return 0
+    try:
+        state = json.loads(_trip_log_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(state, dict) or state.get("world_id") != obs.get("world_id"):
+        return 0
+    tick = int(obs.get("tick") or 0)
+    ticks = (state.get("trips") or {}).get(item) or []
+    return sum(1 for t in ticks if isinstance(t, int) and 0 <= tick - t <= TRIP_WINDOW_TICKS)
+
+
+def log_trip(root, obs, item) -> None:
+    """Record one disposal trip of ``item`` (the return feed trigger counts them, ``trunk_return_feed``)."""
+    if root is None or not obs.get("world_id"):
+        return
+    path = _trip_log_path(root)
+    try:
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict) or state.get("world_id") != obs["world_id"]:
+        state = {"world_id": obs["world_id"], "trips": {}}
+    tick = int(obs.get("tick") or 0)
+    ticks = [t for t in (state.setdefault("trips", {}).get(item) or []) if isinstance(t, int) and t <= tick]
+    state["trips"][item] = (ticks + [tick])[-TRIP_LOG_LIMIT:]
+    from .core.deterministic_state import _atomic_json
+
+    _atomic_json(path, state)
+
+
 class CarriedSurplus:
-    def __init__(self, catalog, storage=None, retirement=None, wood_feed=None, reserve=None):
+    def __init__(
+        self, catalog, storage=None, retirement=None, wood_feed=None, reserve=None, return_feeds=None, root=None
+    ):
         self.catalog, self.storage, self.retirement = catalog, storage, retirement
         self.wood_feed = wood_feed  # wood_burner_feed.WoodBurnerFeed: its chest feeds the boilers
+        self.return_feeds = return_feeds  # trunk_return_feed.TrunkReturnFeed: chest(obs, item) on the patch trunk
         self.reserve = reserve  # reserve(obs, item) -> carried items held for a hand-fed boiler
+        self.root = root  # runtime directory for the disposal trip log (None: not logged)
 
     def held_back(self, obs, item) -> int:
         return max(0, int(self.reserve(obs, item) or 0)) if callable(self.reserve) else 0
@@ -166,22 +224,43 @@ class CarriedSurplus:
             return None
         return self.wood_feed.chest(obs)
 
+    def feed_chest(self, obs, item) -> dict | None:
+        """The standing feed chest of ``item``: the wood feed's for wood, the trunk return feed's otherwise."""
+        if item == WOOD:
+            return self.wood_chest(obs, item)
+        if self.return_feeds is None:
+            return None
+        return self.return_feeds.chest(obs, item)
+
+    def _feed_units(self, obs) -> set:
+        units = set()
+        for item in ITEMS:
+            chest = self.feed_chest(obs, item)
+            if chest is not None:
+                units.add(chest.get("unit_number"))
+        return units
+
     def _excluded(self, obs):
         return self.retirement.cell_keys(obs) if self.retirement is not None else set()
 
     def depots(self, obs) -> list[dict]:
-        """Registered paid storage chests standing in this world, nearest first."""
+        """Registered paid storage chests standing in this world, nearest first (never a feed chest)."""
         state = getattr(self.storage, "state", None) or {}
         if state.get("world_id") != obs.get("world_id"):
             return []
         wanted = {(c.get("unit_number"), c.get("name")) for c in state.get("chests", [])}
-        found = [e for e in obs.get("entities", []) if (e.get("unit_number"), e.get("name")) in wanted]
+        feeds = self._feed_units(obs)
+        found = [
+            e
+            for e in obs.get("entities", [])
+            if (e.get("unit_number"), e.get("name")) in wanted and e.get("unit_number") not in feeds
+        ]
         return sorted(found, key=lambda e: (_distance(obs, e), e["unit_number"]))
 
     def sink_room(self, obs, item) -> int:
-        """Items of ``item`` that consumers and depots accept now."""
+        """Items of ``item`` that consumers, its feed chest and depots accept now."""
         room = sum(r["room"] for r in consumers(obs, item, self.catalog, self._excluded(obs)))
-        feed = self.wood_chest(obs, item)
+        feed = self.feed_chest(obs, item)
         room += chest_room(feed, item, self.catalog) if feed else 0
         return room + sum(chest_room(c, item, self.catalog) for c in self.depots(obs))
 
@@ -193,16 +272,29 @@ class CarriedSurplus:
         return max(0, allowed + self.sink_room(obs, item) - carried(obs, item))
 
     def sink_action(self, obs, item, amount, reason) -> dict | None:
-        """One paid move of up to ``amount`` carried ``item``: consumer first (rule 2a), else a depot (2b).
+        """One paid move of up to ``amount`` carried ``item``: feed chest / consumer first (rule 2a), else a depot (2b).
 
-        Wood: boilers, then the wood feed chest, then the other consumers.
+        Coal and ore: the trunk return feed chest first (the whole surplus in one
+        deposit), then consumers, then depots. Wood: boilers, then the wood feed
+        chest, then the other consumers. A move to a consumer or depot is logged
+        as a disposal trip (``log_trip``).
         """
         amount = min(int(amount), carried(obs, item))
         if amount <= 0:
             return None
+        feed = self.feed_chest(obs, item)
+        if feed is not None and item != WOOD:
+            action = self._deposit(obs, feed, item, amount, reason + " (return feed)")
+            if action is not None:
+                return action
+        action = self._other_sink(obs, item, amount, reason, feed)
+        if action is not None and action.get("expected_entity_unit") != (feed or {}).get("unit_number", object()):
+            log_trip(self.root, obs, item)
+        return action
+
+    def _other_sink(self, obs, item, amount, reason, feed) -> dict | None:
         rows = consumers(obs, item, self.catalog, self._excluded(obs))
-        feed = self.wood_chest(obs, item)
-        if feed is not None and chest_room(feed, item, self.catalog) > 0:
+        if item == WOOD and feed is not None and chest_room(feed, item, self.catalog) > 0:
             boilers = [r for r in rows if r["entity"].get("name") == "boiler"]
             rows = boilers + [{"chest": feed}] + [r for r in rows if r not in boilers]
         for row in rows:
@@ -242,8 +334,10 @@ class CarriedSurplus:
     def step(self, obs, *, idle=False) -> dict | None:
         """Upkeep: one disposal action for the first item whose surplus reaches the threshold, else None.
 
-        ``idle``: a pass in which no job acted (kept for callers; wood moves only
-        above one carried stack in every pass, see ``threshold``).
+        ``idle``: a pass in which no job acted. Wood moves only above one carried
+        stack in every pass (``threshold``). With nothing to dispose, a depot
+        holding an item that has a return feed is emptied towards that feed
+        (``drain_depot``: idle, or the depot is within ``PASSING_DISTANCE``).
         """
         if not obs.get("world_id"):
             return None
@@ -254,6 +348,43 @@ class CarriedSurplus:
                 action = self.sink_action(obs, item, excess, f"put carried surplus {item} where it is used")
                 if action is not None:
                     return action
+        for item in ITEMS:
+            action = self.drain_depot(obs, item, idle=idle)
+            if action is not None:
+                return action
+        return None
+
+    def drain_depot(self, obs, item, *, idle=False) -> dict | None:
+        """One take of ``item`` from a depot into the hands, for its return feed chest; else None.
+
+        Opportunistic only (never a shuttle): in an idle pass, or when the depot is
+        within ``PASSING_DISTANCE`` of the actor. The take is sized so that the
+        carried surplus then reaches the threshold and the next pass deposits it
+        whole into the feed chest (``sink_action``); a feed chest without room or
+        a full inventory takes nothing.
+        """
+        if item == WOOD:
+            return None  # the wood feed stocks itself from depots (wood_burner_feed._stock)
+        feed = self.feed_chest(obs, item)
+        if feed is None or "inventory_empty_slots" in obs and int(obs.get("inventory_empty_slots") or 0) < 1:
+            return None
+        room = chest_room(feed, item, self.catalog)
+        excess = carried(obs, item) - allowance(item, self.catalog) - self.held_back(obs, item)
+        for chest in self.depots(obs):
+            stock = int((chest.get("inventory") or {}).get(item, 0))
+            if stock <= 0 or not (idle or _distance(obs, chest) <= PASSING_DISTANCE):
+                continue
+            count = min(stock, room, DRAIN_TAKE)
+            if count <= 0 or excess + count < threshold(item, self.catalog):
+                continue
+            return {
+                "type": "take",
+                "name": chest["name"],
+                "position": dict(chest["position"]),
+                "item": item,
+                "count": int(count),
+                "reason": f"empty depot {item} towards its return feed",
+            }
         return None
 
     def depot_take(self, obs, item, count) -> dict | None:

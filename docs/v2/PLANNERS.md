@@ -309,9 +309,20 @@ wood/boiler    base boiler: ONE fuel slot (fuel_inventory_size=1, data/base enti
                belt-fed: capability wood_burner_feed (wood_burner_feed.py) puts a wooden chest -> burner arm ->
                splitter in place of one straight feed belt, input priority on the wood side; the chest is
                the wood sink; proposed once wood >= WOOD_BATCH is carried/in depots and splitters are enabled
+return feed    coal/ore with a trunk_return_feed (trunk_return_feed.py, LAYOUT_PRINCIPLES "Return feed"):
+               its chest is the FIRST sink (whole surplus, one deposit), then consumers, then depots;
+               the chest receives only its own item and is never a depot; depots holding the item are
+               drained towards it only in an idle pass or within PASSING_DISTANCE (10) (drain_depot)
+trigger        receipt trunk_return_feeds, wait vs spend per resource with a patch bank:
+               wait  = (ceil(surplus / stack) + trips in the last 10 game min) * TRIP_SECONDS (12)
+               spend = BUILD_SECONDS (40) + 2 * distance(actor, trunk head) / 8.9 tiles/s
+               surplus = carried - allowance + depot stock; trips = moves to consumers/depots
+               (carried-surplus.json, log_trip); proposed once per trunk when wait > spend, the trunk
+               is observed, belt rate x built lanes > proven supply and splitters are enabled
 fetch          V2Bootstrap._take_output takes fuel from a depot before any other chest (depot_take);
                "collect produced coal" stays bounded by the requested count
-source         starter retirement coal: trip_room = allowance + consumer/depot room - carried
+source         starter retirement coal: trip_room = allowance + feed chest/consumer/depot room - carried;
+               its previous trip goes through sink_action, so a return feed chest is its sink first
 ```
 
 Not built: a new depot chest on a SiteService spot; the existing InventoryStorage chest (built when

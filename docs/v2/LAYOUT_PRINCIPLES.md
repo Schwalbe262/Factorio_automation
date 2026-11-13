@@ -305,3 +305,33 @@ builds them.
 Not yet: `steam_expansion`'s own paired coal bank, retiring an old independent material group
 through `obsolete.py`, consumers tapping the second lane (it needs a tap that dives under the
 first lane from the far side), an N-to-N balancer generator.
+
+## Return feed (`return_feed.py`; uses: `wood_burner_feed.py`, `trunk_return_feed.py`)
+
+Owner, 2026-11-13: a large carried surplus is easier dumped into a chest at the start of a
+belt than walked to consumers a few items at a time. One shared block puts items back onto
+any line:
+
+```
+chest -> inserter -> side belt (v) -> splitter (v) replacing one straight line belt T
+splitter: INPUT priority on the side (returned items first), OUTPUT priority on T's side
+          (the line continues; the side output S + v stays free, never built on)
+shapes:   column  chest S-3v, inserter S-2v, belt S-v    (the wood feed; reaches back along the line)
+          elbow   chest S-v+2s, inserter S-v+s, belt S-v  (beside a trunk head: rows T-1..T+1 only)
+inserter: direction = pickup side; burner arm seeded with 2 fuel once (fuels itself from what it moves)
+splice:   owner's plan republished / released first, the one belt mined by unit, splitter built and
+          configured (return_feed.splice); proof: every entity as planned, priorities live, T gone
+```
+
+Wood (`wood_burner_feed`): the column on the belt-fed coal feed, nearest the boilers.
+
+Patch trunk (`trunk_return_feed`, one per trunk, coal / iron-ore / copper-ore): row `r >= 1` of
+the trunk's first run, below every recorded tap and lane row, nearest the head first; the elbow
+first, the side without taps first. Electric inserter when a standing pole of the patch bank
+covers its tile, else a burner arm for coal; ore without a pole has no site. Recorded on the
+trunk ledger as a `return` station (`mine_trunk.record_return`; its window keeps later taps and
+lanes at rows `>= r + 3`, it is not a tap side for `lane_plan` and adds no demand) and as board
+block `trunk_return_feed:<item>`; trunk traces pass its splitter (`trunk_segments`,
+`tap_passthrough`). When the head has no free row before the first tap (a tap at row 1, or bank
+poles and drills beside rows 1..first tap) the job blocks with
+`no_return_feed_site_at_the_trunk_head`; moving the tap is not done yet.
