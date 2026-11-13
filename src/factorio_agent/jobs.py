@@ -651,6 +651,12 @@ def control(root: Path, game, key: str, operation: str) -> dict:
                 job["paused_seconds"] = job.get("paused_seconds", 0) + seconds
                 job["progress_at_tick"] += ticks
                 job["progress_at_time"] += seconds
+                if job["reason"] == "job_deadline_exceeded":
+                    # A retry is a fresh attempt: without this the job is over
+                    # its deadline again on the very next pass (seed 2644599892:
+                    # the main bus, waiting for plates, could not be retried).
+                    job["paused_ticks"] = max(job["paused_ticks"], ledger.data["last_tick"] - job["created_tick"])
+                    job["paused_seconds"] = max(job["paused_seconds"], now - job["created_at"])
                 if job["reason"] == "objective_progress_stalled":
                     # The stall window was already used up when the job blocked.
                     # Carrying it over would block the retry on its first step.
