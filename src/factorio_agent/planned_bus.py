@@ -354,6 +354,16 @@ def publication(state: dict) -> dict:
 
 
 # ----- controller ----------------------------------------------------------------
+def _splitter_over(live: dict, belt: dict):
+    """A live splitter with the belt's direction covering the belt's tile, or None."""
+    x, y = xy(belt)
+    for dx, dy in ((0.5, 0), (-0.5, 0), (0, 0.5), (0, -0.5)):
+        found = live.get(("splitter", x + dx, y + dy))
+        if found is not None and found.get("direction") == belt.get("direction"):
+            return found
+    return None
+
+
 class PlannedBus:
     """Plan, build and prove the iron/copper trunk of the planned main bus."""
 
@@ -670,6 +680,12 @@ class PlannedBus:
         live = {(e["name"], *xy(e)): e for e in obs["entities"]}
         for wanted in plan["entities"]:
             found = live.get((wanted["name"], *xy(wanted)))
+            if found is None and wanted["name"] == "transport-belt":
+                # A tap splitter replaces one trunk belt. A consumer that cut its
+                # tap in and then blocked left a splitter this state never
+                # recorded; the lane still carries plates through it (seed
+                # 2644599892: the bus waited 50 minutes on one "missing" belt).
+                found = _splitter_over(live, wanted)
             if found is None or (wanted["name"] in BELTS and found.get("direction") != wanted.get("direction")):
                 return None
         splitters = wanted_splitters(state)

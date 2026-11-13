@@ -427,5 +427,19 @@ class RoadmapTests(unittest.TestCase):
         self.assertIn("auto_automation_science", [n["id"] for n in nodes])
 
 
+class TrunkBeltReplacedBySplitterTests(unittest.TestCase):
+    def test_a_same_direction_splitter_over_the_tile_counts_as_the_trunk_belt(self):
+        # Seed 2644599892: a consumer cut a tap in and then blocked; the bus
+        # proof kept failing on the one trunk belt its splitter had replaced.
+        from factorio_agent.planned_bus import _splitter_over
+
+        belt = {"name": "transport-belt", "position": {"x": -50.5, "y": 80.5}, "direction": 8}
+        splitter = {"name": "splitter", "position": {"x": -50.0, "y": 80.5}, "direction": 8}
+        live = {("splitter", -50.0, 80.5): splitter}
+        self.assertIs(_splitter_over(live, belt), splitter)
+        self.assertIsNone(_splitter_over(live, dict(belt, direction=4)))
+        self.assertIsNone(_splitter_over({}, belt))
+
+
 if __name__ == "__main__":
     unittest.main()
