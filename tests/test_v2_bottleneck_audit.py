@@ -376,6 +376,31 @@ class LiveCaseTests(unittest.TestCase):
         self.assertEqual(b["proposal"]["provider"], "mine")
         self.assertEqual(b["proposal"]["nodes"], ["auto_mine_trunk_stone_45"])
 
+    def test_brick_furnaces_holding_a_full_brick_stack_are_full_not_a_stone_transport_limit(self):
+        # eval-1575138435 (257 min): both brick furnaces "no_ingredients" with 100 bricks each (nothing
+        # takes bricks yet), the stone drills output-full: the auditor named stone mining "transport".
+        catalog = dict(
+            CATALOG, items=dict(CATALOG["items"], **{"stone-brick": {"name": "stone-brick", "stack_size": 100}})
+        )
+        scene = (
+            Scene()
+            .add(
+                "brick_production",
+                "stone-furnace",
+                2,
+                "no_ingredients",
+                recipe="stone-brick",
+                inventory={"coal": 5, "stone": 1, "stone-brick": 100},
+            )
+            .add("stone_mining", "electric-mining-drill", 2, "waiting_for_space_in_destination", resource="stone")
+        )
+        rows = {r["group"]: r for r in ba.entity_rows(scene.observation(1), {"blocks": scene.blocks}, catalog)}
+        furnaces = next(r for g, r in rows.items() if g.startswith("brick_production"))
+        self.assertEqual((furnaces["state"], furnaces["missing"]), ("full", []))
+        held = dict(scene.entities[0], inventory={"coal": 5, "stone": 1, "stone-brick": 40})
+        (row,) = ba.entity_rows({"entities": [held]}, {"blocks": scene.blocks}, catalog)
+        self.assertEqual(row["state"], "starved")  # a partial stack still starves on stone
+
     def test_labs_without_research_93_min_are_idle_not_a_bottleneck(self):
         # eval-1575138435 at 93.5 min (post-mortem observe-raw): 8 labs no_research_in_progress,
         # every red machine output-full.

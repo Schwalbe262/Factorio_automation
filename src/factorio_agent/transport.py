@@ -593,20 +593,22 @@ def plan_connection(
     bus_route=False,
     max_detour_ratio=None,
 ):
-    """``_plan_connection``; a post-mortem dry run notes every route attempt (``evidence_capture``)."""
-    result = _plan_connection(
-        game,
-        builder,
-        obs,
-        source,
-        destination,
-        reserved,
+    """``_plan_connection``; a post-mortem dry run notes every route attempt (``evidence_capture``).
+
+    Under the remedy option ``route_waypoints`` a cross-base route that finds no corridor is
+    planned as two legs through a waypoint (:func:`waypoint_connection`)."""
+    options = dict(
         ignored_units=ignored_units,
         released_unbuilt_receiver=released_unbuilt_receiver,
         guide=guide,
         bus_route=bus_route,
         max_detour_ratio=max_detour_ratio,
     )
+    result = _plan_connection(game, builder, obs, source, destination, reserved, **options)
+    if not result.get("ok") and result.get("reason") == "no_clean_trunk_corridor":
+        if remedy.option("route_waypoints"):
+            legs = waypoint_connection(game, builder, obs, source, destination, reserved, **options)
+            result = legs if legs.get("ok") else dict(result, waypoints_tried=legs.get("tried", 0))
     if evidence_capture.active():
         evidence_capture.note(
             "route",
@@ -620,6 +622,89 @@ def plan_connection(
             outcome=evidence_capture.outcome(result),
         )
     return result
+
+
+WAYPOINT_MIN_DISTANCE = 96  # routing.LONG_ROUTE_DISTANCE: shorter routes never take legs
+WAYPOINT_LIMIT = 6  # waypoints tried per route (each costs one or two native surveys)
+WAYPOINT_FRACTIONS = (0.5, 0.35, 0.65)  # along the dominant axis, from the source
+WAYPOINT_SHIFTS = (6, -6, 0, 12, -12)  # lateral offsets from the source's, then the destination's line
+
+
+def waypoints(source, destination) -> list[tuple[float, float, int]]:
+    """Candidate ``(x, y, facing)`` waypoints of a long route, best first (pure).
+
+    The route runs mostly along one axis; a waypoint lies on that axis at a fraction of the
+    way, on a line parallel to it beside the source's or the destination's lateral line, and
+    faces along it toward the destination. A leg through it is a short ordinary route each
+    (eval-1575138435: 52.5,34.5 -> 67.5,-126.5 had no corridor; via 58.5,-60.5 both legs fit).
+    """
+    a, b = source["position"], destination["position"]
+    dx, dy = b["x"] - a["x"], b["y"] - a["y"]
+    if abs(dx) + abs(dy) < WAYPOINT_MIN_DISTANCE:
+        return []
+    vertical = abs(dy) >= abs(dx)
+    facing = (8 if dy > 0 else 0) if vertical else (4 if dx > 0 else 12)
+    found = []
+    for fraction in WAYPOINT_FRACTIONS:
+        along = (a["y"] + fraction * dy) if vertical else (a["x"] + fraction * dx)
+        along = math.floor(along) + 0.5
+        for base in (a["x"], b["x"]) if vertical else (a["y"], b["y"]):
+            for shift in WAYPOINT_SHIFTS:
+                lateral = base + shift
+                point = (lateral, along, facing) if vertical else (along, lateral, facing)
+                if point not in found:
+                    found.append(point)
+    return found
+
+
+def waypoint_connection(game, builder, obs, source, destination, reserved=(), **options) -> dict:
+    """``source`` -> waypoint -> ``destination`` as two routes joined straight, or a failure with ``tried``."""
+    tried = 0
+    for x, y, facing in waypoints(source, destination)[:WAYPOINT_LIMIT]:
+        tried += 1
+        vx, vy = VECTORS[facing]
+        end = {**destination, "direction": "input", "position": {"x": x, "y": y}, "facing": facing}
+        first = _plan_connection(game, builder, obs, source, end, reserved, **options)
+        if not first.get("ok"):
+            continue
+        start = {**source, "direction": "output", "position": {"x": x + vx, "y": y + vy}, "facing": facing}
+        start.pop("mining_resource", None)
+        second = _plan_connection(
+            game, builder, obs, start, destination, list(reserved) + list(first["entities"]), **options
+        )
+        if not second.get("ok"):
+            continue
+        a, b = first["route_metrics"], second["route_metrics"]
+        span = abs(destination["position"]["x"] - source["position"]["x"]) + abs(
+            destination["position"]["y"] - source["position"]["y"]
+        )
+        length = a["length"] + b["length"]
+        clear = {(e["name"], *xy(e)): e for e in first.get("clear_obstacles", []) + second.get("clear_obstacles", [])}
+        return dict(
+            second,
+            entities=list(first["entities"]) + list(second["entities"]),
+            ports=[source, destination],
+            required_items=_merge_counts(first.get("required_items"), second.get("required_items")),
+            underground_pairs=list(first.get("underground_pairs", [])) + list(second.get("underground_pairs", [])),
+            clear_obstacles=list(clear.values()),
+            route_metrics={
+                "length": length,
+                "turns": a["turns"] + b["turns"],
+                "manhattan_distance": span,
+                "detour_ratio": length / span if span else 1.0,
+                "waypoint": {"x": x, "y": y, "facing": facing},
+            },
+            waypoints_tried=tried,
+        )
+    return {"ok": False, "reason": "no_clean_trunk_corridor", "tried": tried}
+
+
+def _merge_counts(*rows) -> dict:
+    out = {}
+    for row in rows:
+        for name, count in (row or {}).items():
+            out[name] = out.get(name, 0) + count
+    return out
 
 
 def _plan_connection(

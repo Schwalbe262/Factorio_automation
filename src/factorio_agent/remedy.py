@@ -88,6 +88,13 @@ ROUTE_RELAX_2 = Rung(
     kinds=("route", "site", "tap", "plan"),
     note="turn/detour caps at their hard maximum: fallback from 16 tiles, 14 turns, detour 2.0",
 )
+ROUTE_WAYPOINTS = Rung(
+    "relax:waypoint_route",
+    "relax",
+    {"route_relax": 2, "route_waypoints": True},
+    kinds=("route", "site", "tap", "plan"),
+    note="a cross-base route as two legs through a waypoint (transport.waypoint_connection)",
+)
 
 # Declared per planner (ADDING_A_CAPABILITY.md: every new planner declares its relaxations).
 RELAXATIONS: dict[str, tuple[Rung, ...]] = {
@@ -149,9 +156,9 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     ),
     "smelting_district": (ROUTE_RELAX_1,),
     "planned_main_bus": (ROUTE_RELAX_1,),
-    "brick_production": (ROUTE_RELAX_1, ROUTE_RELAX_2),
-    "steel_production": (ROUTE_RELAX_1, ROUTE_RELAX_2),
-    "steel_supply": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    "brick_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
+    "steel_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
+    "steel_supply": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "supply_cell": (ROUTE_RELAX_1,),
     "oil_gathering": (
         Rung(

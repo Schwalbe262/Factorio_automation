@@ -101,5 +101,54 @@ class LapsedDefenseTests(unittest.TestCase):
         growth.assert_not_called()
 
 
+class WaypointRouteTests(unittest.TestCase):
+    """steel_supply blocked 77 min: the coal route 52.5,34.5 -> 67.5,-126.5 (176 tiles across the base)
+    had no corridor on every candidate; 52.5,34.5 -> 58.5,-60.5 and 58.5,-61.5 -> 67.5,-126.5 both fit."""
+
+    SOURCE = {"item": "coal", "direction": "output", "position": {"x": 52.5, "y": 34.5}, "facing": 4}
+    DESTINATION = {"item": "coal", "direction": "input", "position": {"x": 67.5, "y": -126.5}, "facing": 4}
+
+    def test_waypoints_lie_beside_the_source_line_toward_the_destination(self):
+        from factorio_agent.transport import waypoints
+
+        found = waypoints(self.SOURCE, self.DESTINATION)
+        self.assertEqual(found[0], (58.5, -45.5, 0))  # half way north, six tiles east of the source line
+        self.assertTrue(all(f == 0 for _, _, f in found))
+        near = dict(self.DESTINATION, position={"x": 60.5, "y": 0.5})
+        self.assertEqual(waypoints(self.SOURCE, near), [])  # short routes never take legs
+
+    def test_two_legs_join_straight_and_the_second_avoids_the_first(self):
+        from factorio_agent import remedy, transport
+
+        calls = []
+
+        def leg(game, builder, obs, source, destination, reserved=(), **options):
+            calls.append((source["position"], destination["position"], len(reserved)))
+            if len(calls) == 1:
+                return {"ok": False, "reason": "no_clean_trunk_corridor"}  # the direct route
+            a, b = source["position"], destination["position"]
+            belt = {"name": "transport-belt", "position": dict(a), "direction": source["facing"]}
+            span = abs(a["x"] - b["x"]) + abs(a["y"] - b["y"])
+            return {
+                "ok": True,
+                "entities": [belt, {"name": "transport-belt", "position": dict(b), "direction": 0}],
+                "required_items": {"transport-belt": 2},
+                "route_metrics": {"length": span, "turns": 1},
+            }
+
+        with patch.object(transport, "_plan_connection", side_effect=leg):
+            plain = transport.plan_connection(None, None, {}, self.SOURCE, self.DESTINATION)
+            calls.clear()
+            with remedy.applied({"route_waypoints": True}):
+                legs = transport.plan_connection(None, None, {}, self.SOURCE, self.DESTINATION)
+        self.assertFalse(plain["ok"])
+        self.assertTrue(legs["ok"])
+        (_, w1, _), (w2, _, reserved) = calls[1], calls[2]
+        self.assertEqual((w2["x"], w2["y"]), (w1["x"], w1["y"] - 1))  # the second leg starts one tile on
+        self.assertEqual(reserved, 2)  # the first leg's belts are reserved for the second
+        self.assertEqual(legs["required_items"], {"transport-belt": 4})
+        self.assertEqual(legs["ports"], [self.SOURCE, self.DESTINATION])
+
+
 if __name__ == "__main__":
     unittest.main()
