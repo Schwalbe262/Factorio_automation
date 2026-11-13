@@ -8,6 +8,7 @@ be busy and stuck. Work read-only on the live runtime; fix rules in code.
 ```powershell
 python -B tools/report_run.py runtime/v2/<name>            # text
 python -B tools/report_run.py runtime/v2/<name> --json     # full data
+python -B tools/waste_report.py runtime/v2/<name>          # wasted game seconds by type (or a fleet name)
 ```
 
 Read in this order:
@@ -101,6 +102,8 @@ a placed plan: `blocks.render.render_ascii(catalog, state["plan"])`.
 | A planner raises on missing state | job `blocked` `planner_fault:<Exception>:...`; other jobs keep running | `jobs.PLANNER_FAULTS` blocks only that job (game/connection errors still stop the slice); fix the planner | `test_v2_concurrent_jobs.test_planner_fault_blocks_only_its_own_job` |
 | Blocked job waits for a later success | prerequisite done, job stays blocked for minutes | `Supervisor._auto_retry` after any new success, <= 3 | `test_v2_supervisor.test_dispatch_autopilot_and_auto_retry_run_without_any_model_call` |
 | Concurrent block on a planned bridge pole | bank `blocked` `reserved block placement is obstructed` on a `small-electric-pole` outside its reserved area, every retry the same | `MiningOutposts._recover_obstructed_bridge` re-plans only unbuilt bridge poles (`power_grid.replan_power_bridge`, <= 2 per bank); sites avoid `board.planned_unbuilt_hardware` (startup science, smelting district) and `SiteService.mark_board_hardware` (allocator) | `test_v2_power_bridge_replan` |
+| Bus waits on its lane tails while plates flow | `planned_main_bus` waits `waiting for district plates to reach every built bus lane tail` 10-15 min, a built tap with `dived_lanes` | the proof skips trunk tiles a built tap replaced (`tap["remove"]`: the crossing branch belt carries the other plate) and ignores taps not cut in yet (`planned_bus.proof`) | `test_v2_planned_bus.test_proof_ignores_the_crossing_belt_of_a_built_tap_that_dives_the_other_lane` |
+| Run dead after a re-planning block | every job terminal, `run_stalled` in `tools/waste_report.py`, the bus blocked `planned_bus_feed_route_failed` with 3 retries spent | `_route_failed` / `_preflight_failed` blockers retry after `AUTO_RETRY_STALL_SECONDS`, and past `AUTO_RETRY_LIMIT` up to `IDLE_RETRY_LIMIT` more times while no job is active (`Supervisor._auto_retry`); the bus records `route_failures` / `failed_check` as scalar evidence | `test_v2_supervisor.test_a_failed_route_plan_is_retried_on_quiet_intervals_and_past_the_limit_while_the_run_is_idle` |
 | RCON latency with a GUI client | observe ~580 ms, query ~110 ms | `runtime.NETWORK_SEGMENT_SETTINGS` (16384-byte segments) | - |
 
 Known gap: a job that only *waits* (no actions) raises no `no_progress`
