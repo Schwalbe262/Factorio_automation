@@ -433,10 +433,25 @@ def is_active(job: dict) -> bool:
 RESEARCH_CAPABILITIES = frozenset({"starter_research", "bootstrap_research", "bootstrap_logistics", "research"})
 
 
-def _admission_error(jobs: dict, capability: str, exclude_key: str | None = None) -> str | None:
-    """Why another job with this capability may not become active now, if anything refuses it."""
+# Capabilities whose jobs for different resources work on different ore patches
+# and may run side by side (copper capacity no longer queues behind iron).
+PER_RESOURCE_CAPABILITIES = frozenset({"starter_capacity"})
+
+
+def admission_lane(capability: str, parameters) -> str:
+    """The exclusivity key of a job: its capability, plus the resource for per-resource capabilities."""
+    if capability in PER_RESOURCE_CAPABILITIES and isinstance(parameters, dict) and parameters.get("resource"):
+        return f"{capability}:{parameters['resource']}"
+    return capability
+
+
+def _admission_error(
+    jobs: dict, capability: str, exclude_key: str | None = None, parameters: dict | None = None
+) -> str | None:
+    """Why another job in this admission lane may not become active now, if anything refuses it."""
     active = [job for key, job in jobs.items() if key != exclude_key and is_active(job)]
-    if any(job["capability"] == capability for job in active):
+    lane = admission_lane(capability, parameters)
+    if any(admission_lane(job["capability"], job.get("parameters")) == lane for job in active):
         return f"another job with capability {capability} is already active"
     if capability in RESEARCH_CAPABILITIES and any(job["capability"] in RESEARCH_CAPABILITIES for job in active):
         return "another job that owns research is already active"
@@ -462,7 +477,7 @@ def submit(root: Path, game, request: Request, *, priority: int = 0) -> dict:
             return old
         if not 0 <= obs["tick"] - request.observed_tick <= 3600:
             raise ValueError("observation is stale or newer than the game; observe again")
-        refusal = _admission_error(ledger.data["jobs"], request.capability)
+        refusal = _admission_error(ledger.data["jobs"], request.capability, parameters=request.parameters)
         if refusal:
             raise ValueError(refusal)
         if "rollback_tick" in ledger.data:
@@ -510,7 +525,9 @@ def control(root: Path, game, key: str, operation: str) -> dict:
                 job.update(paused_at_tick=ledger.data["last_tick"], paused_at_time=time.time())
             job.update(status="paused", reason="model_requested_pause")
         else:
-            refusal = _admission_error(ledger.data["jobs"], job["capability"], exclude_key=key)
+            refusal = _admission_error(
+                ledger.data["jobs"], job["capability"], exclude_key=key, parameters=job.get("parameters")
+            )
             if refusal:
                 raise ValueError(refusal)
             if operation == "resume" and job["status"] != "paused":

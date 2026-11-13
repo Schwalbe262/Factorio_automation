@@ -21,7 +21,7 @@ import uuid
 from factorio_agent.core.deterministic_character import _identity
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from factorio_agent.errors import CLIError
-from factorio_agent.jobs import MAX_ACTIVE_JOBS
+from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane
 from factorio_agent import incidents as incident_rules
 
 
@@ -281,6 +281,11 @@ def _validated_node(node, capabilities, seen):
     _no_raw(node["parameters"])
     seen.add(name)
     return dict(deepcopy(node), depends_on=sorted(set(deps)))
+
+
+def _lane(node) -> str:
+    """Admission lane of a queue node (see ``jobs.admission_lane``)."""
+    return admission_lane(node["capability"], node.get("parameters"))
 
 
 class WorkQueue:
@@ -1375,26 +1380,26 @@ class Supervisor:
     def _dispatch(self, context):
         """Submit ready nodes, highest priority first, while fewer than MAX_ACTIVE_JOBS are active.
 
-        A node whose capability is already active stays ready, as does one whose
+        A node whose admission lane (``jobs.admission_lane``) is already active stays ready, as does one whose
         submit is refused for a retryable admission reason; any other refusal
         blocks that node. Returns the active job keys after submission.
         """
         _, status, _, actor = context
         jobs = list(status.get("jobs", {}).values())
         active = _active_keys(jobs)
-        busy = {j["capability"] for j in jobs if j["status"] in ACTIVE}
-        candidates = [q for q in self.work.ready_nodes() if q["capability"] not in busy]
+        busy = {admission_lane(j["capability"], j.get("parameters")) for j in jobs if j["status"] in ACTIVE}
+        candidates = [q for q in self.work.ready_nodes() if _lane(q) not in busy]
         if len(active) >= MAX_ACTIVE_JOBS or not candidates or self._stop_requested():
             return active
         tick = self._fresh_tick(actor)
         for node in candidates:
             if len(active) >= MAX_ACTIVE_JOBS or self._stop_requested():
                 break
-            if node["capability"] in busy:
+            if _lane(node) in busy:
                 continue
             if self._submit(node, tick):
                 active.append(node["job_key"])
-                busy.add(node["capability"])
+                busy.add(_lane(node))
         return active
 
     def _submit(self, node, tick):

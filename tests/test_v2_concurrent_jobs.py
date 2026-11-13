@@ -72,8 +72,8 @@ class ConcurrentJobTests(unittest.TestCase):
         )
         self.assertEqual(done["status"], "succeeded")
 
-    def submit(self, key, capability, priority=0):
-        request = Request(key, "world", self.game.observation["tick"], capability)
+    def submit(self, key, capability, priority=0, parameters=None):
+        request = Request(key, "world", self.game.observation["tick"], capability, parameters or {})
         return submit(self.root, self.game, request, priority=priority)
 
     def jobs(self):
@@ -161,6 +161,14 @@ class ConcurrentJobTests(unittest.TestCase):
         self.assertEqual(self.jobs()["a"]["status"], "blocked")
         self.assertTrue(self.jobs()["a"]["reason"].startswith("planner_fault:FileNotFoundError"))
         self.assertGreaterEqual(receipt["jobs"]["b"]["actions"], 1)
+
+    def test_capacity_jobs_for_different_resources_run_side_by_side(self):
+        # Seed 283895142: copper capacity waited 2.5 min behind iron capacity.
+        iron = {"cells": 3, "resource": "iron-ore"}
+        self.submit("iron", "starter_capacity", parameters=iron)
+        self.submit("copper", "starter_capacity", parameters={"cells": 2, "resource": "copper-ore"})
+        with self.assertRaisesRegex(ValueError, "already active"):
+            self.submit("iron2", "starter_capacity", parameters={"cells": 4, "resource": "iron-ore"})
 
     def test_priority_decides_who_acts_first(self):
         self.submit("low", "power")

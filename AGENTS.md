@@ -81,7 +81,7 @@ Non-negotiable:
 - Store `pending_action` before acting; never retry an unknown outcome, only `reconcile`.
 - Every query is world-bound (`WorldBoundGame`); a changed world or a tick rollback blocks all jobs.
 - Never build on ore except annotated mining entities (`resource_policy`, `planning.preflight`).
-- One research-owning job; at most 4 active jobs, one per capability (`jobs._admission_error`).
+- One research-owning job; at most 4 active jobs, one per admission lane (capability; `starter_capacity` per resource) (`jobs._admission_error`).
 - Fuel, stock and science move in batches (`FUEL_BATCH`, `COLLECT_BATCH`, `SCIENCE_COURIER_BATCH`); hand crafting stops above `HANDCRAFT_LIMIT` when a produce row exists.
 - Sites come only from `SiteService` (`site.placement`, `site.fit`); never add fixed coordinates.
 - Decisions are rules in code (roadmap, planners, auto-retry); the model only answers incidents.
