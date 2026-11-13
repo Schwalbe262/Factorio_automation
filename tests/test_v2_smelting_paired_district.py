@@ -246,7 +246,7 @@ class DistrictReservationTests(unittest.TestCase):
         self.assertTrue(growth & occupied(plan["growth_entities"]) <= set(planned))
 
 
-def prepare(root, master):
+def prepare(root, master, blocks=None):
     """``SmeltingDistrict.prepare`` on ``master`` with the BFS stand-in router; records reserved args."""
     mining = {"world_id": "w", "banks": []}
     for resource in ("iron-ore", "copper-ore", "coal"):
@@ -258,7 +258,7 @@ def prepare(root, master):
             {"ready": True, "nominal_rate_per_minute": 60, "plan": {"resource": resource, "ports": [port]}}
         )
     (root / "mining-outposts.json").write_text(json.dumps(mining), encoding="utf-8")
-    board = {"world_id": "w", "catalog_fingerprint": "c", "blocks": {}}
+    board = {"world_id": "w", "catalog_fingerprint": "c", "blocks": blocks or {}}
     (root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
     game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root), query=Mock(return_value={"ok": True, "legal": [1]}))
     routine = SmeltingDistrict(game, None, GEOMETRY, CATALOG, site=SimpleNamespace(plan=Mock(return_value=master)))
@@ -394,6 +394,33 @@ class GrowthProposalTests(unittest.TestCase):
             ),
             (75.0, 450.0, 30.0),
         )
+
+
+class OutputPortTests(unittest.TestCase):
+    def test_no_other_blocks_frame_just_past_an_output_port(self):
+        from factorio_agent.smelting import _port_exits
+
+        # aud-1114-0614 seed 3261696077: the supply cell's frame began two tiles in front of the
+        # district's iron port; the bus feed route failed for 21 game minutes.
+        with TemporaryDirectory() as tmp:
+            first, _calls = prepare(Path(tmp), PLANS[1])
+        self.assertTrue(first["ok"], first)
+        iron = next(p for p in first["plan"]["ports"] if p["item"] == "iron-plate")
+        dx, dy = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}[iron["facing"]]
+        cx, cy = iron["position"]["x"] + 2 * dx, iron["position"]["y"] + 2 * dy
+        frame = [[cx - 0.5, cy - 0.5], [cx + 0.5, cy + 0.5]]
+        area = first["plan"]["reserved_area"]
+        self.assertFalse(
+            area[0][0] < frame[1][0]
+            and area[1][0] > frame[0][0]
+            and area[0][1] < frame[1][1]
+            and area[1][1] > frame[0][1]
+        )  # the frame touches no district tile: only the port check can see it
+        with TemporaryDirectory() as tmp:
+            second, _calls = prepare(Path(tmp), PLANS[1], {"supply_cell": {"reserved_area": frame, "entities": []}})
+        if second.get("ok"):
+            self.assertNotEqual(second["plan"]["reserved_area"], area)
+            self.assertNotIn((cx, cy), _port_exits(second["banks"]))
 
 
 if __name__ == "__main__":
