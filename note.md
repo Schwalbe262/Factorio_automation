@@ -252177,3 +252177,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: offline only; nothing proven live.
 - failure reason / open: second lane has no consumers yet (far-side taps need a dive); steam_expansion keeps its own coal bank; grid footprint not a board reservation.
 - next action: fleet run to a coal bank: check power-coal-tap.json phase done, boiler fuel during retirement, patch_grid on new banks.
+
+## 2026-11-13 20:55 Part 47 - fleet loop, owner layout rules, GUI reset
+- goal: batch the owner's rules of the day, measure on fleets, reset the GUI map to verify.
+- actions: merged client-free presence, carried surplus, layout candidates, tree rule (site/nature), blocked-reason fixes, mine trunk + power tap + patch grid + second lane, wood burner feed, research top-up, survey reuse; docs/v2/BALANCERS.md; fleet loop now runs each round from a frozen snapshot worktree.
+- metrics: round snap-1113-1945 (91a0de8): smelting 27.2 (12/12, was 34.4 8/12), bus 34.4 (5/12), logistics 23.2, queries 1694/min 46% of time.
+- failure: round auto-1113-1848 invalid (ImportError CHUNK_CHARTED_LUA: main checkout merged during the round); a stopped loop shell kept running and started a second fleet; GUI supervisor was untracked by lifecycle (stale pid) and had to be killed before new-map.
+- result: v2 at 3e8669f, gate PASS 2751; GUI map eval-4177156614 and round all-1113-2047 started on it.
+- next: read all-1113-2047; fix production_row_input_source_missing and bus reach.
