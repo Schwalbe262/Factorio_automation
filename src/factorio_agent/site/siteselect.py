@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
+from . import nature
 from .busframe import COMPASS, Bus, dominant_compass, frame_rect
 from .geometry import Rect
 from .patches import Patch
@@ -178,6 +179,7 @@ class BusChoice:
     score: float
     side_clean: tuple[float, float]
     smelting_clean: bool
+    clearable: int = 0  # tree/rock tiles in the bus: a tie-break only (site.nature)
 
 
 def _lengths(config: SiteConfig) -> list[int]:
@@ -235,10 +237,12 @@ def score_bus(
           + side_weight * ((1 - left_clean) + (1 - right_clean))
           + feed_weight * sum(distance(feed patch centroid, smelting centre))
           + start_weight * distance(start, head)
-          + clear_weight * tree/rock tiles in the bus
           + smelting_penalty if the ideal smelting zone + head gap is not clean
           + band_penalty * number of mining zones inside the district envelope
             (bus plus both full-depth side bands), which would split districts
+
+    Trees and rocks are not in the score (``site.nature``): the bus is
+    cleared, and ``clearable`` only breaks exact score ties in ``search_bus``.
     """
     bus = Bus(origin, direction, config.bus_width, length)
     far = config.district_setback + depth
@@ -252,12 +256,12 @@ def score_bus(
     score += config.side_weight * (2.0 - side_clean[0] - side_clean[1])
     score += config.feed_weight * sum(_distance(feed, centre) for feed in feeds)
     score += config.start_weight * _distance(_start_point(start), origin)
-    score += config.clear_weight * occupancy.grid.clearable(bus.rect())
     if not smelting_clean:
         score += config.smelting_penalty
     envelope = bus.local_rect(0, length, -bus.half - far, bus.half + far)
     score += config.band_penalty * sum(1 for rect in mining if rect.intersects(envelope))
-    return BusChoice(origin, direction, length, score, side_clean, smelting_clean)
+    clearable = occupancy.grid.clearable(bus.rect())
+    return BusChoice(origin, direction, length, score, side_clean, smelting_clean, clearable)
 
 
 def search_bus(
@@ -269,7 +273,8 @@ def search_bus(
     Heads are the map points whose coordinates are multiples of
     ``bus_search_step``; that lattice maps onto itself when the map is
     mirrored or rotated about the origin, so mirrored maps get mirrored plans.
-    Exact score ties are broken by (direction order N, E, S, W; head y; head x).
+    Exact score ties are broken by (tree/rock tiles; direction order N, E, S, W;
+    head y; head x).
     Mining zones are the rects already taken when the search starts.
     """
     mining = list(occupancy.taken)
@@ -292,7 +297,7 @@ def search_bus(
                 choice = score_bus(occupancy, origin, direction, length, start, feeds, config, depth, mining)
                 if choice is None:
                     continue
-                key = (choice.score, order, origin[1], origin[0])
+                key = (choice.score, *nature.tiebreak(choice.clearable), order, origin[1], origin[0])
                 if best_key is None or key < best_key:
                     best = choice
                     best_key = key

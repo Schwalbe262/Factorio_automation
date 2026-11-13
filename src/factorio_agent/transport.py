@@ -856,8 +856,7 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
         allowed_tiles.add(p)
         for e in row["entities"]:
             obstacles[(e["name"], *xy(e))] = e
-    if len(obstacles) > 64:
-        return {"ok": False, "reason": "corridor_natural_clearance_budget_exceeded"}
+    # No cap: a planned corridor is cleared, never rerouted around nature (site.nature).
     compiled["clear_obstacles"] = list(obstacles.values())
     compiled["clearance_world_id"] = obs["world_id"]
     preflight = builder.can_place(compiled["entities"])

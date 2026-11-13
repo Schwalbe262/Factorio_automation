@@ -49,6 +49,12 @@ side-load both halves back onto one belt from opposite sides).
 
 ## When a balancer is needed and when it is not
 
+The main case (owner, 2026-11-13): one belt carries everything today, but later a flow
+needs N parallel belts for bandwidth (`N = ceil(rate / belt throughput)`), and those N
+belts are kept even with a balancer. Every multi-belt flow in a plan (mine trunk, bus item,
+block feed) therefore carries its lane count from the demand and gets a balancer where the
+lanes are filled or drained unevenly.
+
 | situation | tool |
 |---|---|
 | a consumer block takes from a bus lane | priority splitter tap; no balancer |

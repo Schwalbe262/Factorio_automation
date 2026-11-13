@@ -99460,9 +99460,9 @@ srun: error: n106: task 0: Exited with exit code 1
   - Duration: 11.078s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054519.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1f20b2e54db84124ac98cd56cf24cb45.b3edd5cdcbff4e7a806d3c3680e4c527.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1f20b2e54db84124ac98cd56cf24cb45.b3edd5cdcbff4e7a806d3c3680e4c527.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-sspchues.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1f20b2e54db84124ac98cd56cf24cb45.b3edd5cdcbff4e7a806d3c3680e4c527.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1f20b2e54db84124ac98cd56cf24cb45.b3edd5cdcbff4e7a806d3c3680e4c527.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1f20b2e54db84124ac98cd56cf24cb45.b3edd5cdcbff4e7a806d3c3680e4c527.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-sspchues.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1f20b2e54db84124ac98cd56cf24cb45.b3edd5cdcbff4e7a806d3c3680e4c527.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -99482,9 +99482,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.750s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c58bf33890f64235b9b71b6985abaed6.e09089cd0d844bc9a4ea78e16f9bf007.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c58bf33890f64235b9b71b6985abaed6.e09089cd0d844bc9a4ea78e16f9bf007.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-2m0dpsdx.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c58bf33890f64235b9b71b6985abaed6.e09089cd0d844bc9a4ea78e16f9bf007.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c58bf33890f64235b9b71b6985abaed6.e09089cd0d844bc9a4ea78e16f9bf007.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c58bf33890f64235b9b71b6985abaed6.e09089cd0d844bc9a4ea78e16f9bf007.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-2m0dpsdx.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c58bf33890f64235b9b71b6985abaed6.e09089cd0d844bc9a4ea78e16f9bf007.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -99504,9 +99504,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.422s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-20773752b1c54fff82d4d2c1d58bc383.9cae0d4eb3ae4221af38ae1ab1de45a7.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-20773752b1c54fff82d4d2c1d58bc383.9cae0d4eb3ae4221af38ae1ab1de45a7.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-n8tfdn1t.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-20773752b1c54fff82d4d2c1d58bc383.9cae0d4eb3ae4221af38ae1ab1de45a7.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-20773752b1c54fff82d4d2c1d58bc383.9cae0d4eb3ae4221af38ae1ab1de45a7.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-20773752b1c54fff82d4d2c1d58bc383.9cae0d4eb3ae4221af38ae1ab1de45a7.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-n8tfdn1t.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-20773752b1c54fff82d4d2c1d58bc383.9cae0d4eb3ae4221af38ae1ab1de45a7.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -100054,9 +100054,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.141s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":15,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a18180bd347a4a60aa3cdd601155d724.c16631e230b24b70b5212532b6ef2d17.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a18180bd347a4a60aa3cdd601155d724.c16631e230b24b70b5212532b6ef2d17.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-swvezhxf.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a18180bd347a4a60aa3cdd601155d724.c16631e230b24b70b5212532b6ef2d17.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a18180bd347a4a60aa3cdd601155d724.c16631e230b24b70b5212532b6ef2d17.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a18180bd347a4a60aa3cdd601155d724.c16631e230b24b70b5212532b6ef2d17.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-swvezhxf.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a18180bd347a4a60aa3cdd601155d724.c16631e230b24b70b5212532b6ef2d17.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -100384,9 +100384,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.407s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":23,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-51f8d11ec2de45e48cd36e0ec14b9d82.0264d7ccffc14fdb8d5ff07e865eb40a.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-51f8d11ec2de45e48cd36e0ec14b9d82.0264d7ccffc14fdb8d5ff07e865eb40a.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-jg9fcj6g.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-51f8d11ec2de45e48cd36e0ec14b9d82.0264d7ccffc14fdb8d5ff07e865eb40a.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-51f8d11ec2de45e48cd36e0ec14b9d82.0264d7ccffc14fdb8d5ff07e865eb40a.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-51f8d11ec2de45e48cd36e0ec14b9d82.0264d7ccffc14fdb8d5ff07e865eb40a.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-jg9fcj6g.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-51f8d11ec2de45e48cd36e0ec14b9d82.0264d7ccffc14fdb8d5ff07e865eb40a.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -100450,9 +100450,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 10.703s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":25,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3838d720f6a04addbb25da8f7637bdd9.0020dc5148214bebaefde65078eecb0f.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3838d720f6a04addbb25da8f7637bdd9.0020dc5148214bebaefde65078eecb0f.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-3kt4sx29.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3838d720f6a04addbb25da8f7637bdd9.0020dc5148214bebaefde65078eecb0f.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3838d720f6a04addbb25da8f7637bdd9.0020dc5148214bebaefde65078eecb0f.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3838d720f6a04addbb25da8f7637bdd9.0020dc5148214bebaefde65078eecb0f.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-3kt4sx29.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3838d720f6a04addbb25da8f7637bdd9.0020dc5148214bebaefde65078eecb0f.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -100472,9 +100472,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.203s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":26,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-62adbbbd24fe468299e72bbdcc2de5cf.90dc8cc65d154e088f18a5da7639a9b0.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-62adbbbd24fe468299e72bbdcc2de5cf.90dc8cc65d154e088f18a5da7639a9b0.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-v396adk3.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-62adbbbd24fe468299e72bbdcc2de5cf.90dc8cc65d154e088f18a5da7639a9b0.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-62adbbbd24fe468299e72bbdcc2de5cf.90dc8cc65d154e088f18a5da7639a9b0.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-62adbbbd24fe468299e72bbdcc2de5cf.90dc8cc65d154e088f18a5da7639a9b0.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-v396adk3.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-62adbbbd24fe468299e72bbdcc2de5cf.90dc8cc65d154e088f18a5da7639a9b0.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -100846,9 +100846,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 10.797s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":35,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9df785c9f9574f6dbe1d9e86745e6245.4e626f25917e446b86f0253a572d9c8d.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9df785c9f9574f6dbe1d9e86745e6245.4e626f25917e446b86f0253a572d9c8d.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-60xhyeml.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9df785c9f9574f6dbe1d9e86745e6245.4e626f25917e446b86f0253a572d9c8d.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9df785c9f9574f6dbe1d9e86745e6245.4e626f25917e446b86f0253a572d9c8d.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9df785c9f9574f6dbe1d9e86745e6245.4e626f25917e446b86f0253a572d9c8d.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-60xhyeml.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9df785c9f9574f6dbe1d9e86745e6245.4e626f25917e446b86f0253a572d9c8d.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -101220,9 +101220,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.219s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":44,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-73a271ebcae4471eafccd8986fd39fd2.02ec541c502f429db5938804fc42069b.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-73a271ebcae4471eafccd8986fd39fd2.02ec541c502f429db5938804fc42069b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-w7_kp2nl.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-73a271ebcae4471eafccd8986fd39fd2.02ec541c502f429db5938804fc42069b.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-73a271ebcae4471eafccd8986fd39fd2.02ec541c502f429db5938804fc42069b.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-73a271ebcae4471eafccd8986fd39fd2.02ec541c502f429db5938804fc42069b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-w7_kp2nl.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-73a271ebcae4471eafccd8986fd39fd2.02ec541c502f429db5938804fc42069b.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -101946,9 +101946,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.032s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":61,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6747d27d8b374919a637e717a969c56e.a5c93308e38940a4986fd5b17b81f5c1.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6747d27d8b374919a637e717a969c56e.a5c93308e38940a4986fd5b17b81f5c1.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-73f3s7op.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6747d27d8b374919a637e717a969c56e.a5c93308e38940a4986fd5b17b81f5c1.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6747d27d8b374919a637e717a969c56e.a5c93308e38940a4986fd5b17b81f5c1.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6747d27d8b374919a637e717a969c56e.a5c93308e38940a4986fd5b17b81f5c1.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-73f3s7op.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6747d27d8b374919a637e717a969c56e.a5c93308e38940a4986fd5b17b81f5c1.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -102320,9 +102320,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 10.844s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":70,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bdeae8b84b714d22bba42d882a6909a9.11d712d6f01b4564b221ee83d33ff8f4.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bdeae8b84b714d22bba42d882a6909a9.11d712d6f01b4564b221ee83d33ff8f4.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-a7yv9f16.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bdeae8b84b714d22bba42d882a6909a9.11d712d6f01b4564b221ee83d33ff8f4.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bdeae8b84b714d22bba42d882a6909a9.11d712d6f01b4564b221ee83d33ff8f4.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bdeae8b84b714d22bba42d882a6909a9.11d712d6f01b4564b221ee83d33ff8f4.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-a7yv9f16.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bdeae8b84b714d22bba42d882a6909a9.11d712d6f01b4564b221ee83d33ff8f4.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -102870,9 +102870,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.703s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":83,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-27a2fd19fc9548c688c64946d67afe7a.57db30463b8c4898b79482868042b663.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-27a2fd19fc9548c688c64946d67afe7a.57db30463b8c4898b79482868042b663.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-24yviv38.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-27a2fd19fc9548c688c64946d67afe7a.57db30463b8c4898b79482868042b663.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-27a2fd19fc9548c688c64946d67afe7a.57db30463b8c4898b79482868042b663.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-27a2fd19fc9548c688c64946d67afe7a.57db30463b8c4898b79482868042b663.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-24yviv38.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-27a2fd19fc9548c688c64946d67afe7a.57db30463b8c4898b79482868042b663.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -103332,9 +103332,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 11.500s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-054558.jsonl`.
   - Metadata: `{"cycle":94,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-add3572330b54de3b4b964ec4b67ce09.83b0846112134abf9f82729a2a60cf35.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-add3572330b54de3b4b964ec4b67ce09.83b0846112134abf9f82729a2a60cf35.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-d3m5c7dq.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-add3572330b54de3b4b964ec4b67ce09.83b0846112134abf9f82729a2a60cf35.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-add3572330b54de3b4b964ec4b67ce09.83b0846112134abf9f82729a2a60cf35.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-add3572330b54de3b4b964ec4b67ce09.83b0846112134abf9f82729a2a60cf35.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-d3m5c7dq.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-add3572330b54de3b4b964ec4b67ce09.83b0846112134abf9f82729a2a60cf35.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -127882,9 +127882,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.828s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-205336.jsonl`.
   - Metadata: `{"cycle":195,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-e59f49e8be074ae6b82814ec1c60f903.c2d7719cc8544cf798baae0d193f5c1f.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-e59f49e8be074ae6b82814ec1c60f903.c2d7719cc8544cf798baae0d193f5c1f.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-lik9zbh2.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-e59f49e8be074ae6b82814ec1c60f903.c2d7719cc8544cf798baae0d193f5c1f.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-e59f49e8be074ae6b82814ec1c60f903.c2d7719cc8544cf798baae0d193f5c1f.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-e59f49e8be074ae6b82814ec1c60f903.c2d7719cc8544cf798baae0d193f5c1f.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-lik9zbh2.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-e59f49e8be074ae6b82814ec1c60f903.c2d7719cc8544cf798baae0d193f5c1f.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -128256,9 +128256,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.531s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-205336.jsonl`.
   - Metadata: `{"cycle":204,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-504320c68254485aaafc4f7c7e739518.9d9ac42a05b4480d8296f6798ee71ecb.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-504320c68254485aaafc4f7c7e739518.9d9ac42a05b4480d8296f6798ee71ecb.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-gngfosa8.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-504320c68254485aaafc4f7c7e739518.9d9ac42a05b4480d8296f6798ee71ecb.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-504320c68254485aaafc4f7c7e739518.9d9ac42a05b4480d8296f6798ee71ecb.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-504320c68254485aaafc4f7c7e739518.9d9ac42a05b4480d8296f6798ee71ecb.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-gngfosa8.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-504320c68254485aaafc4f7c7e739518.9d9ac42a05b4480d8296f6798ee71ecb.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -128630,9 +128630,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.890s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-205336.jsonl`.
   - Metadata: `{"cycle":213,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-459ebcbf429f435f9a6897a06aca075c.43409a660c68416aa6dd08f99df37d70.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-459ebcbf429f435f9a6897a06aca075c.43409a660c68416aa6dd08f99df37d70.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-znw56kc7.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-459ebcbf429f435f9a6897a06aca075c.43409a660c68416aa6dd08f99df37d70.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-459ebcbf429f435f9a6897a06aca075c.43409a660c68416aa6dd08f99df37d70.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-459ebcbf429f435f9a6897a06aca075c.43409a660c68416aa6dd08f99df37d70.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-znw56kc7.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-459ebcbf429f435f9a6897a06aca075c.43409a660c68416aa6dd08f99df37d70.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -129004,9 +129004,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 19.468s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-205336.jsonl`.
   - Metadata: `{"cycle":222,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-42690b8e08e64d44b9b3a7fa04eb8810.c753b52d49214ee0b2948256807734b0.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-42690b8e08e64d44b9b3a7fa04eb8810.c753b52d49214ee0b2948256807734b0.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-wzlndgni.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-42690b8e08e64d44b9b3a7fa04eb8810.c753b52d49214ee0b2948256807734b0.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-42690b8e08e64d44b9b3a7fa04eb8810.c753b52d49214ee0b2948256807734b0.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-42690b8e08e64d44b9b3a7fa04eb8810.c753b52d49214ee0b2948256807734b0.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-wzlndgni.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-42690b8e08e64d44b9b3a7fa04eb8810.c753b52d49214ee0b2948256807734b0.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -129378,9 +129378,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 18.094s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-205336.jsonl`.
   - Metadata: `{"cycle":231,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a4bdc311cbd34a52ba6c9507d1481499.7abd5accb2c945558f027b135b5a6714.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a4bdc311cbd34a52ba6c9507d1481499.7abd5accb2c945558f027b135b5a6714.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-v6axc8rh.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a4bdc311cbd34a52ba6c9507d1481499.7abd5accb2c945558f027b135b5a6714.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a4bdc311cbd34a52ba6c9507d1481499.7abd5accb2c945558f027b135b5a6714.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a4bdc311cbd34a52ba6c9507d1481499.7abd5accb2c945558f027b135b5a6714.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-v6axc8rh.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a4bdc311cbd34a52ba6c9507d1481499.7abd5accb2c945558f027b135b5a6714.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -129752,9 +129752,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 21.453s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260619-205336.jsonl`.
   - Metadata: `{"cycle":240,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-76c9147bde284b68bba1d5be53f73588.e5d407298cf34ab8a169f3b94b26638b.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-76c9147bde284b68bba1d5be53f73588.e5d407298cf34ab8a169f3b94b26638b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-h0l_b_b4.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-76c9147bde284b68bba1d5be53f73588.e5d407298cf34ab8a169f3b94b26638b.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-76c9147bde284b68bba1d5be53f73588.e5d407298cf34ab8a169f3b94b26638b.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-76c9147bde284b68bba1d5be53f73588.e5d407298cf34ab8a169f3b94b26638b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-h0l_b_b4.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-76c9147bde284b68bba1d5be53f73588.e5d407298cf34ab8a169f3b94b26638b.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -130126,9 +130126,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 18.875s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-65cf630e4e264e2890f0db773e880759.13abde22d1de477ab33d6333738db249.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-65cf630e4e264e2890f0db773e880759.13abde22d1de477ab33d6333738db249.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-uh1osr84.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-65cf630e4e264e2890f0db773e880759.13abde22d1de477ab33d6333738db249.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-65cf630e4e264e2890f0db773e880759.13abde22d1de477ab33d6333738db249.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-65cf630e4e264e2890f0db773e880759.13abde22d1de477ab33d6333738db249.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-uh1osr84.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-65cf630e4e264e2890f0db773e880759.13abde22d1de477ab33d6333738db249.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -130148,9 +130148,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.391s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-891d30bda6364e96b2ad61e3b2a3a3e0.e5adba0be97f49089adb41ede19f223d.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-891d30bda6364e96b2ad61e3b2a3a3e0.e5adba0be97f49089adb41ede19f223d.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-_soi1t1j.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-891d30bda6364e96b2ad61e3b2a3a3e0.e5adba0be97f49089adb41ede19f223d.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-891d30bda6364e96b2ad61e3b2a3a3e0.e5adba0be97f49089adb41ede19f223d.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-891d30bda6364e96b2ad61e3b2a3a3e0.e5adba0be97f49089adb41ede19f223d.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-_soi1t1j.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-891d30bda6364e96b2ad61e3b2a3a3e0.e5adba0be97f49089adb41ede19f223d.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -130522,9 +130522,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.453s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":11,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1be1a0648e14474983fc2b65a3dc50a.0dc7a56db28142fe8ba42846de917566.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1be1a0648e14474983fc2b65a3dc50a.0dc7a56db28142fe8ba42846de917566.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-rlew1pgo.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1be1a0648e14474983fc2b65a3dc50a.0dc7a56db28142fe8ba42846de917566.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1be1a0648e14474983fc2b65a3dc50a.0dc7a56db28142fe8ba42846de917566.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1be1a0648e14474983fc2b65a3dc50a.0dc7a56db28142fe8ba42846de917566.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-rlew1pgo.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1be1a0648e14474983fc2b65a3dc50a.0dc7a56db28142fe8ba42846de917566.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -130896,9 +130896,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 19.093s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":20,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-8dc5dc9560f04ad18d4a2bc0d2f91c8f.03735e4a7ce8446e8472d2225022d2ff.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-8dc5dc9560f04ad18d4a2bc0d2f91c8f.03735e4a7ce8446e8472d2225022d2ff.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-6xy5_8lx.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-8dc5dc9560f04ad18d4a2bc0d2f91c8f.03735e4a7ce8446e8472d2225022d2ff.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-8dc5dc9560f04ad18d4a2bc0d2f91c8f.03735e4a7ce8446e8472d2225022d2ff.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-8dc5dc9560f04ad18d4a2bc0d2f91c8f.03735e4a7ce8446e8472d2225022d2ff.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-6xy5_8lx.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-8dc5dc9560f04ad18d4a2bc0d2f91c8f.03735e4a7ce8446e8472d2225022d2ff.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -131270,9 +131270,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.938s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":29,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-00fd3fffe66140c09c5c9af22e6f35a7.f63bbc8c2a8e40f9981541ffd5b054da.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-00fd3fffe66140c09c5c9af22e6f35a7.f63bbc8c2a8e40f9981541ffd5b054da.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-o4m86rks.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-00fd3fffe66140c09c5c9af22e6f35a7.f63bbc8c2a8e40f9981541ffd5b054da.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-00fd3fffe66140c09c5c9af22e6f35a7.f63bbc8c2a8e40f9981541ffd5b054da.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-00fd3fffe66140c09c5c9af22e6f35a7.f63bbc8c2a8e40f9981541ffd5b054da.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-o4m86rks.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-00fd3fffe66140c09c5c9af22e6f35a7.f63bbc8c2a8e40f9981541ffd5b054da.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -131644,9 +131644,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.219s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":38,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a998f610f1fc4d4482e2691eaef87a6e.d3b1fffb70ad4ba7860237dea2127a58.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a998f610f1fc4d4482e2691eaef87a6e.d3b1fffb70ad4ba7860237dea2127a58.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-_hmai2qe.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a998f610f1fc4d4482e2691eaef87a6e.d3b1fffb70ad4ba7860237dea2127a58.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a998f610f1fc4d4482e2691eaef87a6e.d3b1fffb70ad4ba7860237dea2127a58.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a998f610f1fc4d4482e2691eaef87a6e.d3b1fffb70ad4ba7860237dea2127a58.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-_hmai2qe.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a998f610f1fc4d4482e2691eaef87a6e.d3b1fffb70ad4ba7860237dea2127a58.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -132786,9 +132786,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.796s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":65,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-2775f15162fd462eb4976ec7e9b7e122.206128d3f98b4ce69823546b7c19f0fb.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-2775f15162fd462eb4976ec7e9b7e122.206128d3f98b4ce69823546b7c19f0fb.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-951vrgyz.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-2775f15162fd462eb4976ec7e9b7e122.206128d3f98b4ce69823546b7c19f0fb.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-2775f15162fd462eb4976ec7e9b7e122.206128d3f98b4ce69823546b7c19f0fb.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-2775f15162fd462eb4976ec7e9b7e122.206128d3f98b4ce69823546b7c19f0fb.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-951vrgyz.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-2775f15162fd462eb4976ec7e9b7e122.206128d3f98b4ce69823546b7c19f0fb.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -133160,9 +133160,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.875s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":74,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-78f7483ac4e24733bfb4109b23df8cb8.35e9c967c76c48558d0032ddd01fc3cc.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-78f7483ac4e24733bfb4109b23df8cb8.35e9c967c76c48558d0032ddd01fc3cc.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-klr6ekzr.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-78f7483ac4e24733bfb4109b23df8cb8.35e9c967c76c48558d0032ddd01fc3cc.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-78f7483ac4e24733bfb4109b23df8cb8.35e9c967c76c48558d0032ddd01fc3cc.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-78f7483ac4e24733bfb4109b23df8cb8.35e9c967c76c48558d0032ddd01fc3cc.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-klr6ekzr.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-78f7483ac4e24733bfb4109b23df8cb8.35e9c967c76c48558d0032ddd01fc3cc.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -133534,9 +133534,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 19.891s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":83,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fc5c5e2c518141a3968c4e56b67e63ac.0b9ea1fa77334c37a4a9d457f1cc5c0e.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fc5c5e2c518141a3968c4e56b67e63ac.0b9ea1fa77334c37a4a9d457f1cc5c0e.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-_1fmnw9f.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fc5c5e2c518141a3968c4e56b67e63ac.0b9ea1fa77334c37a4a9d457f1cc5c0e.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fc5c5e2c518141a3968c4e56b67e63ac.0b9ea1fa77334c37a4a9d457f1cc5c0e.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fc5c5e2c518141a3968c4e56b67e63ac.0b9ea1fa77334c37a4a9d457f1cc5c0e.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-_1fmnw9f.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fc5c5e2c518141a3968c4e56b67e63ac.0b9ea1fa77334c37a4a9d457f1cc5c0e.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -133908,9 +133908,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.453s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":92,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3b9e97a8ecfd4aa0b8440fcfdae9caa9.1aad033c34f04affab2a6a9e9a6a5d2c.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3b9e97a8ecfd4aa0b8440fcfdae9caa9.1aad033c34f04affab2a6a9e9a6a5d2c.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-jh8_ruvk.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3b9e97a8ecfd4aa0b8440fcfdae9caa9.1aad033c34f04affab2a6a9e9a6a5d2c.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3b9e97a8ecfd4aa0b8440fcfdae9caa9.1aad033c34f04affab2a6a9e9a6a5d2c.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3b9e97a8ecfd4aa0b8440fcfdae9caa9.1aad033c34f04affab2a6a9e9a6a5d2c.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-jh8_ruvk.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-3b9e97a8ecfd4aa0b8440fcfdae9caa9.1aad033c34f04affab2a6a9e9a6a5d2c.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -134282,9 +134282,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 20.563s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":101,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a5ef6f8a609c44308640cd4ae42a2f4b.0874171839ee4d688f3de85506b9a683.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a5ef6f8a609c44308640cd4ae42a2f4b.0874171839ee4d688f3de85506b9a683.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-wn95b2y6.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a5ef6f8a609c44308640cd4ae42a2f4b.0874171839ee4d688f3de85506b9a683.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a5ef6f8a609c44308640cd4ae42a2f4b.0874171839ee4d688f3de85506b9a683.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a5ef6f8a609c44308640cd4ae42a2f4b.0874171839ee4d688f3de85506b9a683.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-wn95b2y6.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a5ef6f8a609c44308640cd4ae42a2f4b.0874171839ee4d688f3de85506b9a683.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -134656,9 +134656,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 19.110s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":110,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-46a5f4ca1e4a48c7a1f926a093487005.593c99334771411089a49b7806fc7378.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-46a5f4ca1e4a48c7a1f926a093487005.593c99334771411089a49b7806fc7378.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-s72o96yo.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-46a5f4ca1e4a48c7a1f926a093487005.593c99334771411089a49b7806fc7378.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-46a5f4ca1e4a48c7a1f926a093487005.593c99334771411089a49b7806fc7378.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-46a5f4ca1e4a48c7a1f926a093487005.593c99334771411089a49b7806fc7378.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-s72o96yo.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-46a5f4ca1e4a48c7a1f926a093487005.593c99334771411089a49b7806fc7378.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -135030,9 +135030,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.750s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":119,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bf1d8d7ee6cf4d2286de4ef1fad657d6.fbff4bf3f3b44bd189561e3fb4dbd51c.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bf1d8d7ee6cf4d2286de4ef1fad657d6.fbff4bf3f3b44bd189561e3fb4dbd51c.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-v7lo44jb.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bf1d8d7ee6cf4d2286de4ef1fad657d6.fbff4bf3f3b44bd189561e3fb4dbd51c.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bf1d8d7ee6cf4d2286de4ef1fad657d6.fbff4bf3f3b44bd189561e3fb4dbd51c.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bf1d8d7ee6cf4d2286de4ef1fad657d6.fbff4bf3f3b44bd189561e3fb4dbd51c.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-v7lo44jb.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-bf1d8d7ee6cf4d2286de4ef1fad657d6.fbff4bf3f3b44bd189561e3fb4dbd51c.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -135404,9 +135404,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.438s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":128,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7f48a604693b4d0b80c2cee349b16c71.2df3b1be8aaf43f38523de1e9e551678.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7f48a604693b4d0b80c2cee349b16c71.2df3b1be8aaf43f38523de1e9e551678.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-a6c1n3gk.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7f48a604693b4d0b80c2cee349b16c71.2df3b1be8aaf43f38523de1e9e551678.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7f48a604693b4d0b80c2cee349b16c71.2df3b1be8aaf43f38523de1e9e551678.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7f48a604693b4d0b80c2cee349b16c71.2df3b1be8aaf43f38523de1e9e551678.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-a6c1n3gk.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7f48a604693b4d0b80c2cee349b16c71.2df3b1be8aaf43f38523de1e9e551678.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -135778,9 +135778,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 18.266s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":137,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1bebe5f62f874b568bbe20e89c510682.29c8730670a64aba9624f451b955deb8.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1bebe5f62f874b568bbe20e89c510682.29c8730670a64aba9624f451b955deb8.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-zj1zgmtm.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1bebe5f62f874b568bbe20e89c510682.29c8730670a64aba9624f451b955deb8.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1bebe5f62f874b568bbe20e89c510682.29c8730670a64aba9624f451b955deb8.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1bebe5f62f874b568bbe20e89c510682.29c8730670a64aba9624f451b955deb8.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-zj1zgmtm.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1bebe5f62f874b568bbe20e89c510682.29c8730670a64aba9624f451b955deb8.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -136152,9 +136152,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.422s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":146,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1148acc854674725b995f8e8608600e8.c65c549afa00496e932298f1b683804b.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1148acc854674725b995f8e8608600e8.c65c549afa00496e932298f1b683804b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-v7j0k5e8.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1148acc854674725b995f8e8608600e8.c65c549afa00496e932298f1b683804b.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1148acc854674725b995f8e8608600e8.c65c549afa00496e932298f1b683804b.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1148acc854674725b995f8e8608600e8.c65c549afa00496e932298f1b683804b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-v7j0k5e8.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-1148acc854674725b995f8e8608600e8.c65c549afa00496e932298f1b683804b.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -136526,9 +136526,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.187s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":155,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1dc8bf203244f41bcc982b1327944d7.d60adf33d4f340b6b6a3eb861a62c433.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1dc8bf203244f41bcc982b1327944d7.d60adf33d4f340b6b6a3eb861a62c433.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-p3i4suu2.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1dc8bf203244f41bcc982b1327944d7.d60adf33d4f340b6b6a3eb861a62c433.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1dc8bf203244f41bcc982b1327944d7.d60adf33d4f340b6b6a3eb861a62c433.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1dc8bf203244f41bcc982b1327944d7.d60adf33d4f340b6b6a3eb861a62c433.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-p3i4suu2.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1dc8bf203244f41bcc982b1327944d7.d60adf33d4f340b6b6a3eb861a62c433.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -136900,9 +136900,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.375s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":164,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-31ea11b2e34940b9bea82f56c3bc0c3f.9a47c42e347d41868573b9f124043ac2.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-31ea11b2e34940b9bea82f56c3bc0c3f.9a47c42e347d41868573b9f124043ac2.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-hsw2x6d3.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-31ea11b2e34940b9bea82f56c3bc0c3f.9a47c42e347d41868573b9f124043ac2.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-31ea11b2e34940b9bea82f56c3bc0c3f.9a47c42e347d41868573b9f124043ac2.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-31ea11b2e34940b9bea82f56c3bc0c3f.9a47c42e347d41868573b9f124043ac2.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-hsw2x6d3.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-31ea11b2e34940b9bea82f56c3bc0c3f.9a47c42e347d41868573b9f124043ac2.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -137274,9 +137274,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.828s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":173,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-087116dd53d946fcabef3a90963be215.1f60a90c82b84fad9a458227567349ff.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-087116dd53d946fcabef3a90963be215.1f60a90c82b84fad9a458227567349ff.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-cuhcoks9.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-087116dd53d946fcabef3a90963be215.1f60a90c82b84fad9a458227567349ff.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-087116dd53d946fcabef3a90963be215.1f60a90c82b84fad9a458227567349ff.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-087116dd53d946fcabef3a90963be215.1f60a90c82b84fad9a458227567349ff.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-cuhcoks9.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-087116dd53d946fcabef3a90963be215.1f60a90c82b84fad9a458227567349ff.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -137648,9 +137648,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.734s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":182,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4c0c162eb5034a30abdf542ac3b865d2.abca850567a048e3be72486f18d289f7.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4c0c162eb5034a30abdf542ac3b865d2.abca850567a048e3be72486f18d289f7.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-8t7f8jj2.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4c0c162eb5034a30abdf542ac3b865d2.abca850567a048e3be72486f18d289f7.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4c0c162eb5034a30abdf542ac3b865d2.abca850567a048e3be72486f18d289f7.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4c0c162eb5034a30abdf542ac3b865d2.abca850567a048e3be72486f18d289f7.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-8t7f8jj2.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4c0c162eb5034a30abdf542ac3b865d2.abca850567a048e3be72486f18d289f7.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -138022,9 +138022,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 19.188s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":191,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7e413d27c4c6476baf17d829d4849261.a8be2da468e24a7c978d3c0284e1b39f.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7e413d27c4c6476baf17d829d4849261.a8be2da468e24a7c978d3c0284e1b39f.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-nkxizuet.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7e413d27c4c6476baf17d829d4849261.a8be2da468e24a7c978d3c0284e1b39f.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7e413d27c4c6476baf17d829d4849261.a8be2da468e24a7c978d3c0284e1b39f.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7e413d27c4c6476baf17d829d4849261.a8be2da468e24a7c978d3c0284e1b39f.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-nkxizuet.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-7e413d27c4c6476baf17d829d4849261.a8be2da468e24a7c978d3c0284e1b39f.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -138396,9 +138396,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.609s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":200,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f0e5d9d496bf4bb8b28b9e7074c62409.d3cd76e6f1034c15b7f49abc31e880f9.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f0e5d9d496bf4bb8b28b9e7074c62409.d3cd76e6f1034c15b7f49abc31e880f9.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-m5gg2t2w.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f0e5d9d496bf4bb8b28b9e7074c62409.d3cd76e6f1034c15b7f49abc31e880f9.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f0e5d9d496bf4bb8b28b9e7074c62409.d3cd76e6f1034c15b7f49abc31e880f9.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f0e5d9d496bf4bb8b28b9e7074c62409.d3cd76e6f1034c15b7f49abc31e880f9.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-m5gg2t2w.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f0e5d9d496bf4bb8b28b9e7074c62409.d3cd76e6f1034c15b7f49abc31e880f9.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -138770,9 +138770,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.328s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":209,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a879f51ddcef463c9194b6d88030a116.460aa26cb24749f489e89c94325ab8bc.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a879f51ddcef463c9194b6d88030a116.460aa26cb24749f489e89c94325ab8bc.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-16emmqnw.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a879f51ddcef463c9194b6d88030a116.460aa26cb24749f489e89c94325ab8bc.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a879f51ddcef463c9194b6d88030a116.460aa26cb24749f489e89c94325ab8bc.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a879f51ddcef463c9194b6d88030a116.460aa26cb24749f489e89c94325ab8bc.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-16emmqnw.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a879f51ddcef463c9194b6d88030a116.460aa26cb24749f489e89c94325ab8bc.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -139144,9 +139144,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 16.907s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":218,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1b3e246902f4c7dba69a790d3d780bc.c7909373f4c44185968333262d3d4b4b.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1b3e246902f4c7dba69a790d3d780bc.c7909373f4c44185968333262d3d4b4b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-ut0e1tpo.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1b3e246902f4c7dba69a790d3d780bc.c7909373f4c44185968333262d3d4b4b.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1b3e246902f4c7dba69a790d3d780bc.c7909373f4c44185968333262d3d4b4b.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1b3e246902f4c7dba69a790d3d780bc.c7909373f4c44185968333262d3d4b4b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-ut0e1tpo.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a1b3e246902f4c7dba69a790d3d780bc.c7909373f4c44185968333262d3d4b4b.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -139518,9 +139518,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 15.969s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-004059.jsonl`.
   - Metadata: `{"cycle":227,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4b7da18964254ff1a8fcdd225e03dc52.9745565a46954fdfbed514749e6552b3.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4b7da18964254ff1a8fcdd225e03dc52.9745565a46954fdfbed514749e6552b3.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-pcgv9bgd.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4b7da18964254ff1a8fcdd225e03dc52.9745565a46954fdfbed514749e6552b3.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4b7da18964254ff1a8fcdd225e03dc52.9745565a46954fdfbed514749e6552b3.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4b7da18964254ff1a8fcdd225e03dc52.9745565a46954fdfbed514749e6552b3.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-pcgv9bgd.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4b7da18964254ff1a8fcdd225e03dc52.9745565a46954fdfbed514749e6552b3.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -139760,9 +139760,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.172s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-034536.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ba396036a3f47678344bb945eb65ba2.3a1a3ca647054a2295a90f30159bef48.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ba396036a3f47678344bb945eb65ba2.3a1a3ca647054a2295a90f30159bef48.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-ba8esrws.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ba396036a3f47678344bb945eb65ba2.3a1a3ca647054a2295a90f30159bef48.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ba396036a3f47678344bb945eb65ba2.3a1a3ca647054a2295a90f30159bef48.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ba396036a3f47678344bb945eb65ba2.3a1a3ca647054a2295a90f30159bef48.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-ba8esrws.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ba396036a3f47678344bb945eb65ba2.3a1a3ca647054a2295a90f30159bef48.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -139782,9 +139782,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 21.094s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-034536.jsonl`.
   - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-d3b8aad0f78e4939a0ad4cbf02ed2091.e434088cc74f4a4d990be25ee2e2c15f.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-d3b8aad0f78e4939a0ad4cbf02ed2091.e434088cc74f4a4d990be25ee2e2c15f.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-b40eq370.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-d3b8aad0f78e4939a0ad4cbf02ed2091.e434088cc74f4a4d990be25ee2e2c15f.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-d3b8aad0f78e4939a0ad4cbf02ed2091.e434088cc74f4a4d990be25ee2e2c15f.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-d3b8aad0f78e4939a0ad4cbf02ed2091.e434088cc74f4a4d990be25ee2e2c15f.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-b40eq370.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-d3b8aad0f78e4939a0ad4cbf02ed2091.e434088cc74f4a4d990be25ee2e2c15f.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140156,9 +140156,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 18.375s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-034536.jsonl`.
   - Metadata: `{"cycle":11,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-30a57f4ff44a43538c1bef8d7c6db1ca.377fc1d8e4e442b4b87867a8e843ed3d.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-30a57f4ff44a43538c1bef8d7c6db1ca.377fc1d8e4e442b4b87867a8e843ed3d.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-0oduyytz.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-30a57f4ff44a43538c1bef8d7c6db1ca.377fc1d8e4e442b4b87867a8e843ed3d.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-30a57f4ff44a43538c1bef8d7c6db1ca.377fc1d8e4e442b4b87867a8e843ed3d.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-30a57f4ff44a43538c1bef8d7c6db1ca.377fc1d8e4e442b4b87867a8e843ed3d.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-0oduyytz.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-30a57f4ff44a43538c1bef8d7c6db1ca.377fc1d8e4e442b4b87867a8e843ed3d.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140398,9 +140398,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.703s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-040020.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-52617a7fde3d46e2b491377246d581cc.40c908b127374f9f9a02aa2b316d3777.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-52617a7fde3d46e2b491377246d581cc.40c908b127374f9f9a02aa2b316d3777.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-t5areora.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-52617a7fde3d46e2b491377246d581cc.40c908b127374f9f9a02aa2b316d3777.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-52617a7fde3d46e2b491377246d581cc.40c908b127374f9f9a02aa2b316d3777.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-52617a7fde3d46e2b491377246d581cc.40c908b127374f9f9a02aa2b316d3777.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-t5areora.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-52617a7fde3d46e2b491377246d581cc.40c908b127374f9f9a02aa2b316d3777.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140420,9 +140420,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 18.094s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-040020.jsonl`.
   - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f2495bb497a94c2aafe933a53f520b42.8dc71d1d8da740b1b0179fd7e7e52cfc.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f2495bb497a94c2aafe933a53f520b42.8dc71d1d8da740b1b0179fd7e7e52cfc.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-yo71iuy2.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f2495bb497a94c2aafe933a53f520b42.8dc71d1d8da740b1b0179fd7e7e52cfc.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f2495bb497a94c2aafe933a53f520b42.8dc71d1d8da740b1b0179fd7e7e52cfc.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f2495bb497a94c2aafe933a53f520b42.8dc71d1d8da740b1b0179fd7e7e52cfc.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-yo71iuy2.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-f2495bb497a94c2aafe933a53f520b42.8dc71d1d8da740b1b0179fd7e7e52cfc.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140486,9 +140486,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 23.891s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-041225.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a6ad57be6c204daf8ed68b88e5694918.a0c6cf73e3f344559decb89ae6eeac48.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a6ad57be6c204daf8ed68b88e5694918.a0c6cf73e3f344559decb89ae6eeac48.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-aj77f3eg.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a6ad57be6c204daf8ed68b88e5694918.a0c6cf73e3f344559decb89ae6eeac48.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a6ad57be6c204daf8ed68b88e5694918.a0c6cf73e3f344559decb89ae6eeac48.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a6ad57be6c204daf8ed68b88e5694918.a0c6cf73e3f344559decb89ae6eeac48.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-aj77f3eg.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-a6ad57be6c204daf8ed68b88e5694918.a0c6cf73e3f344559decb89ae6eeac48.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140508,9 +140508,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.813s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-041225.jsonl`.
   - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-01c0391a920b4a7b8ef587cc69e7801c.7750a4c8f9174282994569e93770f938.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-01c0391a920b4a7b8ef587cc69e7801c.7750a4c8f9174282994569e93770f938.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-bqpkuzk7.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-01c0391a920b4a7b8ef587cc69e7801c.7750a4c8f9174282994569e93770f938.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-01c0391a920b4a7b8ef587cc69e7801c.7750a4c8f9174282994569e93770f938.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-01c0391a920b4a7b8ef587cc69e7801c.7750a4c8f9174282994569e93770f938.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-bqpkuzk7.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-01c0391a920b4a7b8ef587cc69e7801c.7750a4c8f9174282994569e93770f938.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140706,9 +140706,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 18.188s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-042202.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fd288fbf917741d7bc31803c8330a55b.955fae66a0af4eba919548bb04ec046e.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fd288fbf917741d7bc31803c8330a55b.955fae66a0af4eba919548bb04ec046e.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-28wapisz.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fd288fbf917741d7bc31803c8330a55b.955fae66a0af4eba919548bb04ec046e.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fd288fbf917741d7bc31803c8330a55b.955fae66a0af4eba919548bb04ec046e.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fd288fbf917741d7bc31803c8330a55b.955fae66a0af4eba919548bb04ec046e.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-28wapisz.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-fd288fbf917741d7bc31803c8330a55b.955fae66a0af4eba919548bb04ec046e.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140728,9 +140728,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 18.453s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-042202.jsonl`.
   - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c1263595ac334dc18d74e473979cc655.a36e1adeb6074070b0bdd9f577798708.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c1263595ac334dc18d74e473979cc655.a36e1adeb6074070b0bdd9f577798708.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-5lvllsia.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c1263595ac334dc18d74e473979cc655.a36e1adeb6074070b0bdd9f577798708.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c1263595ac334dc18d74e473979cc655.a36e1adeb6074070b0bdd9f577798708.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c1263595ac334dc18d74e473979cc655.a36e1adeb6074070b0bdd9f577798708.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-5lvllsia.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-c1263595ac334dc18d74e473979cc655.a36e1adeb6074070b0bdd9f577798708.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140750,9 +140750,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 21.203s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-043335.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-47a94458cfeb4657bcad317b8b5ef211.dd9dc7e767534d4583e106941ba728fe.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-47a94458cfeb4657bcad317b8b5ef211.dd9dc7e767534d4583e106941ba728fe.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-uawmtmnp.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-47a94458cfeb4657bcad317b8b5ef211.dd9dc7e767534d4583e106941ba728fe.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-47a94458cfeb4657bcad317b8b5ef211.dd9dc7e767534d4583e106941ba728fe.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-47a94458cfeb4657bcad317b8b5ef211.dd9dc7e767534d4583e106941ba728fe.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-uawmtmnp.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-47a94458cfeb4657bcad317b8b5ef211.dd9dc7e767534d4583e106941ba728fe.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140772,9 +140772,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 17.609s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-043335.jsonl`.
   - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-481aaafdcb014c55ba06bbdd4ef21d34.72aa1fd91d644c7d9dfbcb2679c3778c.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-481aaafdcb014c55ba06bbdd4ef21d34.72aa1fd91d644c7d9dfbcb2679c3778c.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-re4205pm.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-481aaafdcb014c55ba06bbdd4ef21d34.72aa1fd91d644c7d9dfbcb2679c3778c.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-481aaafdcb014c55ba06bbdd4ef21d34.72aa1fd91d644c7d9dfbcb2679c3778c.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-481aaafdcb014c55ba06bbdd4ef21d34.72aa1fd91d644c7d9dfbcb2679c3778c.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-re4205pm.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-481aaafdcb014c55ba06bbdd4ef21d34.72aa1fd91d644c7d9dfbcb2679c3778c.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140794,9 +140794,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 20.594s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-050136.jsonl`.
   - Metadata: `{"cycle":1,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ed24d5b39a94d5d9a3fedf5b6746d9a.854f935598024ef1a5be757137dad08b.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ed24d5b39a94d5d9a3fedf5b6746d9a.854f935598024ef1a5be757137dad08b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-hnw32qbi.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ed24d5b39a94d5d9a3fedf5b6746d9a.854f935598024ef1a5be757137dad08b.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ed24d5b39a94d5d9a3fedf5b6746d9a.854f935598024ef1a5be757137dad08b.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ed24d5b39a94d5d9a3fedf5b6746d9a.854f935598024ef1a5be757137dad08b.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-hnw32qbi.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-9ed24d5b39a94d5d9a3fedf5b6746d9a.854f935598024ef1a5be757137dad08b.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -140816,9 +140816,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 18.406s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-050136.jsonl`.
   - Metadata: `{"cycle":2,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6bc6c896e7e74f539a88e89e272582d9.4c68d6e860a64c8080bbec9dd88e1ac2.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6bc6c896e7e74f539a88e89e272582d9.4c68d6e860a64c8080bbec9dd88e1ac2.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-yve0b3vf.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6bc6c896e7e74f539a88e89e272582d9.4c68d6e860a64c8080bbec9dd88e1ac2.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6bc6c896e7e74f539a88e89e272582d9.4c68d6e860a64c8080bbec9dd88e1ac2.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6bc6c896e7e74f539a88e89e272582d9.4c68d6e860a64c8080bbec9dd88e1ac2.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-yve0b3vf.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-6bc6c896e7e74f539a88e89e272582d9.4c68d6e860a64c8080bbec9dd88e1ac2.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -141190,9 +141190,9 @@ scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler
   - Duration: 21.828s.
   - Log: `C:\Users\NEC\Documents\Factorio\logs\autopilot-20260620-050136.jsonl`.
   - Metadata: `{"cycle":11,"priority":null,"strategy_source":null}`.
-- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4d0afcf22ec94ff39e02121edd19abfd.9fbd76ceda504567a27e03afe4e05420.tmp": Failure
+- Result: Loop stopped: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4d0afcf22ec94ff39e02121edd19abfd.9fbd76ceda504567a27e03afe4e05420.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-llplsjza.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4d0afcf22ec94ff39e02121edd19abfd.9fbd76ceda504567a27e03afe4e05420.tmp
-- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4d0afcf22ec94ff39e02121edd19abfd.9fbd76ceda504567a27e03afe4e05420.tmp": Failure
+- Failure reason: strategy cycle failed: RemoteSlurmError: scp: write remote "/home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4d0afcf22ec94ff39e02121edd19abfd.9fbd76ceda504567a27e03afe4e05420.tmp": Failure
 scp: failed to upload file C:/Users/NEC/AppData/Local/Temp/factorio-ai-scheduler-task-llplsjza.json to /home1/r1jae262/factorio-ai-worker/factorio-ai/.factorio-ai-scheduler-tasks/.strategy-4d0afcf22ec94ff39e02121edd19abfd.9fbd76ceda504567a27e03afe4e05420.tmp
 - Next action: Use the failure evidence to choose the next planner, strategy, or layout fix.
 - Token usage: not recorded for this loop / weekly quota unavailable
@@ -252136,3 +252136,8 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: gate run; unmeasured on a fleet (no runs started: 12 parallel runs on the machine).
 - failure reason: none yet; no new depot chest on a SiteService spot (existing storage chest is the depot).
 - next action: fleet run, check job-events for "put carried surplus" / "put retiring coal" and inventory coal over time.
+## 2026-11-13 site: trees never move a planned site
+- goal: owner rule, bus-side blocks are not routed around forests.
+- actions: new site/nature.py (ranked/tiebreak, CLEARANCE_BATCH, batches); free_sites drops MAX_CLEARABLE and the per-tree distance penalty; search_bus drops clear_weight from the score (tie-break only); caps removed in planning.preflight (96), transport corridor (64), starter coal corridor (128); V2FactoryBuilder clears clear_obstacles in 96-obstacle batches, one paid mine per step, cleared batches memoised per world.
+- metrics: tests/test_v2_site_nature.py (8); bus/strips identical with a dense forest on the bus (old code moved the bus 24 tiles).
+- next action: live fleet in a forested seed to confirm clearing time and inventory (wood) headroom.

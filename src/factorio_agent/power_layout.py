@@ -368,23 +368,23 @@ return {ok=true,world_id=d.world_id,ground=ground}
             reason="normally collect spilled construction-site items without discarding materials",
         )
 
-    def ensure_plan(self, observation, plan, **options):
-        clearance_only = (
-            plan.get("entities") == []
-            and isinstance(plan.get("clear_obstacles"), list)
-            and "clearance_world_id" in plan
-        )
-        if clearance_only and plan["clearance_world_id"] != observation["world_id"]:
-            return {"status": "blocked", "reason": "clearance_plan_world_changed"}
-        from .resource_policy import ensure_resource_policy
+    def _next_clearance(self, observation, obstacles):
+        """The clearing phase: one paid ``mine`` for the next approved obstacle, else None.
 
-        resource_check = ensure_resource_policy(self.game, self, observation, plan)
-        if not resource_check.get("ok"):
-            return {"status": "blocked", **resource_check}
-        if plan.get("clear_obstacles"):
-            if plan.get("clearance_world_id") != observation["world_id"]:
-                return {"status": "blocked", "reason": "clearance_plan_world_changed"}
-            payload = json.dumps(json.dumps(plan["clear_obstacles"], separators=(",", ":")))
+        A plan may list any number of trees and rocks (``site.nature``); each
+        step checks one batch of ``CLEARANCE_BATCH``. A batch found empty stays
+        empty in this world (nature does not regrow), so it is not asked again.
+        """
+        from .site.nature import batches
+
+        done = self.__dict__.setdefault("_cleared_batches", set())
+        groups = batches(obstacles)
+        for index, batch in enumerate(groups):
+            text = json.dumps(batch, separators=(",", ":"), sort_keys=True)
+            key = (observation["world_id"], hashlib.sha256(text.encode()).hexdigest())
+            if key in done:
+                continue
+            payload = json.dumps(json.dumps(batch, separators=(",", ":")))
             result = self.game.query(
                 """
 local approved=helpers.json_to_table("""
@@ -409,8 +409,31 @@ return {ok=true}
                     "type": "mine",
                     **result["obstacle"],
                     "count": 1,
-                    "reason": "normally mine approved tree or rock on reserved straight corridor",
+                    "reason": "normally mine approved tree or rock on reserved straight corridor"
+                    + ("" if len(groups) == 1 else f" (clearing batch {index + 1}/{len(groups)})"),
                 }
+            done.add(key)
+        return None
+
+    def ensure_plan(self, observation, plan, **options):
+        clearance_only = (
+            plan.get("entities") == []
+            and isinstance(plan.get("clear_obstacles"), list)
+            and "clearance_world_id" in plan
+        )
+        if clearance_only and plan["clearance_world_id"] != observation["world_id"]:
+            return {"status": "blocked", "reason": "clearance_plan_world_changed"}
+        from .resource_policy import ensure_resource_policy
+
+        resource_check = ensure_resource_policy(self.game, self, observation, plan)
+        if not resource_check.get("ok"):
+            return {"status": "blocked", **resource_check}
+        if plan.get("clear_obstacles"):
+            if plan.get("clearance_world_id") != observation["world_id"]:
+                return {"status": "blocked", "reason": "clearance_plan_world_changed"}
+            mine = self._next_clearance(observation, plan["clear_obstacles"])
+            if mine is not None:
+                return mine
         if clearance_only:
             return {"status": "succeeded", "reason": "approved clearance-only plan complete"}
         result = super().ensure_plan(observation, plan, **options)
@@ -588,8 +611,7 @@ return {ok=true,blocked=blocked,clearable=clearable,ore=ore}
             if (row["position"]["x"], row["position"]["y"]) in route_tiles:
                 for e in row["entities"]:
                     clear[(e["name"], e["position"]["x"], e["position"]["y"])] = e
-        if len(clear) > 128:
-            return {"ok": False, "reason": "corridor_clearance_exceeds_128_natural_obstacles"}
+        # No cap: the planned coal corridor is cleared in batches (site.nature).
         removed = [
             {"name": e["name"], "position": e["position"], "unit_number": e["unit_number"]}
             for e in obs["entities"]
