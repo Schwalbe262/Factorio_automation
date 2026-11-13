@@ -59,6 +59,7 @@ PLANNING_MARKERS = (
     "meets_planned_hardware",  # planned furnaces, mining banks
     "no_coal_stub_variant",  # steam expansion coal stub
     "board_reservation_overlap",
+    "planning_budget_exhausted",  # industrial.PlanningBudget.failure: a site search out of time
 )
 # Reasons that start with "no_" but wait for something other than space.
 NOT_SPATIAL = ("no_minable", "no_progress", "no_science", "no_fuel", "no_research")

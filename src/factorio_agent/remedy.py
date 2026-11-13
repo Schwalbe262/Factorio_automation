@@ -112,14 +112,53 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
         ROUTE_RELAX_1,
         ROUTE_RELAX_2,
     ),
-    "steam_expansion": (ROUTE_RELAX_1, ROUTE_RELAX_2),
-    "trunk_return_feed": (ROUTE_RELAX_1,),
+    # planned_products: engines and magazines are produce rows on a planned world.
+    "engine_production": (
+        Rung("layout:next_variant", "layout", {"layout_rotate": 1}, note="the next ranked row layout first"),
+        ROUTE_RELAX_1,
+        ROUTE_RELAX_2,
+    ),
+    "ammo_production": (
+        Rung("layout:next_variant", "layout", {"layout_rotate": 1}, note="the next ranked row layout first"),
+        ROUTE_RELAX_1,
+        ROUTE_RELAX_2,
+    ),
+    "steam_expansion": (
+        Rung(
+            "site:wider_steam_search",
+            "site",
+            {"steam_fallback_sites": 12, "steam_water_run_max": 64},
+            kinds=("site",),
+            note="twelve free sites near the plant, water runs up to 64 tiles (steam_siting hard maxima)",
+        ),
+        ROUTE_RELAX_1,
+        ROUTE_RELAX_2,
+    ),
+    "trunk_return_feed": (
+        Rung(
+            "site:past_first_tap",
+            "site",
+            {"return_feed_past_taps": True},
+            kinds=("site",),
+            note="trunk runs past the first tapped run (returned items reach only the later taps)",
+        ),
+    ),
     "smelting_district": (ROUTE_RELAX_1,),
     "planned_main_bus": (ROUTE_RELAX_1,),
     "brick_production": (ROUTE_RELAX_1, ROUTE_RELAX_2),
     "steel_production": (ROUTE_RELAX_1, ROUTE_RELAX_2),
     "steel_supply": (ROUTE_RELAX_1, ROUTE_RELAX_2),
     "supply_cell": (ROUTE_RELAX_1,),
+    "oil_gathering": (
+        Rung(
+            "site:wider_survey",
+            "site",
+            {"oil_survey_radius": 1024},  # oil_gathering.OIL_SURVEY_RADIUS_MAX (the planner clamps to it)
+            kinds=("site",),
+            cost_seconds=240.0,  # scouting walks into the wider ring before a field is known
+            note="crude-oil survey rings widened from 512 to the hard maximum of 1024 tiles, scouting included",
+        ),
+    ),
 }
 
 

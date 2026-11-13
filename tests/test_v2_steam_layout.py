@@ -188,6 +188,50 @@ class FallbackTests(unittest.TestCase):
         found, _ = self.layouts(None, [])
         self.assertEqual(found, [])
 
+    def test_water_joins_beside_an_inlet_pipe_when_the_boilers_free_connection_is_taken(self):
+        # Seed 1277653921: the plant's one free water connection faced its own coal feed.
+        from factorio_agent.steam_layout import water_tiles
+        from factorio_agent.steam_siting import water_sources
+
+        old = boiler(self.power["entities"])
+        free = sorted(water_tiles(old) - tiles(self.power["entities"]))
+        self.assertEqual(len(free), 1)
+        plug = entity("wooden-chest", free[0][0] + 0.5, free[0][1] + 0.5)
+        self.builder.state["coal_plan"] = _plan(self.feed["entities"] + [plug], [], template="dedicated_coal_feed")
+        known = self.power["entities"] + self.feed["entities"] + [plug]
+        sources = water_sources([old], known)
+        self.assertNotIn(free[0], {t for _, t in sources})
+        self.assertTrue(sources)  # beside the pump-to-boiler pipes
+        site = SimpleNamespace(world=lambda world_id: object())
+        found, _ = self.layouts(site, [Rect(-4, 24, 5, 42)])  # south of the inlet line
+        self.assertEqual([x["kind"] for x in found], ["degraded_free_site"])
+        self.assertLessEqual(found[0]["water_run_tiles"], 32)
+        for variant in found[0]["variants"]:
+            self.assertFalse(overlaps(variant["entities"], known))
+            self.assertFalse(fluid_conflicts(variant["entities"], known))
+            self.assertTrue(water_connected(known + variant["entities"], old, variant["boiler"]))
+
+    def test_rejections_are_counted_and_the_remedy_widens_the_search(self):
+        from factorio_agent import remedy
+        from factorio_agent import steam_siting
+
+        site = SimpleNamespace(world=lambda world_id: object())
+        rejected = {}
+        board = {"world_id": "w", "blocks": {}}
+        with (
+            patch("factorio_agent.steam_siting.preflight", return_value={"ok": True, "clear_obstacles": []}),
+            patch("factorio_agent.steam_siting.free_sites", return_value=[]) as sites,
+        ):
+            self.assertEqual(list(candidate_layouts(None, self.builder, self.obs, site, board, rejected)), [])
+            self.assertEqual(sites.call_args.kwargs["limit"], steam_siting.FALLBACK_SITES)
+            rung = next(r for r in remedy.RELAXATIONS["steam_expansion"] if r.name == "site:wider_steam_search")
+            with remedy.applied(dict(rung.options, steam_fallback_sites=99)):
+                list(candidate_layouts(None, self.builder, self.obs, site, board))
+                self.assertEqual(steam_siting._limits(), (64, steam_siting.FALLBACK_SITES_LIMIT))
+            self.assertEqual(sites.call_args.kwargs["limit"], steam_siting.FALLBACK_SITES_LIMIT)
+        self.assertEqual(rejected.get("degraded_free_site:no_free_site"), 1)
+        self.assertIn("adjacent_bank:slot_meets_known_hardware_or_water", rejected)
+
 
 if __name__ == "__main__":
     unittest.main()

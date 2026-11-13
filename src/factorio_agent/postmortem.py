@@ -264,8 +264,16 @@ DRY_RUN = {
     "logistic_science": DryRun(lambda ex, obs, p: ex.green.prepare(obs, p)),
     "brick_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "brick")),
     "steel_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "steel")),
+    # steel_supply plans the same planned furnace block (planned_furnaces.supply_step) on a planned world.
+    "steel_supply": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "steel")),
+    # Engines and magazines are produce rows on a planned world (planned_products).
+    "engine_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "ENGINE_ROW")),
+    "ammo_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "AMMO_ROW")),
     "steam_expansion": DryRun(lambda ex, obs, p: ex.steam_expansion.prepare(obs)),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
+    "oil_gathering": DryRun(
+        lambda ex, obs, p: ex.oil_gathering.prepare(obs), lambda ex, obs, p: ex.oil_gathering.step(obs)
+    ),
 }
 
 
@@ -275,6 +283,16 @@ def _furnace_prepare(ex, obs, kind):
     if planned is not None:
         return planned.prepare(obs)
     return getattr(ex.industrial_operations, f"prepare_{kind}_production")(obs)
+
+
+def _row_prepare(ex, obs, name):
+    """The fixed produce row of ``planned_products`` on a planned world; no answer on the development map."""
+    from . import planned_products
+
+    request = getattr(planned_products, name)
+    if not planned_products.active(ex.production_rows, obs, request["item"]):
+        return {"reason": "no_planned_world_row"}  # not a plan result: fits None
+    return ex.production_rows.prepare(obs, dict(request))
 
 
 def _handler_step(ex, obs, parameters, capability):

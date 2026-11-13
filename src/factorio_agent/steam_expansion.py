@@ -88,12 +88,14 @@ class SteamExpansion:
         """Plan the pair, its paired coal bank, coal belt, water link and poles; no action."""
         engines = [e for e in obs["entities"] if e["name"] == "steam-engine"]
         if not engines or not any(e.get("energy", 0) > 0 for e in engines):
-            return {"ok": False, "reason": "running_source_plant_required"}
+            # A wait, not a planning failure (seed 1188507449: the boiler had run out of coal and
+            # upkeep refuelled it in the same step); ``step`` reports it as waiting.
+            return {"ok": False, "reason": "running_source_plant_required", "wait": True}
         board = json.loads((self.path.parent / "pcb-board.json").read_text(encoding="utf-8"))
         if board.get("world_id") != obs["world_id"]:
             return {"ok": False, "reason": "steam_board_world_changed"}
-        failures = []
-        for layout in candidate_layouts(self.game, self.builder, obs, self.site, board):
+        failures, rejected = [], {}
+        for layout in candidate_layouts(self.game, self.builder, obs, self.site, board, rejected):
             result = self._prepare_layout(obs, layout, board)
             if result.get("ok"):
                 return dict(
@@ -105,8 +107,26 @@ class SteamExpansion:
                     preserved_engine_units=[e["unit_number"] for e in engines],
                 )
             failures.append({"kind": layout["kind"], "side": layout.get("side"), **result})
-        reason = "steam_expansion_layout_unroutable" if failures else "steam_expansion_no_buildable_bank_slot"
-        return {"ok": False, "reason": reason, "failures": failures[:6]}
+        if failures:
+            return {"ok": False, "reason": "steam_expansion_layout_unroutable", "failures": failures[:6]}
+        from . import plan_needs
+        from .steam_siting import MAX_WATER_RUN_LIMIT
+
+        reason = "steam_expansion_no_buildable_bank_slot"
+        return {
+            "ok": False,
+            "reason": reason,
+            "rejected_slots": dict(sorted(rejected.items())[:12]),
+            "plan_needs": plan_needs.make(
+                "site",
+                reason,
+                at=next((e["position"] for e in engines), None),
+                rejected_by=rejected,
+                tried=sum(rejected.values()) or None,
+                change="a free steam-bank site near the plant with a water run of at most "
+                f"{MAX_WATER_RUN_LIMIT} tiles from the plant's water network (or a second offshore pump)",
+            ),
+        }
 
     def _prepare_layout(self, obs, layout, board):
         """One layout: coal bank, then stub variants in coal-facing order until one routes."""
@@ -174,6 +194,12 @@ class SteamExpansion:
     def step(self, obs):
         if not self.state:
             prepared = self.prepare(obs)
+            if prepared.get("wait"):
+                return {
+                    "status": "waiting",
+                    "reason": "waiting for the running steam plant to generate again (boiler coal and water)",
+                    "evidence": {"wait_for": "running_source_plant_required"},
+                }
             if not prepared.get("ok"):
                 return {"status": "blocked", **prepared}
             self.state = prepared

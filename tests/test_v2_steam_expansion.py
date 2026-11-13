@@ -179,6 +179,21 @@ class SteamExpansionTests(unittest.TestCase):
         with prepared(bank):
             result = obj.prepare(obs)
         self.assertEqual(result["reason"], "steam_expansion_no_buildable_bank_slot")
+        from factorio_agent import plan_needs
+
+        needs = plan_needs.from_result("steam_expansion", dict(result, status="blocked"))
+        self.assertEqual(needs["kind"], "site")
+        self.assertIn("first_plant_plan_has_no_boiler", needs["rejected_by"])
+
+    def test_an_unpowered_plant_is_a_wait_not_a_block(self):
+        # Seed 1188507449 (74 min): the boiler had run out of coal; upkeep refuelled it the same step.
+        obj, bank, obs = self.fixture()
+        obj.state = {}
+        obs["entities"][0]["energy"] = 0
+        result = obj.step(obs)
+        self.assertEqual(result["status"], "waiting")
+        self.assertEqual(result["evidence"]["wait_for"], "running_source_plant_required")
+        self.assertEqual(obj.state, {})
 
     def test_prepare_then_step_to_thirty_second_proof(self):
         obj, bank, obs = self.fixture()

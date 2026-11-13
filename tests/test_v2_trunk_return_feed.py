@@ -121,6 +121,64 @@ class LayoutTests(Trunk):
         mine_trunk.record_tap(self.root, WORLD, dict(tap, name="z:coal", along=1, entities=[], remove=[]))
         self.assertEqual(self.feed.prepare(self.obs(), "coal")["reason"], "no_return_feed_site_at_the_trunk_head")
 
+    def jog_at_the_head(self):
+        """The consumer route turns right after the port (seeds 1188507449, 4031765348): a one-tile first run."""
+        port = self.bank["plan"]["ports"][0]["position"]
+        head = dict(self.belts[0])
+        south = [
+            {
+                "name": "transport-belt",
+                "position": {"x": port["x"] + 1, "y": port["y"] + i},
+                "direction": 8,
+                "unit_number": 700 + i,
+            }
+            for i in range(8)
+        ]
+        self.belts = [head, *south]
+        self.entities = self.drills + self.poles + self.belts
+        return south
+
+    def test_a_trunk_turning_right_after_the_port_gets_its_feed_on_the_next_run(self):
+        south = self.jog_at_the_head()
+        segments = mine_trunk.trunk_segments(self.obs(), self.bank["plan"]["ports"][0])
+        self.assertEqual([len(run) for _, run in segments], [1, 8])
+        prepared = self.feed.prepare(self.obs(), "coal")
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertEqual(prepared["segment"], 1)
+        self.assertEqual(xy(prepared["layout"]["belt"]), xy(south[prepared["row"]]))
+        self.assertEqual(self.feed.station("coal", prepared)["segment"], 1)
+        rows = trf.receipt(self.root, dict(self.obs(), resources={}), CATALOG)["items"]["coal"]
+        self.assertTrue(rows["observed"])
+        # Built: the proof traces the second run.
+        self.feed.state = {"world_id": WORLD, "feeds": {"coal": dict(prepared, phase="stock", chest=None)}}
+        self.build(prepared["layout"])
+        self.feed.state["feeds"]["coal"]["chest"] = {
+            "unit_number": self.entities[-2]["unit_number"],
+            "position": self.entities[-2]["position"],
+            "name": return_feed.CHEST,
+        }
+        evidence = self.feed.proof(self.obs(), {"resource": "coal"})
+        self.assertIsNotNone(evidence)
+        self.assertEqual((evidence["segment"], evidence["trunk_tiles_traced"]), (1, 9))
+
+    def test_a_tapped_first_run_ends_the_search_unless_the_remedy_relaxes_it(self):
+        from factorio_agent import plan_needs, remedy
+
+        self.jog_at_the_head()
+        key = mine_trunk.trunk_key(self.bank)
+        tap = {"name": "a:coal", "trunk": key, "along": 0, "side": "right", "segment": 0, "entities": [], "remove": []}
+        mine_trunk.record_tap(self.root, WORLD, tap)
+        refused = self.feed.prepare(self.obs(), "coal")
+        self.assertEqual(refused["reason"], "no_return_feed_site_at_the_trunk_head")
+        needs = plan_needs.from_result(trf.CAPABILITY, dict(refused, status="blocked"))
+        self.assertEqual(needs["kind"], "site")
+        rung, _ = remedy.choose(trf.CAPABILITY, needs, [{"rung": "replan", "signature": plan_needs.signature(needs)}])
+        self.assertEqual(rung.name, "site:past_first_tap")
+        with remedy.applied(rung.options):
+            relaxed = self.feed.prepare(self.obs(), "coal")
+        self.assertTrue(relaxed["ok"], relaxed)
+        self.assertEqual(relaxed["segment"], 1)
+
     def test_ore_without_a_pole_has_no_site_and_coal_gets_a_burner_arm(self):
         self.entities = self.drills + self.belts  # the bank's poles are not observed
         self.bank["plan"]["resource"] = "iron-ore"

@@ -171,12 +171,14 @@ On the ladder today (pure `prepare` + declared rungs): `mining_outpost` (shrink
 drills), `dedicated_materials` (trunk-tap failure named in `change`),
 `smelting_district`, `planned_main_bus`, `produce` (next row layout, routes),
 `logistic_science` (other green form, routes), `supply_cell`, `steam_expansion`,
-`brick_production` / `steel_production` (planned furnace block), `trunk_return_feed`.
+`brick_production` / `steel_production` / `steel_supply` (planned furnace block),
+`trunk_return_feed` (`site:past_first_tap`), `steam_expansion` (`site:wider_steam_search`),
+`engine_production` / `ammo_production` (produce rows on a planned world, `produce` rungs),
+`oil_gathering` (`site:wider_survey`, survey rings to 1024 tiles, scouting; `OIL_GATHERING.md`).
 Route rungs use one shared lever (`remedy.ROUTE_RELAX` read by
 `transport.plan_connection`). Not yet: a `clear` rung (no planner declares one;
 trees and rocks are already cleared by every plan, `site/nature.py`; rerouting
-another block's bridge or belt needs a guarded rebuild rule first) and
-`steel_supply` (no pure prepare on a planned world).
+another block's bridge or belt needs a guarded rebuild rule first).
 
 Inside a job, `StarterExecutors.step` first runs shared upkeep before the
 capability's own controller: `pending_repair` and `_approved_initial_defense`
