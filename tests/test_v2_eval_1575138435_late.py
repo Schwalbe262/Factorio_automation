@@ -150,5 +150,85 @@ class WaypointRouteTests(unittest.TestCase):
         self.assertEqual(legs["ports"], [self.SOURCE, self.DESTINATION])
 
 
+class PowerGrowthTests(unittest.TestCase):
+    """257 min: one pair (2 engines, 1.8 MW) "working" with energy 0, 29.5 % of the electric consumers
+    low_power; the live receipt said demand 2139.5 kW, need 4140 kW, 2 pairs short."""
+
+    CATALOG = {
+        "entities": {
+            "steam-engine": {"energy_production": 15000},
+            "lab": {"energy_usage": 1000},
+            "assembling-machine-1": {"energy_usage": 1250},
+            "electric-mining-drill": {"energy_usage": 1500},
+            "inserter": {"energy_usage": 245},
+            "rocket-silo": {"energy_usage": 66500},
+        }
+    }
+
+    def obs(self):
+        engines = [
+            {"name": "steam-engine", "status_name": "working", "energy": 0, "electric_network_id": 1} for _ in range(2)
+        ]
+        machines = [{"name": "lab", "status_name": "low_power", "electric_network_connected": True}] * 8
+        machines += [
+            {"name": "assembling-machine-1", "status_name": "low_power", "electric_network_connected": True}
+        ] * 8
+        machines += [
+            {"name": "assembling-machine-1", "status_name": "full_output", "electric_network_connected": True}
+        ] * 14
+        machines += [
+            {"name": "electric-mining-drill", "status_name": "working", "electric_network_connected": True}
+        ] * 8
+        return {"tick": 1, "entities": engines + machines}
+
+    def test_a_browned_out_plant_is_short_and_the_next_stage_follows_the_first(self):
+        from factorio_agent import power_growth as pg
+
+        jobs = [{"capability": "steam_expansion", "parameters": {}, "status": "blocked"}]
+        receipt = pg.power_receipt(self.obs(), self.CATALOG, jobs)
+        self.assertEqual(receipt["capacity_kw"], 1800.0)  # engines at their limit still generate
+        self.assertEqual(receipt["demand_kw"], 8 * 60 + 8 * 75 + 8 * 90)
+        self.assertTrue(receipt["grow"])
+        self.assertGreaterEqual(receipt["pairs_short"], 1)
+        caps = {"steam_expansion": {"requires": []}}
+        # The first pair is the roadmap's (blocked here: the ladder owns it); no stage 2 beside it.
+        self.assertEqual(pg.power_growth_nodes(jobs, [], {"power_growth": receipt}, caps), [])
+        done = [{"capability": "steam_expansion", "parameters": {}, "status": "succeeded"}]
+        receipt = pg.power_receipt(self.obs(), self.CATALOG, done)
+        (node,) = pg.power_growth_nodes(done, [], {"power_growth": receipt}, caps)
+        self.assertEqual((node["capability"], node["parameters"]), ("steam_expansion", {"stage": 2}))
+        queued = [dict(node, status="pending")]
+        self.assertEqual(pg.power_growth_nodes(done, queued, {"power_growth": receipt}, caps), [])
+
+    def test_a_queued_rocket_silo_counts_as_an_upcoming_load(self):
+        from factorio_agent import power_growth as pg
+
+        quiet = {
+            "tick": 1,
+            "entities": [{"name": "steam-engine", "status_name": "working", "energy": 5, "electric_network_id": 1}] * 2,
+        }
+        idle = pg.power_receipt(quiet, self.CATALOG, [])
+        self.assertFalse(idle["grow"])
+        silo = pg.power_receipt(quiet, self.CATALOG, [], [{"capability": "rocket_silo", "status": "pending"}])
+        self.assertEqual(silo["upcoming_kw"], 3990.0)
+        self.assertTrue(silo["grow"])
+        self.assertEqual(silo["pairs_short"], 2)  # 3990 x 1.15 = 4588.5 kW over 1800 kW
+        headroom = pg.power_receipt(
+            quiet,
+            self.CATALOG,
+            [{"capability": "rocket_silo_x", "status": "waiting", "reason": "rocket_silo_power_headroom_short"}],
+        )
+        self.assertTrue(headroom["grow"])
+
+    def test_stage_parameters(self):
+        from factorio_agent.power_growth import stage_of
+
+        self.assertEqual(stage_of({}), 1)
+        self.assertEqual(stage_of({"stage": 3}), 3)
+        for bad in ({"stage": 1}, {"stage": "2"}, {"stage": 2, "x": 1}, {"stage": 99}):
+            with self.assertRaises(ValueError):
+                stage_of(bad)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,7 +29,7 @@ receipt. Providers (``PROVIDERS``, first match wins):
   a furnace block: the ``belt_bandwidth`` rework (no capability yet).
 - ``produce_row``: generic, every ``production_row_*`` block and an intermediate
   without a producer: a ``produce`` row at a higher rate (the row extends in place).
-- ``power``: no power (``steam_expansion`` is a roadmap step, follow-up only).
+- ``power``: no / low power: the next ``steam_expansion`` stage (``power_growth``).
 
 ``assess`` turns the options into one proposal with its gate (receipt
 ``bottlenecks[].proposal``); ``growth_nodes`` (supervisor growth pass) merges
@@ -292,8 +292,28 @@ def _power_matches(b) -> bool:
 
 
 def power_options(b, observation, state) -> list[dict]:
+    """One more steam stage from the ``power_growth`` receipt (``power_growth.power_growth_nodes``)."""
+    from .power_growth import power_growth_nodes
+
+    receipt = observation.get("power_growth")
+    if not isinstance(receipt, Mapping):
+        return [_option("power", feasible=False, reason="no power_growth receipt")]
+    if not receipt.get("grow"):
+        why = f"capacity {receipt.get('capacity_kw')} kW covers need {receipt.get('needed_kw')} kW"
+        return [_option("power", feasible=False, reason=why)]
+    nodes = power_growth_nodes(state["jobs"], state["queue_nodes"], observation, state["capabilities"])
+    if not nodes:
+        why = "a steam stage is open (or the roadmap's first pair is not built yet)"
+        return [_option("power", feasible=False, reason=why)]
     return [
-        _option("power", kind="follow_up", feasible=False, reason="power growth is the roadmap's steam_expansion step")
+        _option(
+            "power",
+            capability="steam_expansion",
+            parameters=nodes[0]["parameters"],
+            nodes=nodes,
+            gain_per_minute=None,
+            reason=nodes[0]["reason"],
+        )
     ]
 
 

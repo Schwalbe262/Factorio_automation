@@ -179,6 +179,7 @@ drills), `dedicated_materials` (trunk-tap failure named in `change`),
 `supply_cell`, `steam_expansion`,
 `brick_production` / `steel_production` / `steel_supply` (planned furnace block),
 `trunk_return_feed` (`site:past_first_tap`), `steam_expansion` (`site:wider_steam_search`),
+`power_coal_tap` (replan), `relax:waypoint_route` (two-leg cross-base routes: steel, brick, steam),
 `engine_production` / `ammo_production` (produce rows on a planned world, `produce` rungs),
 `oil_gathering` (`site:wider_survey`, survey rings to 1024 tiles, scouting; `OIL_GATHERING.md`).
 Route rungs use one shared lever (`remedy.ROUTE_RELAX` read by

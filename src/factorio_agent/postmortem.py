@@ -286,7 +286,7 @@ DRY_RUN = {
     # Engines and magazines are produce rows on a planned world (planned_products).
     "engine_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "ENGINE_ROW")),
     "ammo_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "AMMO_ROW")),
-    "steam_expansion": DryRun(lambda ex, obs, p: ex.steam_expansion.prepare(obs)),
+    "steam_expansion": DryRun(lambda ex, obs, p: ex._steam_stage(p).prepare(obs)),
     "power_coal_tap": DryRun(lambda ex, obs, p: ex.power_coal_tap.prepare(obs)),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
     "oil_gathering": DryRun(

@@ -598,6 +598,22 @@ class StarterExecutors:
             )
         return cache["oil", source_key]
 
+    def _steam_stage(self, parameters):
+        """``SteamExpansion`` of a power growth stage (``power_growth.stage_of``; stage 1 is ``steam_expansion``)."""
+        from .power_growth import stage_of
+
+        stage = stage_of(parameters)
+        if stage == 1:
+            return self.steam_expansion
+        cache = self._fluid_cache()
+        if ("steam", stage) not in cache:
+            from .steam_expansion import SteamExpansion
+
+            cache["steam", stage] = SteamExpansion(
+                self.game, self.builder, self.catalog, self.outposts, site=self.site, stage=stage
+            )
+        return cache["steam", stage]
+
     def _water_source(self, source_key: str | None):
         """``WaterGathering`` for the canonical intake or a namespaced one (``advanced-water``, ``acid-water``)."""
         if not source_key or source_key == "water":

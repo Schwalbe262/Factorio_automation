@@ -711,6 +711,11 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed += power_coal_tap_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
         : max(0, limit - len(proposed))
     ]
+    from .power_growth import power_growth_nodes  # one more steam stage while demand + known loads exceed it
+
+    proposed += power_growth_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
+        : max(0, limit - len(proposed))
+    ]
     urgent = defense_urgency_nodes(jobs, queue_nodes, observation, capabilities, steps=steps)[
         : max(0, limit - len(proposed))
     ]

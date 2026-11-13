@@ -144,6 +144,7 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
         ),
         ROUTE_RELAX_1,
         ROUTE_RELAX_2,
+        ROUTE_WAYPOINTS,
     ),
     "trunk_return_feed": (
         Rung(

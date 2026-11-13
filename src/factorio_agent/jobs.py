@@ -170,7 +170,8 @@ CAPABILITIES = {
         "effect": "normally belt-feed local gear/wire/circuit/belt/inserter cells and green science into a distinct lab belt lane; native research required",
     },
     "steam_expansion": {
-        "parameters": {},
+        # {} is the roadmap's first pair; {"stage": k} a power growth stage (power_growth.py).
+        "parameters": {"stage": "optional integer 2..12 (power_growth stage)"},
         "requires": ["electric_coal"],
         "effect": "normally add an engine pair with dedicated paired coal and shared water; preserve old plant and verify thirty game seconds of native generation",
     },
@@ -545,6 +546,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         # Rule inputs the autopilot reads (mine_trunk_nodes, power_coal_tap_nodes, produce_nodes); they
         # were computed in observe but dropped here, so those rules never fired in the supervisor.
         "mine_trunks": obs.get("mine_trunks"),
+        "power_growth": obs.get("power_growth"),
         "produce_plate_sources": obs.get("produce_plate_sources"),
         # Bottleneck auditor (bottleneck_audit.py): diagnosis, proposals, idle_with_work for the supervisor.
         "bottlenecks": obs.get("bottlenecks"),
