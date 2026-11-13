@@ -492,12 +492,10 @@ def _belt_needs(flow: Mapping, producers: Mapping[Key, dict]) -> set[str]:
             continue
         for ingredient in flow["choices"][key]["ingredients"]:
             source = producers.get(_material(ingredient))
-            if (
-                source is not None
-                and source["capability"] == PRODUCE
-                and source["parameters"].get("output") != "belt"
-                and ingredient.get("type", "item") == "item"
-            ):
+            if source is None or ingredient.get("type", "item") != "item" or source.get("belt"):
+                continue
+            if source["capability"] == PRODUCE or source["kind"] == "block":
+                # A stock-only producer (a stock row, the engine row's chest): a belt row is needed.
                 needs.add(ingredient["name"])
     return needs
 
@@ -515,6 +513,12 @@ def _classify(catalog, flow: Mapping, *, silo, silo_name, payload, belt_items: s
             row = _raw_producer(catalog, key)
         elif recipe["name"] in declared:
             row = dict(declared[recipe["name"]], kind="block")
+            if key[1] in belt_items and not row["belt"] and key[0] == "item":
+                # The block keeps its stock chest; a belt-output produce row of the same item feeds
+                # the consumers that need a belt (production_rows.row_key: a separate instance).
+                row.update(
+                    belt=True, belt_row={"capability": PRODUCE, "parameters": {"item": key[1], "output": "belt"}}
+                )
         elif recipe["name"] == parts:
             row = {"capability": STAGE_PARTS, "parameters": {}, "kind": "stage", "belt": False}
             row["note"] = f"crafted inside {silo_name} from its input inventory"
@@ -722,6 +726,7 @@ def rocket_bill(
                 "status": _status(producer["capability"], producer["parameters"], capabilities, producer["module"]),
                 **({"note": producer["note"]} if producer.get("note") else {}),
                 **({"layout": producer["layout"]} if producer.get("layout") else {}),
+                **({"belt_row": producer["belt_row"]} if producer.get("belt_row") else {}),
             },
         }
         if recipe is not None:
@@ -917,6 +922,16 @@ def tail(bill: Mapping, *, existing: Iterable[str] = (), researched_by: Mapping[
     supply = FluidSupply()
     for row in bill["items"]:
         producer = row["producer"]
+        if producer.get("belt_row"):
+            # A stock-only block's item a consumer needs on a belt: its belt-output produce row.
+            belt = producer["belt_row"]
+            after = [TAIL_ANCHOR] + (
+                [by_tech[row["technology"]]] if by_tech.get(row.get("technology")) in known else []
+            )
+            node = step_id("rocket", "produce", row["item"], "belt")
+            parameters = dict(belt["parameters"], rate_per_minute=_produce_rate(row))
+            add({"id": node, "capability": belt["capability"], "parameters": parameters, "after": after})
+            produced[row["item"]] = node
         if producer["status"] == "roadmap" or producer["kind"] not in ("generic", "block"):
             continue
         if producer["kind"] == "block":
@@ -1061,6 +1076,10 @@ class FluidSupply:
                 "after": after,
             }
         ]
+
+
+def _produce_rate(row: Mapping) -> float:
+    return round(min(PRODUCE_MAX_RATE, max(PRODUCE_MIN_RATE, row["rate_per_minute"])), 1)
 
 
 def _makes_own_inputs(producer: Mapping | None) -> bool:

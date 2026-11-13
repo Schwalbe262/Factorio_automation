@@ -269,7 +269,7 @@ class FluidRowControllerTests(unittest.TestCase):
 
 STAGES = {rp.STAGE_SILO, rp.STAGE_PARTS, rp.STAGE_LAUNCH}  # another worker registers these
 # Real-catalog items without a producer today; a new one fails the test.
-KNOWN_GAPS = {"electric-engine-unit"}  # engine-unit comes only from the engine row's stock chest
+KNOWN_GAPS: set = set()  # no gap: electric engines take engine units from a belt-output engine row
 
 
 def unproduced(bill):
@@ -291,7 +291,15 @@ class EveryBillItemHasAProducerTests(unittest.TestCase):
         catalog = real_catalog()
         if "rocket-silo" not in catalog.technologies:
             self.skipTest("catalog without a rocket silo")
-        self.assertLessEqual(unproduced(rp.rocket_bill(catalog, researched=())), KNOWN_GAPS)
+        bill = rp.rocket_bill(catalog, researched=())
+        self.assertLessEqual(unproduced(bill), KNOWN_GAPS)
+        rows = {
+            r["id"]: r for r in rp.tail(bill, existing=[s.id for s in pg.ROADMAP], researched_by=rp.roadmap_research())
+        }
+        engines = rows["rocket_produce_engine_unit_belt"]
+        self.assertEqual(engines["parameters"]["output"], "belt")
+        self.assertIn("rocket_produce_engine_unit_belt", rows["rocket_produce_electric_engine_unit"]["after"])
+        validate_parameters(engines["parameters"])
 
 
 if __name__ == "__main__":

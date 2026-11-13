@@ -63,8 +63,11 @@ hard, buried crossings compiled, `route_relax` rungs of `produce`) and checks
 binds the first neighbour once it stands; the proof requires the bound edge. Offline proof:
 `test_v2_fluid_rows.FluidRowControllerTests` (fake site, patched router). Only provable live:
 the native pipe survey/router, the isolation query and the handoff declare/bind Lua.
-Electric engines remain a bill gap (`produce_unfit`): engine units leave the engine row only
-through its stock chest.
+Electric engines: the engine row keeps its stock chest (construction, blue science); when a
+consumer needs a stock-only block's item on a belt, the tail adds a belt-output `produce` row of
+that item (`rocket_produce_engine_unit_belt`). A belt row is its own instance
+(`production_rows.row_key`: state `production-row-<item>__belt.json`, block
+`production_row_<item>__belt`; `progression._same` matches produce rows by item and output).
 
 ## Growth and bus lanes as data
 
