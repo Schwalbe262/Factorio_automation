@@ -236,6 +236,13 @@ def execute(argv=None, services=None):
             except Exception as exc:  # a demand estimate must never break observe
                 obs["bulk_item_demand"] = {}
                 obs["bulk_item_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .supply_cell import candidates as supply_cell_candidates
+
+            try:
+                jobs_list = list(Ledger(root).data["jobs"].values())
+                obs["supply_cell_candidates"] = supply_cell_candidates(services.catalog(root, game), jobs_list, obs)
+            except Exception as exc:  # a demand estimate must never break observe
+                obs["supply_cell_candidates_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .research_capacity import research_capacity_receipt
 
             try:
