@@ -11,6 +11,15 @@ Canonical layout (flow east, u = +x, v = +y; origin = first pole, v = 0)::
     v=+2  ..i...i..........   output inserters
     v=+3  >>>>>>>>>>>>>>>>O   output belt, product on the far (right) lane, port O at the end
 
+Fluid row (``RowSizing.fluid``): every machine is turned so its input fluid box
+opens on the output side (``fluid_slot``); that column carries no output arm but
+an underground pipe riser under the output belt to a header pipe::
+
+    v=+2  ..iU..iU.........   U: pipe-to-ground, normal side up into the machine
+    v=+3  >>>>>>>>>>>>>>>>O   (the riser runs under the output belt)
+    v=+4  ...D...D.........   D: pipe-to-ground, normal side down onto the header
+    v=+5  ~~~~~~~~~~~~~~~~~   header pipe over every slot; fluid port at u=0 (one fluid per row)
+
 Machine slot ``i`` is centred at u = pitch * i + half + 1 with pitch = size + 1;
 poles stand at u = pitch * k. Belts span all reserved slots, so ``extend_row``
 fills the next slot in place and every port stays where it is.
@@ -91,6 +100,11 @@ class RowSpec:
     near_arms: int
     far_arms: int
     output_arms: int
+    fluid: str | None = None  # one fluid per row (fluid rows only)
+    fluid_column: int = 0  # machine column of the riser (the input fluid box side)
+    machine_direction: int = 0  # canonical machine direction (fluid rows turn the box to the output side)
+    pipe: str = "pipe"
+    underground_pipe: str = "pipe-to-ground"
 
 
 def _need(demand: float, rate: float) -> int:
@@ -106,7 +120,7 @@ def arm_counts(catalog: Any, sizing: RowSizing, inserter: str, limits: RowLimits
             raise ValueError(f"{names[index]} cannot reach input belt {index} at {index + 1} tile(s)")
         demand = sum(sizing.flow(item).per_machine for item in belt.items)
         counts.append(_need(demand, inserter_rate(catalog, names[index], limits)))
-    near, far = counts[0], (counts[1] if len(counts) > 1 else 0)
+    near, far = (counts[0] if counts else 0), (counts[1] if len(counts) > 1 else 0)  # fluid-only: no belt
     out = _need(sizing.product.per_machine, inserter_rate(catalog, inserter, limits))
     if near + far > sizing.machine_size or out > sizing.machine_size:
         raise ValueError(
@@ -127,12 +141,13 @@ def canonical_entities(sizing: RowSizing, spec: RowSpec, count: int) -> list[tup
     """``(name, u, v, canonical_direction, recipe)`` for the east-flowing layout."""
     shape = RowShape(sizing.machine_size)
     cols = shape.columns()
-    out_cols = sorted(cols, key=lambda c: (abs(c), c))[: spec.output_arms]
+    free = [c for c in cols if spec.fluid is None or c != spec.fluid_column]
+    out_cols = sorted(free, key=lambda c: (abs(c), c))[: spec.output_arms]
     far_cols = cols[len(cols) - spec.far_arms :] if spec.far_arms else []
     rows: list[tuple] = [(spec.pole, 0, 0, NORTH, None)]
     for slot in range(count):
         mu = shape.machine_u(slot)
-        rows.append((sizing.machine, mu, 0, NORTH, sizing.recipe))
+        rows.append((sizing.machine, mu, 0, spec.machine_direction, sizing.recipe))
         rows += [(spec.inserter, mu + c, shape.input_arm_v, NORTH, None) for c in cols[: spec.near_arms]]
         rows += [(spec.long_inserter, mu + c, shape.input_arm_v, NORTH, None) for c in far_cols]
         rows += [(spec.inserter, mu + c, shape.output_arm_v, NORTH, None) for c in out_cols]
@@ -141,7 +156,37 @@ def canonical_entities(sizing: RowSizing, spec: RowSpec, count: int) -> list[tup
         for index in range(len(sizing.input_belts)):
             rows.append((spec.belt, u, shape.input_belt_v(index), CANONICAL_FLOW, None))
         rows.append((spec.belt, u, shape.output_belt_v, CANONICAL_FLOW, None))
+    if spec.fluid:
+        south = 8
+        for slot in range(count):
+            u = shape.machine_u(slot) + spec.fluid_column
+            rows.append((spec.underground_pipe, u, shape.output_arm_v, NORTH, None))
+            rows.append((spec.underground_pipe, u, shape.output_belt_v + 1, south, None))
+        for u in range(shape.pitch * spec.slots + 1):
+            rows.append((spec.pipe, u, shape.output_belt_v + 2, NORTH, None))
     return rows
+
+
+def fluid_slot(catalog: Any, machine: str, size: int) -> tuple[int, int]:
+    """``(canonical machine direction, column)`` putting the first input fluid box on the
+    output side (v = half + 1), from the catalog's ``fluidbox_prototypes``."""
+    from ..routing import VECTORS
+    from .sizing import input_fluid_boxes
+
+    boxes = input_fluid_boxes(catalog.entities.get(machine) or {})
+    if not boxes:
+        raise ValueError(f"{machine} has no input fluid box")
+    normal = [c for c in boxes[0].get("pipe_connections") or () if c.get("connection_type", "normal") == "normal"]
+    if len(normal) != 1 or len(normal[0].get("positions") or ()) != 4:
+        raise ValueError(f"{machine}: one cardinal input fluid connection required")
+    half = size // 2
+    for direction in (8, 4, 12, 0):
+        p = normal[0]["positions"][direction // 4]
+        vx, vy = VECTORS[(normal[0]["direction"] + direction) % 16]
+        u, v = p["x"] + vx, p["y"] + vy
+        if v == half + 1 and abs(u) <= half:
+            return direction, int(u)
+    raise ValueError(f"{machine}: no rotation opens the input fluid box on the output side")
 
 
 def _place(frame: Frame, rows: list[tuple], size: int, machine: str) -> list[dict]:
@@ -150,7 +195,8 @@ def _place(frame: Frame, rows: list[tuple], size: int, machine: str) -> list[dic
         x, y = frame.point(u, v)
         e = entity(name, x, y, frame.direction(direction), recipe=recipe)
         if name == machine:
-            e = dict(e, direction=0, _width=size, _height=size)
+            # A plain row machine keeps direction 0; a fluid row turns it (fluid box side).
+            e = dict(e, direction=frame.direction(direction) if direction else 0, _width=size, _height=size)
         placed.append(e)
     return placed
 
@@ -184,6 +230,18 @@ def _build(catalog: Any, sizing: RowSizing, spec: RowSpec, count: int) -> dict:
     entities = _place(frame, canonical_entities(sizing, spec, count), shape.size, sizing.machine)
     output, lane = _output_port(frame, shape, spec, sizing.product.item)
     ports = _belt_ports(frame, shape, sizing.input_belts) + [dict(output, direction="output", lane=lane)]
+    if spec.fluid:
+        x, y = frame.point(0, shape.output_belt_v + 2)
+        ports.append(
+            {
+                "kind": "fluid",
+                "item": spec.fluid,
+                "position": {"x": x, "y": y},
+                "facing": frame.flow,
+                "direction": "input",
+                "name": spec.pipe,
+            }
+        )
     tiles = set().union(*(footprint(catalog, e) for e in entities))
     slots = []
     for slot in range(count, spec.slots):
@@ -224,6 +282,15 @@ def _build(catalog: Any, sizing: RowSizing, spec: RowSpec, count: int) -> dict:
         },
         expansion_slots=slots,
         input_belts=[{"left": b.left, "right": b.right} for b in sizing.input_belts],
+        fluid=(
+            {
+                "item": spec.fluid,
+                "per_machine": sizing.fluid.per_machine,
+                "per_minute": sizing.fluid.per_machine * count,
+            }
+            if spec.fluid and sizing.fluid
+            else None
+        ),
         power_port=first_pole,
         layout=asdict(spec),
         scope="nameplate machine rate and conservative inserter/belt budgets; not a measured rate",
@@ -252,6 +319,12 @@ def row_block(
     shape = RowShape(sizing.machine_size)
     _check_power(catalog, shape, pole, limits)
     near, far, out = arm_counts(catalog, sizing, inserter, limits)
+    fluid, column, turn = None, 0, 0
+    if sizing.fluid is not None:
+        fluid = sizing.fluid.item
+        turn, column = fluid_slot(catalog, sizing.machine, shape.size)
+        if out > shape.size - 1:
+            raise ValueError(f"{sizing.recipe}: {out} output arms leave no column for the fluid riser")
     room = sizing.max_count - sizing.count
     spare = min(sizing.count, room) if spare is None else spare
     if not 0 <= spare <= room:
@@ -267,6 +340,9 @@ def row_block(
         near,
         far,
         out,
+        fluid,
+        column,
+        turn,
     )
     return _build(catalog, sizing, spec, sizing.count)
 
@@ -286,7 +362,8 @@ def extend_row(plan: dict, catalog: Any, extra_machines: int, *, limits: RowLimi
         pole=spec.pole,
         limits=limits,
         inserter=plan.get("sizing_inserter"),
-        lanes=lanes,
+        lanes=lanes or None,
+        fluid=bool(spec.fluid),
     )
     sizing = sizing.with_count(plan["count"] + extra_machines)
     if [{"left": b.left, "right": b.right} for b in sizing.input_belts] != plan["input_belts"]:

@@ -252284,3 +252284,10 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: 25-step tail on the real 2.1.20 catalog; 13 research, 4 produce rows (EC, pipe, foundation), inert rows for missing capabilities. Gate passed (worktree, lupa skipped).
 - next: fluid_assembly (PU, RF, concrete, EEU), chemical_product (solid fuel), produce_merged (LDS), wire advanced_petroleum/fluid_products, rocket_silo/parts/launch; verify on a long fleet.
 - follow-up (coordinator): respawn emulation behind actor-client.json respawn (default false, fleet.py start --respawn, header "respawn emulation on"); off = death recorded, safe stop, watcher ends the run at once, triage errored: agent_dead; merged v2 1c13a77 (idle watch, growth pass, rocket tail: defense_urgency_nodes uses roadmap_for steps).
+
+
+## 2026-11-14 rocket bill producers (worktree agent-a9645131d5b1545b4)
+- part: produce generalisation + late fluids wiring + fluid rows + growth data.
+- actions: produce belt output + lane-merge adapter (7a174bd); advanced_petroleum/fluid_product/fluid_distribution wired, fluid_distribution resync fixed, crack_balance (e221cf0); fluid rows with risers onto a header (f5c228f); block_growth.growth_options + bus lane demand.
+- metrics: 2.1.20 bill: no fluid surplus, crude 767 -> 464/min; every bill item has a registered producer except electric-engine-unit (engine row is stock-only) and the three rocket stages.
+- failure/next: fluid rows block production_row_fluid_input_unrouted (no typed route + handoff to the header yet); acid iron tap is dev-map bus only; advanced circuits / chemical science have no rate parameter (growth kind fixed).

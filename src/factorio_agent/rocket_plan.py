@@ -537,6 +537,12 @@ def _generic_producer(catalog, recipe: Mapping, key: Key, belt_sources: set[str]
     A ``produce`` row carries its ``layout`` (input mode from ``plan_sources``, output mode)."""
     machine = machine_for(catalog, recipe)
     machine_row = catalog.entities.get(machine[0], {}) if machine else {}
+    from .blocks.sizing import fluid_ingredient
+
+    fluid = fluid_ingredient(recipe)
+    if fluid is not None and _fluid_row_machine(catalog, recipe):
+        # A fluid row: the generic produce row with a typed header port (blocks.row fluid rows).
+        return _produce_row(catalog, recipe, key, belt_sources, belt_output, fluid=fluid)
     if _has_fluid(recipe):
         assembler = "crafting" in set(machine_row.get("crafting_categories") or ())
         if assembler:
@@ -556,6 +562,10 @@ def _generic_producer(catalog, recipe: Mapping, key: Key, belt_sources: set[str]
         }
     if machine_row.get("type") == "furnace":
         return {"capability": "furnace_block", "parameters": {"item": key[1]}, "kind": "generic", "belt": True}
+    return _produce_row(catalog, recipe, key, belt_sources, belt_output)
+
+
+def _produce_row(catalog, recipe, key, belt_sources, belt_output, *, fluid=None) -> dict:
     from .production_layout import plan_sources
 
     try:
@@ -569,13 +579,32 @@ def _generic_producer(catalog, recipe: Mapping, key: Key, belt_sources: set[str]
             "note": f"no produce row fits: {str(exc)[:160]}",
         }
     parameters = {"item": key[1], **({"output": "belt"} if belt_output else {})}
-    return {
-        "capability": PRODUCE,
-        "parameters": parameters,
-        "kind": "generic",
-        "belt": belt_output,
-        "layout": {"inputs": _input_mode(plan), "output": "belt" if belt_output else "stock_chest"},
-    }
+    layout = {"inputs": _input_mode(plan), "output": "belt" if belt_output else "stock_chest"}
+    row = {"capability": PRODUCE, "parameters": parameters, "kind": "generic", "belt": belt_output, "layout": layout}
+    if fluid:
+        layout["fluid"] = fluid
+        parameters["fluid_source"] = fluid_source_key(key[1], fluid)
+        row["note"] = "fluid row: header layout ready, fluid input routing blocks (production_row_fluid_input_unrouted)"
+    return row
+
+
+def _fluid_row_machine(catalog, recipe) -> bool:
+    """An electric assembling machine of the recipe's category with an input fluid box
+    (a catalog without fluid box data counts: the row generator checks it again)."""
+    from .blocks.sizing import input_fluid_boxes
+
+    categories = set(recipe.get("categories") or ())
+    return any(
+        row.get("type") == "assembling-machine"
+        and categories & set(row.get("crafting_categories") or ())
+        and (input_fluid_boxes(row) or "fluidbox_prototypes" not in row)
+        for row in catalog.entities.values()
+    )
+
+
+def fluid_source_key(item: str, fluid: str) -> str:
+    """The registry key a fluid row reads its fluid from (published by ``FluidSupply``)."""
+    return re.sub(r"[^a-z0-9-]", "-", f"{item}-{fluid}".lower())[:48]
 
 
 def _input_mode(plan: Mapping) -> str:
@@ -715,6 +744,11 @@ def rocket_bill(
             "rate_per_minute": r["rate_per_minute"],
             "belts": r["belts"],
             "reserved": r["bus_lanes_reserved"],
+            # Bus lane declaration by demand: one site-plan lane per belt of the item's rate,
+            # one tap per consuming recipe (the planned bus taps each consumer, planned_tap).
+            "lanes_needed": r["belts"],
+            "lanes_short": max(0, r["belts"] - r["bus_lanes_reserved"]),
+            "taps": len(r["consumers"]),
         }
         for r in items
         if r["type"] == "item" and len(r["consumers"]) >= 2 and producers[("item", r["item"])].get("belt")
@@ -928,6 +962,12 @@ def tail(bill: Mapping, *, existing: Iterable[str] = (), researched_by: Mapping[
         if tech and by_tech.get(tech) in known:
             after.append(by_tech[tech])
         after += sorted({produced[c] for c in _inputs(bill, row) if c in produced})
+        fluid = (producer.get("layout") or {}).get("fluid")
+        if fluid and parameters.get("fluid_source"):
+            # A fluid row reads its own source key: a supply row publishes it first.
+            for supply_row in supply.rows(fluid, parameters["fluid_source"], produced, known):
+                add(supply_row)
+            after.append(supply.node_of(parameters["fluid_source"]))
         node = step_id("rocket", producer["capability"], row["item"])
         produced[row["item"]] = node
         add({"id": node, "capability": producer["capability"], "parameters": parameters, "after": after})

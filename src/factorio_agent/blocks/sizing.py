@@ -9,6 +9,13 @@ Lane plan: ``input_belts[0]`` is the NEAR input belt (plain inserters),
 type carries it on both lanes; two item types use one lane each. Lanes are
 named relative to the flow ("left" is the left-hand side when looking
 downstream), so the plan is orientation independent.
+
+Fluid rows (``fluid=True``): a recipe with exactly one fluid ingredient and a
+single solid product (processing units, rocket fuel, concrete, electric
+engines, solid fuel) is sized like any row on its solid ingredients; the fluid
+arrives through the machine's input fluid box (``RowSizing.fluid``,
+``blocks.row``: one fluid per row, an underground riser per machine to a
+header pipe). Only machines with an input fluid box qualify.
 """
 
 from __future__ import annotations
@@ -63,6 +70,7 @@ class RowSizing:
     lane_capacity_per_minute: float
     max_count: int
     recipe_unlocked: bool
+    fluid: Flow | None = None  # the one fluid ingredient of a fluid row
     # Nameplate crafts/minute of one machine; ``crafts_per_machine`` is lower
     # when the row was derated for ``inserter`` (see ``blocks.derate``).
     nameplate_crafts: float = 0.0
@@ -85,7 +93,8 @@ class RowSizing:
             raise ValueError(f"{count} machines exceed the lane budget of {self.max_count} for {self.recipe}")
         scale = [replace(f, total=f.per_machine * count) for f in self.ingredients]
         product = replace(self.product, total=self.product.per_machine * count)
-        return replace(self, count=count, ingredients=tuple(scale), product=product)
+        fluid = replace(self.fluid, total=self.fluid.per_machine * count) if self.fluid else None
+        return replace(self, count=count, ingredients=tuple(scale), product=product, fluid=fluid)
 
 
 def _amount(row: Mapping[str, Any], recipe: str) -> float:
@@ -102,7 +111,14 @@ def _amount(row: Mapping[str, Any], recipe: str) -> float:
     raise ValueError(f"{recipe}: variable amount for {row['name']} cannot be rated by a row")
 
 
-def _validate_recipe(catalog: Any, name: str) -> Mapping[str, Any]:
+def fluid_ingredient(recipe: Mapping[str, Any]) -> str | None:
+    """The single fluid ingredient of a fluid-row recipe (one fluid in, no fluid out), else None."""
+    fluids = [r["name"] for r in recipe["ingredients"] if r.get("type") == "fluid"]
+    out = [r for r in recipe["products"] if r.get("type") == "fluid"]
+    return fluids[0] if len(fluids) == 1 and not out else None
+
+
+def _validate_recipe(catalog: Any, name: str, fluid: bool = False) -> Mapping[str, Any]:
     recipe = catalog.recipes.get(name)
     if recipe is None:
         raise ValueError(f"unknown recipe {name!r}")
@@ -110,14 +126,16 @@ def _validate_recipe(catalog: Any, name: str) -> Mapping[str, Any]:
         raise ValueError(f"{name}: hidden recipe")
     rows = list(recipe["ingredients"]) + list(recipe["products"])
     fluids = sorted({r["name"] for r in rows if r.get("type") == "fluid"})
-    if fluids:
+    if fluids and fluid and fluid_ingredient(recipe) is None:
+        raise ValueError(f"{name}: a fluid row takes exactly one fluid ingredient and no fluid product")
+    if fluids and not fluid:
         raise ValueError(
             f"{name}: fluid {', '.join(fluids)} not supported: the row reserves no pipe corridor; "
             "laying pipes needs in-game verification of the pipe_connections orientation frame "
             "and the pipe-to-ground max underground distance, which the catalog does not export"
         )
     solids = [r for r in recipe["ingredients"] if r.get("type", "item") == "item"]
-    if not solids:
+    if not solids and not fluids:
         raise ValueError(f"{name}: no solid ingredient for an input belt")
     if len(solids) > MAX_SOLID_INGREDIENTS:
         raise ValueError(f"{name}: {len(solids)} solid ingredients; a row feeds at most {MAX_SOLID_INGREDIENTS}")
@@ -150,11 +168,19 @@ def row_supports_size(size: int, supply_radius: float) -> bool:
     return size % 2 == 1 and size >= 3 and half + 1 < supply_radius + 0.5
 
 
+def input_fluid_boxes(row: Mapping[str, Any]) -> list[dict]:
+    """The machine's input fluid boxes, by index (catalog ``fluidbox_prototypes``)."""
+    boxes = [b for b in row.get("fluidbox_prototypes") or () if b.get("production_type") == "input"]
+    return sorted(boxes, key=lambda b: b.get("index", 0))
+
+
 def _compatible(catalog: Any, name: str, recipe: Mapping[str, Any], radius: float) -> str:
     """Empty string when ``name`` can run ``recipe`` in a row, else the reason."""
     row = catalog.entities.get(name)
     if row is None:
         return "not in catalog"
+    if fluid_ingredient(recipe) and not input_fluid_boxes(row):
+        return "no input fluid box"
     if row.get("type") != "assembling-machine" or not row.get("electric"):
         return "not an electric assembling machine"
     if not float(row.get("crafting_speed") or 0) > 0:
@@ -252,9 +278,15 @@ def _evaluate(
     out = recipe["products"][0]
     product_amount = _amount(out, name)
     amounts: dict[str, float] = {}
+    fluid_amount = 0.0
     for row in recipe["ingredients"]:
+        if row.get("type") == "fluid":
+            fluid_amount += _amount(row, name)
+            continue
         amounts[row["name"]] = amounts.get(row["name"], 0) + _amount(row, name)
-    if lanes is not None:
+    if not amounts:
+        belts = ()  # a fluid-only recipe (solid fuel from light oil): no input belt
+    elif lanes is not None:
         belts = explicit_lanes(lanes, amounts)
     else:
         belts = plan_lanes({item: amount * nameplate for item, amount in amounts.items()})
@@ -267,7 +299,12 @@ def _evaluate(
             inserter_rate(catalog, inserter, limits),
         )
         demand = tuple(sum(amounts[i] for i in b.items) for b in belts)
-        crafts = min(nameplate, edge_capacity(size, demand, product_amount, rates).crafts)
+        out_edge = size - 1 if fluid_ingredient(recipe) else size  # a fluid row's riser takes one output column
+        out_cap = out_edge * rates[2] / product_amount
+        if demand:
+            crafts = min(nameplate, edge_capacity(size, demand, product_amount, rates).crafts, out_cap)
+        else:
+            crafts = min(nameplate, out_cap)
     per_product = crafts * product_amount
     count = max(1, math.ceil(rate_per_minute / per_product - 1e-9))
     per_machine = {item: amount * crafts for item, amount in amounts.items()}
@@ -294,6 +331,11 @@ def _evaluate(
         lane_capacity_per_minute=lane,
         max_count=max_count,
         recipe_unlocked=name in unlocked,
+        fluid=(
+            Flow(fluid_ingredient(recipe), fluid_amount, fluid_amount * crafts, fluid_amount * crafts * count)
+            if fluid_ingredient(recipe)
+            else None
+        ),
         nameplate_crafts=nameplate,
         inserter=inserter,
     )
@@ -312,8 +354,11 @@ def size_row(
     limits: RowLimits = DEFAULT_LIMITS,
     inserter: str | None = None,
     lanes: Iterable[Iterable[str]] | None = None,
+    fluid: bool = False,
 ) -> RowSizing:
     """Size one production row; ``ValueError`` names why a recipe cannot be laid out.
+
+    ``fluid``: accept one fluid ingredient (module doc, fluid rows).
 
     ``machine`` overrides the choice (category and geometry are still checked).
     Unlocked = catalog force state plus ``enabled_recipes`` plus unlocks of
@@ -332,7 +377,7 @@ def size_row(
     """
     if not isinstance(rate_per_minute, (int, float)) or not math.isfinite(rate_per_minute) or rate_per_minute <= 0:
         raise ValueError("rate_per_minute must be a positive finite number")
-    recipe = _validate_recipe(catalog, recipe_name)
+    recipe = _validate_recipe(catalog, recipe_name, fluid)
     radius = pole_radius(catalog, pole, limits)
     unlocked = _unlocked_recipes(catalog, enabled_recipes, researched)
     options = dict(belt=belt, limits=limits, inserter=inserter, lanes=lanes, unlocked=unlocked)

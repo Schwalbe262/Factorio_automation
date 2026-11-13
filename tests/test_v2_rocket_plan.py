@@ -37,6 +37,20 @@ def _machine(kind, categories, speed, electric=True):
     return {"type": kind, "crafting_categories": list(categories), "crafting_speed": speed, "electric": electric}
 
 
+# One input fluid box (2.1.20 assembling-machine-2 shape); enough for the fluid-row rule.
+FLUID_BOX = [
+    {
+        "index": 1,
+        "production_type": "input",
+        "pipe_connections": [
+            {
+                "connection_type": "normal",
+                "direction": 0,
+                "positions": [{"x": 0, "y": -1}, {"x": 1, "y": 0}, {"x": 0, "y": 1}, {"x": -1, "y": 0}],
+            }
+        ],
+    }
+]
 RED, GREEN, BLUE = "automation-science-pack", "logistic-science-pack", "chemical-science-pack"
 
 
@@ -120,8 +134,10 @@ def space_age_catalog():
         "crude-oil": {"type": "resource", "mining_products": _rows({"fluid:crude-oil": 10})},
         "stone-furnace": _machine("furnace", ["smelting"], 1, electric=False),
         "assembling-machine-1": _machine("assembling-machine", ["crafting"], 0.5),
-        "assembling-machine-2": _machine("assembling-machine", ["crafting", "crafting-with-fluid"], 0.75),
-        "chemical-plant": _machine("assembling-machine", ["chemistry"], 1),
+        "assembling-machine-2": dict(
+            _machine("assembling-machine", ["crafting", "crafting-with-fluid"], 0.75), fluidbox_prototypes=FLUID_BOX
+        ),
+        "chemical-plant": dict(_machine("assembling-machine", ["chemistry"], 1), fluidbox_prototypes=FLUID_BOX),
         "oil-refinery": _machine("assembling-machine", ["oil-processing"], 1),
         "character": {"type": "character", "crafting_categories": ["crafting"]},
         "rocket-silo": dict(
@@ -214,9 +230,9 @@ class RocketBillTests(unittest.TestCase):
             "pipe": ("produce", "wired"),
             "electronic-circuit": ("produce", "wired"),
             "low-density-structure": ("produce", "wired"),
-            "processing-unit": ("fluid_assembly", "missing"),
-            "rocket-fuel": ("fluid_assembly", "missing"),
-            "solid-fuel": ("chemical_product", "missing"),
+            "processing-unit": ("produce", "wired"),
+            "rocket-fuel": ("produce", "wired"),
+            "solid-fuel": ("produce", "wired"),
             "sulfuric-acid": ("fluid_product", "wired"),
             "petroleum-gas": ("advanced_petroleum", "wired"),
             "crude-oil": ("oil_gathering", "roadmap"),
@@ -228,13 +244,18 @@ class RocketBillTests(unittest.TestCase):
             producer = item(result, name)["producer"]
             self.assertEqual((producer["capability"], producer["status"]), (capability, status), name)
         gaps = {gap["capability"] for gap in result["gaps"]}
-        self.assertTrue({"fluid_assembly", "rocket_silo", "rocket_parts", "rocket_launch"} <= gaps)
+        self.assertTrue({"rocket_silo", "rocket_parts", "rocket_launch"} <= gaps)
+        self.assertFalse(gaps & {"fluid_assembly", "chemical_product", "produce_merged"})
 
     def test_belts_follow_the_rate(self):
         result = bill(minutes=1)
         copper = item(result, "copper-plate")
         self.assertEqual(copper["belts"], -(-copper["rate_per_minute"] // 900))
         self.assertEqual(copper["bus_lanes_reserved"], 2)
+        bus = {row["item"]: row for row in result["bus"]}
+        for row in bus.values():
+            self.assertEqual(row["lanes_short"], max(0, row["lanes_needed"] - row["reserved"]))
+            self.assertGreaterEqual(row["taps"], 2)
 
     def test_rejects_a_bad_window(self):
         with self.assertRaises(ValueError):
@@ -265,7 +286,7 @@ class RocketTailTests(unittest.TestCase):
         self.assertIn("rocket_produce_electronic_circuit", rows)
         # copper cable is only a sub-row of the circuit row: no row of its own
         self.assertNotIn("rocket_produce_copper_cable", rows)
-        self.assertIn("rocket_produce_electronic_circuit", rows["rocket_fluid_assembly_processing_unit"]["after"])
+        self.assertIn("rocket_produce_electronic_circuit", rows["rocket_produce_processing_unit"]["after"])
         # processing units cannot make circuits in-line: the circuit row is a belt-output row
         circuits = rows["rocket_produce_electronic_circuit"]["parameters"]
         self.assertEqual(circuits["output"], "belt")
