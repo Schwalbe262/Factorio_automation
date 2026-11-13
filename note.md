@@ -252263,3 +252263,9 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - failure: a Lua `--` comment I added inside the insert body cut the one-line script and blocked every run started on 19859cc (long fleet lost 22 min); fixed by stripping line comments before send + test. GUI maps froze twice on undispatchable ready research nodes and on blocked reasons that were never re-planned.
 - result: v2 c9acd07; GUI map eval-1575138435 and long fleet long-1114-0039 running.
 - next: verify the ladder on the GUI map; read all-1114-0020 and the long fleet.
+
+## 2026-11-14 part 54 rocket tail from the catalog
+- goal: roadmap ends at chemical_science, no step can reach a launch; derive the tail from data.
+- actions: rocket_plan.rocket_bill (rocket-silo closure 1000x3 packs; SA silo 50 parts of PU+LDS+RF; payload starter pack; flow to ores/crude/water, coproduct rule), tools/rocket_plan.py, tail rows -> observe receipt rocket_plan -> progression.roadmap_for; produce rows match by item, satisfied at >= rate.
+- result: 25-step tail on the real 2.1.20 catalog; 13 research, 4 produce rows (EC, pipe, foundation), inert rows for missing capabilities. Gate passed (worktree, lupa skipped).
+- next: fluid_assembly (PU, RF, concrete, EEU), chemical_product (solid fuel), produce_merged (LDS), wire advanced_petroleum/fluid_products, rocket_silo/parts/launch; verify on a long fleet.

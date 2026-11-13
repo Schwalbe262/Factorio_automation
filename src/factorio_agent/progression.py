@@ -343,7 +343,21 @@ def _same(row: Mapping, step: Step) -> bool:
     parameters = row.get("parameters", {})
     if step.capability in RATE_SIZED_CAPABILITIES and isinstance(parameters, Mapping):
         return _without_rate(parameters) == _without_rate(step.parameters)
+    if step.capability == PRODUCE_CAPABILITY and isinstance(parameters, Mapping):
+        # One row per item: any produce job or node for the item is this step's row
+        # (a higher rate fills the row's reserved slots in place, production_rows).
+        return parameters.get("item") == step.parameters.get("item")
     return parameters == step.parameters
+
+
+def _rate_covers(row: Mapping, step: Step) -> bool:
+    """A produce row's rate reaches the step's; other capabilities have no rate rule here."""
+    if step.capability != PRODUCE_CAPABILITY:
+        return True
+    rate, wanted = (row.get("parameters") or {}).get("rate_per_minute"), step.parameters.get("rate_per_minute")
+    if not isinstance(wanted, (int, float)):
+        return True
+    return isinstance(rate, (int, float)) and not isinstance(rate, bool) and rate >= wanted
 
 
 def _without_rate(parameters: Mapping) -> dict:
@@ -387,7 +401,9 @@ class _Progress:
         """A matching job succeeded, or the step's technology is already researched."""
         if step.parameters.get("technology") in self.researched:
             return True
-        return any(_same(job, step) and job.get("status") == "succeeded" for job in self.jobs)
+        return any(
+            _same(job, step) and job.get("status") == "succeeded" and _rate_covers(job, step) for job in self.jobs
+        )
 
     def stalled(self, step: Step) -> bool:
         """A matching job is blocked or failed; the planner owns that blocker."""
@@ -398,8 +414,53 @@ class _Progress:
         return any(_same(job, step) and job.get("status") not in TERMINAL_STATUSES for job in self.jobs)
 
 
-def _by_id() -> dict[str, Step]:
-    return {step.id: step for step in ROADMAP}
+def _by_id(steps: Iterable[Step] = ROADMAP) -> dict[str, Step]:
+    return {step.id: step for step in steps}
+
+
+# Generated tail rows a receipt may carry (``rocket_plan.tail``): plain ids and JSON parameters.
+_TAIL_ID = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+
+
+def tail_steps(observation: Mapping) -> tuple[Step, ...]:
+    """Steps after ``ROADMAP`` from the receipt's ``rocket_plan["tail"]`` (``rocket_plan.receipt``).
+
+    The tail is generated from the catalog (the rocket silo technology closure,
+    the silo, part and payload bills, the producer of every item), so the roadmap
+    reaches a launch without a hand-written step per item. Malformed rows and ids
+    that clash with ``ROADMAP`` are dropped; ``after`` keeps only ids the
+    combined roadmap has (an unknown id would never be satisfied).
+    """
+    plan = observation.get("rocket_plan") if isinstance(observation, Mapping) else None
+    rows = plan.get("tail") if isinstance(plan, Mapping) else None
+    if not isinstance(rows, list):
+        return ()
+    known = {step.id for step in ROADMAP}
+    steps: list[Step] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        sid, capability, parameters = row.get("id"), row.get("capability"), row.get("parameters")
+        after = row.get("after")
+        if (
+            not isinstance(sid, str)
+            or not sid
+            or len(NODE_PREFIX + sid) > 64
+            or not set(sid) <= _TAIL_ID
+            or sid in known
+            or not isinstance(capability, str)
+            or not isinstance(parameters, Mapping)
+            or not isinstance(after, list)
+        ):
+            continue
+        steps.append(Step(sid, capability, dict(parameters), tuple(a for a in after if a in known)))
+        known.add(sid)
+    return tuple(steps)
+
+
+def roadmap_for(observation: Mapping) -> tuple[Step, ...]:
+    """``ROADMAP`` plus the generated rocket tail (``tail_steps``)."""
+    return ROADMAP + tail_steps(observation or {})
 
 
 def _recipes_ready(step: Step, capabilities: Mapping, observation: Mapping) -> bool:
@@ -623,7 +684,8 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     jobs = tuple(jobs)
     progress = _Progress(jobs, frozenset(_names(observation.get("technologies"))))
     succeeded = progress.succeeded_capabilities
-    steps = _by_id()
+    roadmap = roadmap_for(observation)
+    steps = _by_id(roadmap)
     queued_ids = {node.get("id") for node in queue_nodes}
     proposed: list[dict] = capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit)]
     proposed += produce_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
@@ -649,7 +711,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed += power_coal_tap_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
         : max(0, limit - len(proposed))
     ]
-    for index, step in enumerate(ROADMAP):
+    for index, step in enumerate(roadmap):
         if len(proposed) >= limit:
             break
         node_id = NODE_PREFIX + step.id
@@ -682,7 +744,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
                 "parameters": parameters,
                 "priority": step.priority if step.priority is not None else TOP_PRIORITY - index,
                 "depends_on": [],
-                "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}{note}"[:300],
+                "reason": f"autopilot roadmap step {index + 1}/{len(roadmap)}: {step.id}{note}"[:300],
             }
         )
     proposed += throughput_growth_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities, critical=False)[

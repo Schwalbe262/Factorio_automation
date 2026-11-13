@@ -42,6 +42,7 @@ jobs.run_jobs: per pass one observe and at most one drill-cell survey (bootstrap
 | Jobs | `executors.py` | `StarterExecutors`: controller construction, lazy factories, upkeep helpers, `step`/`proof`/`record_action` dispatch, `idle_action` |
 | Jobs | `capability_registry.py`, `handlers/` | one `Handler` (step, proof, validate, record_action) per capability, grouped by domain; `handlers/upkeep.py` shared upkeep |
 | Plan | `progression.py` | `ROADMAP` (Step list), `autopilot_nodes`, `capacity_nodes`, `produce_nodes`, `lookahead_demand`, `bulk_item_demand` |
+| Plan | `rocket_plan.py` | the roadmap after `chemical_science`, from the catalog: `rocket_bill` (unresearched `rocket-silo` closure with packs, silo / part / payload bills down to ores, crude and water, rates, machines, belts, the producer of every item and its status roadmap/wired/unwired/missing), `tail` (research, `produce` and missing-capability rows, `rocket_silo` / `rocket_parts` / `rocket_launch`), observe receipt `rocket_plan` -> `progression.roadmap_for`; CLI `tools/rocket_plan.py <run>` |
 | Plan | `early_start.py` | early start ("pre-build"): `CAPABILITIES[c]["early_start"]`, inputs checks (receipt `early_start_inputs`), `early_ready`, admission requires, `Deferral` for `ensure_plan(defer=)`, early clock |
 | Plan | `critical_path.py` | computed critical path of the roadmap; critical jobs first in `run_jobs`, slack jobs plan on `slack_view` and may not take or spend items critical jobs claim (PLANNERS.md "Critical path and item allocation"); also used by `tools/critical_path.py` |
 | Plan | `capacity_planning.py` | `plan_capacity`: starter cells, wait vs expand by time |
@@ -108,7 +109,7 @@ All other top-level modules are capability controllers constructed in
 
 | Layer | Code | May | May not |
 |---|---|---|---|
-| Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps, priority `-100 - index`; a step with `early_start` once its inputs are planned (`early_start.early_ready`, PLANNERS.md "Early start") | propose a step whose job is blocked/failed; touch the world |
+| Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps of `roadmap_for(observation)` (`ROADMAP` + the generated rocket tail; a tail step whose capability is not registered is never proposed), priority `-100 - index`; a step with `early_start` once its inputs are planned (`early_start.early_ready`, PLANNERS.md "Early start") | propose a step whose job is blocked/failed; touch the world |
 | Capacity planner | `progression.capacity_nodes` -> `capacity_planning.plan_capacity` | add `starter_capacity` nodes at priority -50 | expand without measured production and known cell cost; before `starter` succeeded; after that resource's `mining_outpost` succeeded |
 | Produce planner | `progression.produce_nodes` | add `produce` nodes at priority -51 | propose without positive measured plate net rate |
 | Obsolete blocks | `obsolete.py`; `supply_cell_nodes`, `starter_retirement_nodes`, `science_retirement_nodes` | one retire node per obsolete block at -1000 (startup science: -599 while growth wants hardware) | retire before the successor is verified, while a dependent job is open or a bootstrap batch is funded; propose twice |
