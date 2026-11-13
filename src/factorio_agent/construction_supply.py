@@ -136,7 +136,14 @@ def validate_take_many(action):
 BURNERS = frozenset({"burner-mining-drill", "stone-furnace"})
 FUELS = ("coal", "wood")
 FUEL_BATCH = 8  # coal pieces worth one fetch-and-fuel trip
+# Coal put into one burner per visit and fetched per trip. With 8 per visit,
+# 16 burner cells turned 43% of all actions into small coal and plate moves
+# (seed 2099054105: 119 coal inserts, 110 plate takes of 10 in 28 min).
+FUEL_FILL = 20
+FUEL_FETCH = 48
 COLLECT_BATCH = 10  # construction items worth one collection trip
+PLATE_BATCH = 30  # plates worth one collection trip (they trickle out of many furnaces)
+PLATES = frozenset({"iron-plate", "copper-plate"})
 FUEL_SKIP_STOCK = 50  # finished items in a cell that make more fuel pointless
 # Hand-craft cap: when more than this many finished items of one kind are
 # missing and a verified, producing ``produce`` row makes that item
@@ -287,12 +294,15 @@ class V2Bootstrap(DeterministicBootstrap):
             # pieces alone. Spending them one at a time is the loop to avoid.
             if _produced_coal(observation, coal_cells) < FUEL_BATCH:
                 return None
-            return self.ensure_item(observation, "coal", carried + 3 * FUEL_BATCH)
+            return self.ensure_item(observation, "coal", carried + FUEL_FETCH)
         # Keep a real coal producer running before spending the last carried
         # fuel on its consumers. The base routine retains ordinary partial
         # transfers and its existing bounded emergency mining behavior.
         ordered = sorted(entities, key=lambda e: _entity_key(e) not in producers)
-        return super().maintain_fuel(dict(observation, entities=ordered))
+        action = super().maintain_fuel(dict(observation, entities=ordered))
+        if isinstance(action, dict) and action.get("type") == "insert" and action.get("item") == "coal":
+            action["count"] = max(action["count"], min(FUEL_FILL, carried))
+        return action
 
     def _well_stocked_burners(self, observation):
         """Drills and furnaces of non-coal cells that already hold enough finished output."""
@@ -478,7 +488,8 @@ class V2Bootstrap(DeterministicBootstrap):
         # plate. Let a batch pile up unless less than a batch is needed or a
         # registered buffer chest (whose snapshot may be stale) is involved.
         on_hand = sum(-row[1] for row in candidates)
-        if on_hand < min(count, COLLECT_BATCH) and all(row[0] for row in candidates):
+        batch = PLATE_BATCH if item in PLATES else COLLECT_BATCH
+        if on_hand < min(count, batch) and all(row[0] for row in candidates):
             return None
         return {
             "type": "take_many",

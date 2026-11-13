@@ -9,6 +9,20 @@ from unittest.mock import patch
 from factorio_agent.construction_supply import V2Bootstrap
 
 
+def setUpModule():
+    # These fixtures hold a handful of plates; the plate batch has its own test.
+    import factorio_agent.construction_supply as supply
+
+    supply._PLATE_BATCH_SAVED = supply.PLATE_BATCH
+    supply.PLATE_BATCH = supply.COLLECT_BATCH
+
+
+def tearDownModule():
+    import factorio_agent.construction_supply as supply
+
+    supply.PLATE_BATCH = supply._PLATE_BATCH_SAVED
+
+
 class RegisteredStockOwnershipTests(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()

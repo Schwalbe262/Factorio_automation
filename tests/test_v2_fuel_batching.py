@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import Mock
 
-from factorio_agent.construction_supply import FUEL_BATCH, FUEL_SKIP_STOCK, V2Bootstrap
+from factorio_agent.construction_supply import FUEL_BATCH, FUEL_FETCH, FUEL_FILL, FUEL_SKIP_STOCK, V2Bootstrap
 
 
 def cell(drill, receiver, **extra):
@@ -50,7 +50,7 @@ class FuelBatchingTests(unittest.TestCase):
         self.coal_chest["inventory"]["coal"] = FUEL_BATCH
         action = self.bootstrap.maintain_fuel(self.obs)
         self.assertEqual(action["type"], "take")
-        self.assertEqual(self.bootstrap.ensure_item.call_args.args[1:], ("coal", 24))
+        self.assertEqual(self.bootstrap.ensure_item.call_args.args[1:], ("coal", FUEL_FETCH))
 
     def test_stalled_coal_supply_still_uses_the_emergency_path(self):
         self.coal_drill["inventory"] = {}
@@ -64,7 +64,7 @@ class FuelBatchingTests(unittest.TestCase):
         action = self.bootstrap.maintain_fuel(self.obs)
         self.assertEqual(action["type"], "insert")
         self.assertEqual(action["position"], self.coal_drill["position"])
-        self.assertEqual(action["count"], 8)
+        self.assertEqual(action["count"], min(FUEL_FILL, 12))
 
     def test_cell_with_enough_finished_output_gets_no_fuel(self):
         self.obs["inventory"] = {"coal": 12}
@@ -87,7 +87,7 @@ class FuelBatchingTests(unittest.TestCase):
         self.coal_chest["inventory"]["coal"] = FUEL_BATCH
         action = self.bootstrap.maintain_fuel(self.obs)
         self.assertEqual(action["type"], "take")
-        self.assertEqual(self.bootstrap.ensure_item.call_args.args[1:], ("coal", 2 + 3 * FUEL_BATCH))
+        self.assertEqual(self.bootstrap.ensure_item.call_args.args[1:], ("coal", 2 + FUEL_FETCH))
 
     def test_any_job_collecting_fuel_waits_for_a_batch(self):
         from factorio_agent.core.deterministic_bootstrap import DeterministicBootstrap

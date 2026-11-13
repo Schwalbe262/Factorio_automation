@@ -1,6 +1,7 @@
 from copy import deepcopy
 from types import SimpleNamespace
 import unittest
+import unittest.mock
 from unittest.mock import Mock, patch
 
 from factorio_agent.construction_supply import (
@@ -22,6 +23,20 @@ def action():
 
 def entity(unit, stock, name="transport-belt", field="belt_inventory"):
     return {"unit_number": unit, "name": name, "position": {"x": unit + 0.5, "y": 0.5}, field: {"iron-plate": stock}}
+
+
+def setUpModule():
+    # These fixtures hold a handful of plates; the plate batch has its own test.
+    import factorio_agent.construction_supply as supply
+
+    supply._PLATE_BATCH_SAVED = supply.PLATE_BATCH
+    supply.PLATE_BATCH = supply.COLLECT_BATCH
+
+
+def tearDownModule():
+    import factorio_agent.construction_supply as supply
+
+    supply.PLATE_BATCH = supply._PLATE_BATCH_SAVED
 
 
 class ConstructionSupplyTests(unittest.TestCase):
@@ -125,6 +140,17 @@ class ConstructionSupplyTests(unittest.TestCase):
         self.assertEqual(len(self.bootstrap._take_output(obs, "iron-plate", 50)["sources"]), 3)
         small = {"world_id": "world", "entities": [entity(3, 4)]}
         self.assertEqual(self.bootstrap._take_output(small, "iron-plate", 3)["count"], 3)
+
+    def test_plates_wait_for_a_larger_batch_than_other_items(self):
+        # Seed 2099054105: 110 trips of 10 iron plates in 28 minutes.
+        import factorio_agent.construction_supply as supply
+
+        obs = {"world_id": "world", "entities": [entity(3, 12), entity(4, 12)]}
+        with unittest.mock.patch.object(supply, "PLATE_BATCH", 30):
+            self.assertIsNone(self.bootstrap._take_output(obs, "iron-plate", 50))
+            obs["entities"].append(entity(5, 6))
+            self.assertEqual(len(self.bootstrap._take_output(obs, "iron-plate", 50)["sources"]), 3)
+            self.assertEqual(self.bootstrap._take_output(obs, "iron-plate", 5)["count"], 5)
 
     def test_at_most_sixteen_distinct_sources_ranked_by_stock(self):
         rows = [entity(i, i) for i in range(1, 22)]

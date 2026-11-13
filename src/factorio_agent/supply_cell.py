@@ -75,7 +75,7 @@ from pathlib import Path
 from .blocks.params import pole_radius, pole_reach
 from .blocks.stock_tail import STOCK_STACKS
 from .board import Board, entity, hardware_conflicts, planned_unbuilt_hardware, pole_chain
-from .construction_supply import COLLECT_BATCH, HANDCRAFT_LIMIT
+from .construction_supply import HANDCRAFT_LIMIT, PLATE_BATCH
 from .core.deterministic_builder import FactoryBuilder, _plan
 from .core.deterministic_state import _atomic_json
 from .machine_stock import STALL_TICKS
@@ -99,7 +99,7 @@ WAIT_FACTOR = 3.0
 MAX_CHILDREN = 3  # intermediate ingredients one machine's input chest can take (west, north, south)
 MAX_DEPTH = 4
 FEED_CAP = 100  # items of one kind per input chest (one plate stack)
-FEED_BATCH = COLLECT_BATCH  # never carry fewer plates than a collection batch
+FEED_BATCH = PLATE_BATCH  # never carry fewer plates than a plate collection batch
 FEED_RESERVE = 50  # plates a job's own upkeep feed leaves in the character's hands
 PROOF_UNITS = 2  # first batch: enough for two products of each kind
 OUTPUT_STACKS = STOCK_STACKS
