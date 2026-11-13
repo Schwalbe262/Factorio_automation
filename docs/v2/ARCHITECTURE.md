@@ -50,6 +50,7 @@ jobs.run_jobs: per pass one observe and at most one drill-cell survey (bootstrap
 | Plan | `research_policy.py` | `choose_research` from catalog data (idle research lane) |
 | Plan | `incidents.py` | incident kinds, remedy menus, incident documents, `check_decision` |
 | Plan | `plan_needs.py`, `remedy.py` | failure contract `needs` of planners; remedy ladder rungs, options, resolver, read-only `what_if` |
+| Plan | `bottleneck_audit.py`, `growth_providers.py` | bottleneck auditor: sampled machine/lab/job evidence, chain diagnosis, observe receipt `bottlenecks`, idle watchdog `idle_with_work`; one `growth_options` interface per producer block type (PLANNERS.md "Bottleneck auditor") |
 | Plan | `luna_client.py` | `LunaDecisionClient.decide(document)` via the Codex CLI (planner luna only) |
 | Game | `core/rcon.py`, `core/deterministic_game.py` | RCON client; `query`/`observe`/`act` (all world effects are Lua bodies in `act`) |
 | Game | `runtime.py` | `create`/`start`/`game_for`/`catalog_for`; `WorldBoundGame`; `NETWORK_SEGMENT_SETTINGS` |
@@ -96,7 +97,8 @@ All other top-level modules are capability controllers constructed in
 | `site-map.json`, `site-plan.json` | `site.service.SiteService.save` | surveyed map with reservations; master plan + allocations |
 | `catalog.json` | `runtime.catalog_for` | world catalog |
 | `rate-samples.json` | `diagnostics.production_rates` (every CLI `observe`) | production rate samples |
-| `logs/controller-events.jsonl` | `Supervisor._event` | cycle events: slice, autopilot, auto_retry, incident_*, call, error |
+| `bottleneck-samples.json` | `bottleneck_audit.record` (every CLI `observe`) | rolling window of machine-group states, waiting-job claims, port fill, stock; `last_action` |
+| `logs/controller-events.jsonl` | `Supervisor._event` | cycle events: slice, autopilot, auto_retry, incident_*, call, error, idle_with_work |
 | `logs/controller-state.json` | `Supervisor._save` | status, active jobs, open incidents, resume keys |
 | `logs/incidents.jsonl` | `Supervisor._record_incident` | incident documents (also with planner none) |
 | `logs/actions.jsonl` | `DeterministicGame._record_action` | every act and its receipt |

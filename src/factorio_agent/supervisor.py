@@ -119,6 +119,7 @@ INCIDENT_LOG_BYTES = 5_000_000
 INTENT_TAIL_BYTES = 262_144
 LOW_QUEUE = 2
 AUTOPILOT_LIMIT = 3
+IDLE_WATCH_SECONDS = 60  # game seconds between idle_with_work events of one episode and gate
 FORBIDDEN = {
     "x",
     "y",
@@ -1730,6 +1731,7 @@ class Supervisor:
         context = self._snapshot()
         if self._stop_requested():
             return True
+        self._idle_watch(context)
         if self._resume_known(context):
             context = self._snapshot()
         if self._autopilot(context):
@@ -1748,6 +1750,30 @@ class Supervisor:
             return True
         # Approved queue work runs while a model call is pending.
         return self._run_authorized(context)
+
+    def _idle_watch(self, context):
+        """Log the observe receipt's ``bottlenecks.idle_with_work`` (bottleneck_audit): the actor is idle while
+        work exists; the event names the item that should have been proposed and its gate.
+
+        One event per episode start, top-gate change or ``IDLE_WATCH_SECONDS`` more idle time, so
+        ``tools/waste_report.py`` and the fleet report can sum the seconds per gate.
+        """
+        from .bottleneck_audit import event_fields
+
+        observation = context[0]
+        fields = event_fields(observation.get("bottlenecks") or {})
+        if fields is None:
+            return
+        last = getattr(self, "_idle_logged", None) or {}
+        idle = fields.get("idle_seconds") or 0
+        if (
+            last.get("since_tick") == fields.get("since_tick")
+            and last.get("top_gate") == fields.get("top_gate")
+            and idle - (last.get("idle_seconds") or 0) < IDLE_WATCH_SECONDS
+        ):
+            return
+        self._idle_logged = fields
+        self._event("idle_with_work", tick=observation.get("tick"), **fields)
 
     def _auto_retry(self, context):
         """Retry a blocked job once another job has succeeded since it blocked.

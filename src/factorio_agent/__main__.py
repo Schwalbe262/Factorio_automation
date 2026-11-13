@@ -363,6 +363,14 @@ def execute(argv=None, services=None):
                     obs["defense_growth"] = defense
             except (OSError, ValueError, KeyError, TypeError) as exc:  # a growth estimate must never break observe
                 obs["defense_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .bottleneck_audit import receipt as bottleneck_receipt
+
+            try:  # sustained starvation / back-pressure -> bottlenecks, proposals, idle watchdog (PLANNERS.md)
+                obs["bottlenecks"] = bottleneck_receipt(
+                    root, services.catalog(root, game), list(Ledger(root).data["jobs"].values()), obs
+                )
+            except Exception as exc:  # an audit must never break observe
+                obs["bottlenecks_error"] = f"{type(exc).__name__}: {exc}"[:200]
         from .early_start import inputs_receipt
 
         # Early start: which blocks have their inputs planned (progression.autopilot_nodes).

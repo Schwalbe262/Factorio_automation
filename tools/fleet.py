@@ -421,6 +421,9 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     from factorio_agent.bandwidth_audit import format_counts
 
     lines += format_counts(runs)  # belt lane bandwidth findings per block type (bandwidth_audit)
+    from factorio_agent.bottleneck_audit import format_idle
+
+    lines += format_idle(runs)  # "idle with work: seconds, top gates" (bottleneck_audit idle watchdog)
     failed = [r for r in runs if r.get("launch_error")]
     for r in failed[:4]:
         lines.append(f"launch failed {r['seed']}: {r['launch_error'][:100]}")
@@ -1320,6 +1323,9 @@ class Fleet:
         from factorio_agent.bandwidth_audit import run_counts
 
         row["bandwidth"] = run_counts(root)
+        from factorio_agent.bottleneck_audit import run_idle
+
+        row["idle_with_work"] = run_idle(root)  # idle watchdog seconds and gates (bottleneck_audit)
         tick = run_tick(root)
         row["game_minutes"] = round(tick / TICKS_PER_MINUTE, 1) if tick is not None else None
         timeline = cp_tool.Run(root)
