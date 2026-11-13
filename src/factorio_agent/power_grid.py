@@ -160,9 +160,15 @@ def _connect(game, builder, obs, destination, reserved, sources, anchors):
     """
     result = None
     for pitch in HOP_GRID_PITCHES:
-        result = _connect_on_grid(game, builder, obs, destination, reserved, sources, anchors, pitch)
-        if result.get("reason") not in ("no_bounded_pole_hop_connection", "power_connection_survey_budget_exceeded"):
-            return result
+        attempt = _connect_on_grid(game, builder, obs, destination, reserved, sources, anchors, pitch)
+        if attempt.get("reason") not in ("no_bounded_pole_hop_connection", "power_connection_survey_budget_exceeded"):
+            return attempt
+        # A finer grid that is only too large to survey says nothing about the coarse grid's
+        # answer: keep "no connection" so the caller's fallbacks run (eval-1575138435, 320 min:
+        # the 219-tile oil-well bridge found no hop out of the nearest pole's block at pitch 4,
+        # pitches 2 and 1 exceeded the budget, and that reason skipped the outside-anchor search).
+        if result is None or attempt.get("reason") != "power_connection_survey_budget_exceeded":
+            result = attempt
     return result
 
 
@@ -259,13 +265,26 @@ return {ok=true,clear=clear}
         if position in legal:
             costs[position] = 0
             heapq.heappush(frontier, (math.dist(position, goal) / 7, position))
+    # Neighbours come from 7-tile buckets, and a node is expanded once: a stale heap entry
+    # is no visit (a long bridge across ~2000 grid points ran out of visits on stale entries).
+    buckets: dict = {}
+    for point in legal:
+        buckets.setdefault((math.floor(point[0] / 7), math.floor(point[1] / 7)), []).append(point)
+    closed = set()
     visited = 0
     while frontier and visited < 2500:
         _, node = heapq.heappop(frontier)
+        if node in closed:
+            continue
+        closed.add(node)
         visited += 1
         if node == goal:
             break
-        for nxt in legal:
+        bx, by = math.floor(node[0] / 7), math.floor(node[1] / 7)
+        near = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for p in buckets.get((bx + dx, by + dy), ())]
+        for nxt in near:
+            if nxt in closed:
+                continue
             distance = math.dist(node, nxt)
             if distance == 0 or distance > 7:
                 continue

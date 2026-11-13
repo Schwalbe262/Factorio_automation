@@ -182,13 +182,57 @@ def _route_row(row) -> bool:
     )
 
 
+EXECUTOR_FAILURE = "repeated_executor_failure:"
+
+
+def _action_position(action: Mapping) -> list | None:
+    point = _point(action.get("position"))
+    if point is None and isinstance(action.get("actions"), list):
+        point = next(
+            (p for p in (_point(a.get("position")) for a in action["actions"] if isinstance(a, Mapping)) if p), None
+        )
+    return point
+
+
+def from_executor_failure(capability: str, reason: str, action: Mapping | None = None) -> dict:
+    """Needs of a job that the same executor failure stopped (``jobs``: three in a row).
+
+    The planned action keeps failing at a position (a move onto water, a build the world
+    refuses, a target gone): kind ``preflight`` when the action names a position (the
+    position is the blocker; the plan must avoid or clear it), else ``plan``. The ladder's
+    ``replan`` then re-plans with the world as it is (eval-1575138435, 320 min: the oil
+    scout's move onto deep water failed position_blocked until the job stayed blocked).
+    """
+    failure = reason[len(EXECUTOR_FAILURE) :] if reason.startswith(EXECUTOR_FAILURE) else reason
+    action = action if isinstance(action, Mapping) else {}
+    kind_of = str(action.get("type") or "action")
+    position = _action_position(action)
+    name = action.get("name") or action.get("item")
+    where = f" at ({position[0]},{position[1]})" if position else ""
+    return make(
+        "preflight" if position else "plan",
+        reason,
+        check="executor:" + kind_of,
+        action=kind_of,
+        at=position,
+        entity=name,
+        blockers=[{"entity": name or kind_of, "position": position, "reason": failure}] if position else None,
+        change=_text(f"a plan whose {kind_of}{' ' + str(name) if name else ''}{where} does not fail {failure}"),
+        block=capability,
+    )
+
+
 def from_result(capability: str, result: Mapping, parameters: Mapping | None = None) -> dict | None:
     """The needs of a blocked/failed planner result, or None when it is no planning failure.
 
     ``parameters`` (the job's) fill ``resource`` / ``item`` when the result does not name them.
+    A ``repeated_executor_failure:<reason>`` block (``executor_action``: the failing action)
+    is a planning failure too (:func:`from_executor_failure`).
     """
     if not isinstance(result, Mapping):
         return None
+    if str(result.get("reason") or "").startswith(EXECUTOR_FAILURE):
+        return from_executor_failure(capability, str(result["reason"]), result.get("executor_action"))
     given = result.get("plan_needs")
     if isinstance(given, Mapping) and given.get("kind"):
         fields = {k: v for k, v in given.items() if k not in ("kind", "reason")}

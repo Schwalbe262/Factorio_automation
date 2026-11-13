@@ -41,6 +41,12 @@ OIL_SCOUT_CANDIDATES = 16
 OIL_SCOUT_ARRIVE_TILES = 12  # an assisted move lands within 8 tiles (find_non_colliding_position)
 OIL_SCOUT_GENERATE_WAIT_TICKS = 1800
 OIL_SCOUT_MAX_TARGETS = 24
+# A stand is a tile the actor fits on, found within this many tiles of the chunk centre and inside
+# the chunk (eval-1575138435, 320 min: the stand beside chunk 24,-6 was deep water, every move
+# failed position_blocked and the job died repeated_executor_failure).
+OIL_SCOUT_STAND_RADIUS = 16
+# Moves sent toward one target without arriving before it is given up like an ungenerated one.
+OIL_SCOUT_MOVES_PER_TARGET = 2
 
 
 def survey_radius():
@@ -78,9 +84,11 @@ local scout=nil;local w=x.window
 for i=1,math.min(x.candidates,#targets)do local t=targets[i];local best=nil;local bd=nil
  for gx=t.x-w,t.x+w do for gy=t.y-w,t.y+w do
   if s.is_chunk_generated({x=gx,y=gy})then local gd=(gx-t.x)^2+(gy-t.y)^2
-   if(not bd or gd<bd)and s.count_entities_filtered{area={{gx*32-32,gy*32-32},{gx*32+64,gy*32+64}},force="enemy",limit=1}==0 then best={x=gx,y=gy};bd=gd end end
+   if(not bd or gd<bd)and s.count_entities_filtered{area={{gx*32-32,gy*32-32},{gx*32+64,gy*32+64}},force="enemy",limit=1}==0 then
+    local land=s.find_non_colliding_position("character",{x=gx*32+16.5,y=gy*32+16.5},x.stand_radius,0.5)
+    if land and math.abs(land.x-gx*32-16)<=16 and math.abs(land.y-gy*32-16)<=16 then best={x=gx,y=gy,stand=pos(land)};bd=gd end end end
  end end
- if best then scout={chunk={x=t.x,y=t.y},distance=t.distance,stand={x=best.x*32+16.5,y=best.y*32+16.5}};break end
+ if best then scout={chunk={x=t.x,y=t.y},distance=t.distance,stand=best.stand};break end
 end
 return {ok=true,wells=selected,unknown_chunks=unknown,scout=scout}
 """
@@ -226,6 +234,7 @@ class OilGathering:
             "abandoned": abandoned,
             "window": OIL_SCOUT_WINDOW_CHUNKS,
             "candidates": OIL_SCOUT_CANDIDATES,
+            "stand_radius": OIL_SCOUT_STAND_RADIUS,
         }
         query = OIL_SURVEY_LUA.replace("PAYLOAD", json.dumps(json.dumps(args, separators=(",", ":"))))
         if self.source_key != "crude-oil":
@@ -394,10 +403,26 @@ for _,spec in ipairs(specs)do if spec.name=="pipe"then local p=spec.position
             return {"status": "blocked", "reason": "oil_scout_requires_actor_and_target_positions"}
         key = "%d,%d" % (chunk["x"], chunk["y"])
         state = self._scout_state(obs) or {"world_id": obs["world_id"], "abandoned": []}
-        if math.hypot(actor["x"] - stand["x"], actor["y"] - stand["y"]) > OIL_SCOUT_ARRIVE_TILES:
-            if state.get("target") != key:
-                state.update(target=key, arrived_tick=None)
+        distance = math.hypot(actor["x"] - stand["x"], actor["y"] - stand["y"])
+        if distance > OIL_SCOUT_ARRIVE_TILES:
+            last = state.get("distance")
+            if state.get("target") != key or (isinstance(last, (int, float)) and distance < last - 1):
+                # A new target, or the last move brought the actor closer (a walk in progress).
+                state.update(target=key, arrived_tick=None, moves=0)
+            elif int(state.get("moves") or 0) >= OIL_SCOUT_MOVES_PER_TARGET:
+                # The moves did not get the actor there (blocked or unreachable stand): next target.
+                state["abandoned"] = (state.get("abandoned", []) + [key])[-OIL_SCOUT_MAX_TARGETS:]
+                state.update(target=None, arrived_tick=None, moves=0, distance=None)
                 _atomic_json(self.scout_path, state)
+                return {
+                    "status": "waiting",
+                    "reason": "oil_scout_target_unreachable",
+                    "chunk": key,
+                    "wait_for": "the next scouting target",
+                }
+            state["moves"] = int(state.get("moves") or 0) + 1
+            state["distance"] = round(distance, 1)
+            _atomic_json(self.scout_path, state)
             return {
                 "type": "move",
                 "position": deepcopy(stand),

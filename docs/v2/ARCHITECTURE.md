@@ -138,6 +138,12 @@ not leave its job blocked for a human fix. Three parts (`plan_needs.py`,
    planner may return `plan_needs` itself; otherwise the record is derived from
    the evidence it already returns. A wait for items or research has no needs.
    (`evidence["needs"]`, item -> units, is a different thing: `critical_path.claims`.)
+   The same executor failure three times in a row (`repeated_executor_failure:<reason>`:
+   a move onto water, a refused build, a target gone) is a planning failure of
+   every capability: `plan_needs.from_executor_failure` records the failing
+   action, position and reason (`preflight` with that blocker, `plan` without a
+   position); capabilities with a dry run go up the ladder, the others are
+   re-planned on new facts or every period (`supervisor._replannable`).
 2. **Ladder.** One rule walks the rungs in a fixed order, `remedy.LADDER`:
    `replan` (same request, facts changed), `layout` (another candidate of the
    block), `site` (another site / a longer connection), `relax` (declared soft

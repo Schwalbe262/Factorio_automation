@@ -1175,7 +1175,11 @@ def _advance_job(
             job.update(blocked_at_tick=obs["tick"], blocked_at_time=time.time())
         if job["status"] in ("blocked", "failed"):
             # The failure contract (plan_needs): what failed and what would make it fit.
-            needs = plan_needs.from_result(job["capability"], result, job.get("parameters")) if result else None
+            failed = result
+            if result and result.get("type"):
+                # An action ended the job: only a repeated executor failure is a planning failure.
+                failed = {"status": "blocked", "reason": job["reason"], "executor_action": result}
+            needs = plan_needs.from_result(job["capability"], failed, job.get("parameters")) if failed else None
             if needs:
                 job["needs"] = needs
                 job.pop("next_remedy", None)

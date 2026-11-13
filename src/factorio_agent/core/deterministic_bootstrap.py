@@ -423,6 +423,21 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
         if not enabled.get(recipe["name"]):
             return _report("blocked", "required recipe is locked", item=item, recipe=recipe["name"])
         if not recipe.get("handcraftable"):
+            producers = self._live_producers(observation, recipe["name"])
+            if producers:
+                # A machine-only item (steel-plate) that a built machine on the map makes is
+                # a wait for its output, not a dead end (eval-1575138435, 320 min: the engine
+                # row's steel chest needed 8 steel while the commissioned steel furnaces had
+                # nothing out yet; the job blocked "required item needs a production machine").
+                return _report(
+                    "waiting",
+                    f"waiting for automated {item} output",
+                    item=item,
+                    recipe=recipe["name"],
+                    producers=producers,
+                    have=have,
+                    need=count,
+                )
             return _report(
                 "blocked",
                 "required item needs a production machine",
@@ -474,6 +489,17 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
             "count": runs,
             "reason": f"engine craft {item} from live recipe",
         }
+
+    @staticmethod
+    def _live_producers(observation: dict[str, Any], recipe: str) -> int:
+        """Built machines whose set recipe is ``recipe`` (a furnace reports its last recipe), not unpowered."""
+        return sum(
+            1
+            for e in observation.get("entities", [])
+            if e.get("recipe") == recipe
+            and e.get("type") in {"furnace", "assembling-machine"}
+            and e.get("status_name") not in {"no_power", "disabled", "marked_for_deconstruction"}
+        )
 
     def _take_output(self, observation: dict[str, Any], item: str, count: int) -> dict[str, Any] | None:
         buffer = self.construction_buffers.get(item)

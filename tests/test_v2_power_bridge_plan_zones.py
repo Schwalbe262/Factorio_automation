@@ -45,6 +45,19 @@ class BridgeZoneTests(unittest.TestCase):
         (self.root / "site-plan.json").write_text(json.dumps({"world_id": "w", "plan": plan}), encoding="utf-8")
         return plan_connection(self.game, self.builder, self.obs, {"x": 40.5, "y": 42.5})
 
+    def test_a_long_bridge_from_a_pole_inside_a_block_starts_at_a_pole_outside(self):
+        # eval-1575138435, 320 min: the oil well 219 tiles out; the nearest supplied pole stands inside
+        # another block, no hop leaves it at pitch 4, pitches 2 and 1 exceed the survey budget, and that
+        # reason hid "no connection" so the outside-anchor search never ran (oil_gathering blocked).
+        board = {"world_id": "w", "blocks": {"mine": {"reserved_area": [[120, -70], [150, -45]], "entities": []}}}
+        (self.root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+        engine = {"name": "steam-engine", "position": {"x": 100, "y": -60}, "electric_network_id": 1, "energy": 1}
+        self.obs = {"world_id": "w", "entities": [engine, pole(135.5, -57.5, 1), pole(110.5, -57.5, 2)]}
+        result = plan_connection(self.game, self.builder, self.obs, {"x": 316.5, "y": 69.5})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["source_unit_number"], 2)
+        self.assertEqual(result["entities"][-1]["position"], {"x": 316.5, "y": 69.5})
+
     def test_the_bridge_keeps_out_of_the_smelting_zone(self):
         smelting = {"kind": "smelting", "name": "smelting", "rect": [12, -32, 60, 32]}
         mine = {"kind": "mining", "name": "mining:iron-ore", "rect": [18, 33, 64, 80]}
