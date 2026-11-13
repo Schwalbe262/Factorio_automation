@@ -20,7 +20,13 @@ Contract (``jobs.CAPABILITIES["produce"]``):
   recipe, every machine has finished products, and the stock chest holds the
   product (machine output arrived through the belt and the tail inserter);
 * a later request for the same item with a higher rate fills reserved slots
-  in place (``production_layout.extend_line``); beyond them it is blocked.
+  in place (``production_layout.extend_line``); beyond them it is blocked;
+* layout candidates: ``layout_variants.candidates`` (library + generated, one per
+  niche) ranked by ``layout_selection.score`` against the demand (request, upcoming
+  roadmap units, early-game plate scarcity); ``production_site.place_line`` probes
+  them on the site and keeps the choice in the state's ``layout`` record
+  (``chosen_tick``, ``verified_tick`` once the proof passes; exploration opt-in via
+  ``layout_selection.settings``).
 
 State: ``production-row-<item>.json`` in the runtime dir; board block
 ``production_row_<item>`` with the input ports and the chest output port.
@@ -148,8 +154,9 @@ class ProductionRows:
             sourced=sourced,
             chest=needs["chest"],
         )
+        ranked, found, demand = self._candidates(obs, item, arguments, needs["enabled"])
         try:
-            line = design_line(self.catalog, **arguments)
+            line = ranked[0]["line"] if ranked else design_line(self.catalog, **arguments)
         except ValueError as exc:
             missing = unsourced_raw(self.catalog, needs["recipe"], sourced)
             for name in self.catalog.recipes[needs["recipe"]]["ingredients"]:
@@ -170,7 +177,34 @@ class ProductionRows:
                 if tap is None:
                     return {"ok": False, **found}
                 return {"ok": False, "reason": "production_row_needs_bus_tap", "tap": tap, "item": port["item"]}
-        return {"ok": True, "line": line, "arguments": arguments, "rate": rate}
+        return {
+            "ok": True,
+            "line": line,
+            "arguments": arguments,
+            "rate": rate,
+            "candidates": ranked,
+            "demand": demand,
+            "layout_library": found.get("library"),
+            "layout_skipped": found.get("skipped"),
+        }
+
+    def _candidates(self, obs, item: str, arguments: dict, enabled: list[str]):
+        """Audited candidate lines ranked by their site-free score (``layout_selection.score``)."""
+        from . import layout_selection as selection
+        from .layout_variants import candidates
+
+        found = candidates(self.catalog, dict(arguments))
+        long_ok = "long-handed-inserter" in enabled
+        usable = [
+            c
+            for c in found["candidates"]
+            if long_ok or not any(n.startswith("long-handed") for row in rows(c["line"]) for n in row["required_items"])
+        ]
+        demand = selection.demand_for(
+            arguments["rate"], upcoming_units=self._upcoming_units(obs, item), tick=obs.get("tick")
+        )
+        usable.sort(key=lambda c: (selection.score(c["descriptor"], demand)[0], c["descriptor"]["id"]))
+        return usable, found, demand
 
     def prepare(self, obs, parameters: dict) -> dict:
         validate_parameters(parameters)
@@ -180,8 +214,19 @@ class ProductionRows:
         designed = self.design(obs, board, parameters)
         if not designed["ok"]:
             return designed
-        design = dict(designed["line"], arguments=designed["arguments"])
+        from . import layout_selection as selection
+
         owner = BLOCK_PREFIX + parameters["item"]
+        design = dict(
+            designed["line"],
+            arguments=designed["arguments"],
+            candidates=designed.get("candidates"),
+            demand=designed.get("demand"),
+            layout_settings=selection.settings(self.root),
+            layout_seed=selection.seed_for(obs["world_id"], owner),
+            layout_library=designed.get("layout_library"),
+            layout_skipped=designed.get("layout_skipped"),
+        )
         placed = place_line(self.game, self.builder, obs, self.catalog, self.site, board, design, owner=owner)
         if not placed["ok"]:
             return placed
@@ -341,6 +386,8 @@ class ProductionRows:
         if evidence is None:
             return {"status": "waiting", "reason": f"waiting for machine-made {item} in the stock chest"}
         state["phase"] = "verified"
+        if isinstance(state.get("layout"), dict) and state["layout"].get("verified_tick") is None:
+            state["layout"]["verified_tick"] = obs.get("tick")
         self.save(item, state)
         return {
             "status": "succeeded",

@@ -1,0 +1,307 @@
+{
+ "catalog_fingerprint": "284d4776bc3ab0b4cab69291afd367fac84c46ea17689a20010eb68de609f26d",
+ "entries": {
+  "adjacent/square/meets/none": {
+   "descriptor": {
+    "aspect": "square",
+    "counts": {
+     "belts": 5,
+     "inserters": 3,
+     "machines": 1,
+     "poles": 2
+    },
+    "footprint": [
+     9,
+     9
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 30.0,
+     "slots": 0
+    },
+    "id": "cl-am1-1x1s-b-00",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "S",
+    "pollution_per_min": null,
+    "port_relation": "adjacent",
+    "power_kw": 119.1,
+    "rate_now": 30.0,
+    "rate_requested": 30.0,
+    "raw_total": 60.5
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "iron-gear-wheel": [
+      0,
+      0
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     1,
+     1
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "bottom",
+    "turned": false
+   },
+   "scores": {
+    "archive_cost": [
+     60.5,
+     5,
+     81,
+     12
+    ]
+   }
+  },
+  "opposite/square/meets/none": {
+   "descriptor": {
+    "aspect": "square",
+    "counts": {
+     "belts": 5,
+     "inserters": 3,
+     "machines": 1,
+     "poles": 2
+    },
+    "footprint": [
+     9,
+     9
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 30.0,
+     "slots": 0
+    },
+    "id": "cl-am1-1x1s-r-00",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "E",
+    "pollution_per_min": null,
+    "port_relation": "opposite",
+    "power_kw": 119.1,
+    "rate_now": 30.0,
+    "rate_requested": 30.0,
+    "raw_total": 60.5
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "iron-gear-wheel": [
+      0,
+      0
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     1,
+     1
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "right",
+    "turned": false
+   },
+   "scores": {
+    "archive_cost": [
+     60.5,
+     5,
+     81,
+     12
+    ]
+   }
+  },
+  "opposite/tall/meets/in_place": {
+   "descriptor": {
+    "aspect": "tall",
+    "counts": {
+     "belts": 18,
+     "inserters": 6,
+     "machines": 1,
+     "poles": 3
+    },
+    "footprint": [
+     13,
+     9
+    ],
+    "form": "row",
+    "growth": {
+     "kind": "in_place",
+     "limit": "output_inserter",
+     "max_rate_in_place": 30.0,
+     "slots": 1
+    },
+    "id": "row-am1-default",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "E",
+    "pollution_per_min": null,
+    "port_relation": "opposite",
+    "power_kw": 163.2,
+    "rate_now": 30.0,
+    "rate_requested": 30.0,
+    "raw_total": 97.5
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "form": "row",
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "spare": "default"
+   },
+   "scores": {
+    "archive_cost": [
+     97.5,
+     18,
+     117,
+     29
+    ]
+   }
+  },
+  "same/flat/meets/none": {
+   "descriptor": {
+    "aspect": "flat",
+    "counts": {
+     "belts": 15,
+     "inserters": 3,
+     "machines": 1,
+     "poles": 2
+    },
+    "footprint": [
+     9,
+     13
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 30.0,
+     "slots": 0
+    },
+    "id": "cl-am1-1x2t-l-01",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "W",
+    "pollution_per_min": null,
+    "port_relation": "same",
+    "power_kw": 119.1,
+    "rate_now": 30.0,
+    "rate_requested": 30.0,
+    "raw_total": 75.5
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "iron-gear-wheel": [
+      0,
+      1
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     1,
+     2
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "left",
+    "turned": true
+   },
+   "scores": {
+    "archive_cost": [
+     75.5,
+     15,
+     117,
+     22
+    ]
+   }
+  },
+  "same/square/meets/none": {
+   "descriptor": {
+    "aspect": "square",
+    "counts": {
+     "belts": 5,
+     "inserters": 3,
+     "machines": 1,
+     "poles": 1
+    },
+    "footprint": [
+     9,
+     9
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 30.0,
+     "slots": 0
+    },
+    "id": "cl-am1-1x1s-l-00",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "W",
+    "pollution_per_min": null,
+    "port_relation": "same",
+    "power_kw": 119.1,
+    "rate_now": 30.0,
+    "rate_requested": 30.0,
+    "raw_total": 59.5
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "iron-gear-wheel": [
+      0,
+      0
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     1,
+     1
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "left",
+    "turned": false
+   },
+   "scores": {
+    "archive_cost": [
+     59.5,
+     5,
+     81,
+     11
+    ]
+   }
+  }
+ },
+ "format": "factorio-agent-layout-library",
+ "generator": "layout-variants-v1",
+ "item": "iron-gear-wheel",
+ "request": {
+  "chest": "iron-chest",
+  "inserter": "inserter",
+  "rate": 30,
+  "sourced": [
+   "copper-plate",
+   "iron-plate",
+   "steel-plate"
+  ]
+ }
+}

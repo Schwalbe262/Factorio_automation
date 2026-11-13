@@ -1,0 +1,98 @@
+{
+ "catalog_fingerprint": "284d4776bc3ab0b4cab69291afd367fac84c46ea17689a20010eb68de609f26d",
+ "entries": {
+  "adjacent/tall/meets/none": {
+   "descriptor": {
+    "aspect": "tall",
+    "counts": {
+     "belts": 32,
+     "inserters": 12,
+     "machines": 6,
+     "poles": 6
+    },
+    "footprint": [
+     24,
+     14
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 5.0,
+     "slots": 0
+    },
+    "id": "cl-am1-4x2t-b-001020302131",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "S",
+    "pollution_per_min": null,
+    "port_relation": "adjacent",
+    "power_kw": 626.4,
+    "rate_now": 5.0,
+    "rate_requested": 5.0,
+    "raw_total": 287.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "copper-cable": [
+      0,
+      0
+     ],
+     "electronic-circuit": [
+      1,
+      0
+     ],
+     "inserter": [
+      2,
+      0
+     ],
+     "iron-gear-wheel": [
+      3,
+      0
+     ],
+     "logistic-science-pack": [
+      2,
+      1
+     ],
+     "transport-belt": [
+      3,
+      1
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     4,
+     2
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "bottom",
+    "turned": true
+   },
+   "scores": {
+    "archive_cost": [
+     287.0,
+     32,
+     336,
+     57
+    ]
+   }
+  }
+ },
+ "format": "factorio-agent-layout-library",
+ "generator": "layout-variants-v1",
+ "item": "logistic-science-pack",
+ "request": {
+  "chest": "iron-chest",
+  "inserter": "inserter",
+  "rate": 5,
+  "sourced": [
+   "copper-plate",
+   "iron-plate",
+   "steel-plate"
+  ]
+ }
+}

@@ -120,7 +120,10 @@ class ProductionRowsTests(unittest.TestCase):
         self.assertTrue(state["ok"], state)
         kind, along, depth, name, to_bus = self.site.allocated[0]
         self.assertEqual((kind, name, to_bus), ("production", BLOCK_PREFIX + "pipe", False))
-        self.assertEqual(self.site.kept, [(BLOCK_PREFIX + "pipe#", BLOCK_PREFIX + "pipe#0")])
+        # The layout probe releases its candidate blocks first; the placement keeps one.
+        self.assertEqual(self.site.kept[-1], (BLOCK_PREFIX + "pipe#", BLOCK_PREFIX + "pipe#0"))
+        self.assertTrue(all(keep is None for _prefix, keep in self.site.kept[:-1]))
+        self.assertEqual(state["layout"]["genome"], state["line"]["genome"])
         source, destination = self.routes.call_args.args[3:5]
         self.assertEqual(source["position"], IRON_PORT["position"])
         self.assertEqual(destination["item"], "iron-plate")
@@ -168,6 +171,22 @@ class ProductionRowsTests(unittest.TestCase):
         empty = self.live(state["plan"], "pipe", stock=0)
         self.assertIsNone(self.rows.proof(self.obs(empty), parameters))
         self.assertEqual(self.rows.last_proof_failure["reason"], "stock_chest_empty")
+
+    def test_layout_choice_is_recorded_and_exploration_is_opt_in_and_deterministic(self):
+        request = {"item": "pipe", "rate_per_minute": 30}
+        best = self.rows.prepare(self.obs(), dict(request))["layout"]
+        self.assertFalse(best["explored"])
+        self.assertFalse(best["explore"]["explore"])
+        self.assertTrue(all(best["score"] <= r["score"] for r in best["runner_ups"]))
+        self.assertEqual(best["chosen_tick"], 600)
+        (self.root / "layout-settings.json").write_text('{"explore": true, "margin": 1.0}', encoding="utf-8")
+        first = self.rows.prepare(self.obs(), dict(request))["layout"]
+        again = self.rows.prepare(self.obs(), dict(request))["layout"]
+        self.assertTrue(first["explore"]["explore"])
+        self.assertEqual(first["variant"], again["variant"])
+        self.assertGreaterEqual(first["pool"], 1)
+        scores = sorted([first["score"]] + [r["score"] for r in first["runner_ups"]])
+        self.assertLessEqual(first["score"], scores[0] + max(10.0, abs(scores[0])) + 1e-6)
 
     def test_higher_rate_extends_in_place_or_blocks_beyond_reserved_slots(self):
         copper = dict(IRON_PORT, item="copper-plate", position={"x": 60.5, "y": 42.5})

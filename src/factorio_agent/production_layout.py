@@ -71,6 +71,7 @@ from .site.transform import apply as apply_transform
 
 MAIN_ORIGIN = (0.5, 0.5)
 MARGIN = 1
+MAX_SPARE_FACTOR = 3  # the "max" growth provision reserves at most three times the built machines
 
 
 def _spare(sizing: RowSizing) -> int:
@@ -222,9 +223,27 @@ def design_line(
     sourced: Callable[[str], bool],
     chest: str,
     origin: tuple[float, float] = MAIN_ORIGIN,
+    genome: dict | None = None,
 ) -> dict:
     """Canonical line at ``origin``: a row line (module docstring) or, when no row
-    can carry the recipe tree, a direct-insertion cluster (``blocks.cluster``)."""
+    can carry the recipe tree, a direct-insertion cluster (``blocks.cluster``).
+
+    ``genome`` (a ``layout_variants.Genome`` dict) rebuilds exactly that candidate
+    instead of the default first-fit choice."""
+    if genome is not None:
+        from .layout_variants import Genome, generate
+
+        return generate(
+            catalog,
+            Genome.from_dict(genome),
+            product=product,
+            rate=rate,
+            inserter=inserter,
+            enabled=enabled,
+            sourced=sourced,
+            chest=chest,
+            origin=origin,
+        )
     try:
         return _design_row_line(
             catalog, product, rate, inserter=inserter, enabled=enabled, sourced=sourced, chest=chest, origin=origin
@@ -251,16 +270,38 @@ def cluster_line(
     sourced: Callable[[str], bool],
     chest: str,
     origin: tuple[float, float] = MAIN_ORIGIN,
+    machine: str | None = None,
+    grid: tuple[int, int] | None = None,
+    turned: bool | None = None,
+    cells: dict | None = None,
+    output_side: str | None = None,
 ) -> dict:
-    """A stock line made of one ``blocks.cluster`` plan ending in its chest (same keys as a row line)."""
+    """A stock line made of one ``blocks.cluster`` plan ending in its chest (same keys as a row line).
+
+    ``machine`` / ``grid`` / ``turned`` / ``cells`` / ``output_side`` pin one layout
+    genome (``layout_variants``); left out, the generator's first fit is used."""
     from .blocks.cluster import cluster_block
     from .blocks.stock_tail import STOCK_STACKS
 
-    machine = next((m for m in CLUSTER_MACHINES if m in enabled and m in catalog.entities), None)
+    if machine is None:
+        machine = next((m for m in CLUSTER_MACHINES if m in enabled and m in catalog.entities), None)
+    elif machine not in enabled or machine not in catalog.entities:
+        raise ValueError(f"{machine} is not enabled for a cluster")
     if machine is None:
         raise ValueError("no enabled assembling machine for a cluster")
     plan = cluster_block(
-        catalog, product, rate, sourced=sourced, machine=machine, inserter=inserter, chest=chest, origin=origin
+        catalog,
+        product,
+        rate,
+        sourced=sourced,
+        machine=machine,
+        inserter=inserter,
+        chest=chest,
+        origin=origin,
+        grid=grid,
+        turned=turned,
+        cells=cells,
+        output_side=output_side,
     )
     output = next(p for p in plan["ports"] if p["direction"] == "output")
     chest_entity = next(e for e in plan["entities"] if e["name"] == chest)
@@ -324,10 +365,17 @@ def _design_row_line(
     sourced: Callable[[str], bool],
     chest: str,
     origin: tuple[float, float] = MAIN_ORIGIN,
+    machine: str | None = None,
+    spare: str = "default",
 ) -> dict:
+    """``machine`` pins the main row's assembler; ``spare`` is the growth provision:
+    ``none`` (no reserved slot), ``default`` (as many slots again, ``_spare``) or
+    ``max`` (up to ``MAX_SPARE_FACTOR`` x the built count, within the lane budget)."""
     recipe = _row_recipe(catalog, product)
     if recipe is None:
         raise ValueError(f"no recipe makes {product}")
+    if machine is not None and machine not in enabled:
+        raise ValueError(f"{machine} is not enabled for a row")
     plan = plan_sources(catalog, recipe, sourced)
     main_sizing = _size(
         catalog,
@@ -337,8 +385,16 @@ def _design_row_line(
         enabled=enabled,
         sub_item=plan["sub_item"],
         twin_item=plan["twin_item"],
+        machine=machine,
     )
-    spare = _spare(main_sizing)
+    policies = {
+        "none": 0,
+        "default": _spare(main_sizing),
+        "max": min(main_sizing.max_count - main_sizing.count, MAX_SPARE_FACTOR * main_sizing.count),
+    }
+    if spare not in policies:
+        raise ValueError(f"unknown spare policy {spare}")
+    spare = policies[spare]
     sub = twin = merge = None
     if plan["sub_item"]:
         sizings, spare = _sub_sizing(catalog, plan, main_sizing, spare, inserter=inserter, enabled=enabled)

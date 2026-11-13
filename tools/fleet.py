@@ -346,6 +346,11 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
             for r in tests
         ]
         lines.append("test-mode credits (seed:technology@tick): " + " ".join(credits)[:400])
+    layouts = [row for r in runs for row in r.get("layouts") or []]
+    if layouts:  # layout candidates (docs/v2/LAYOUT_PRINCIPLES.md): which variant each block used
+        from factorio_agent.layout_selection import format_variants
+
+        lines += format_variants(layouts)
     failed = [r for r in runs if r.get("launch_error")]
     for r in failed[:4]:
         lines.append(f"launch failed {r['seed']}: {r['launch_error'][:100]}")
@@ -801,6 +806,9 @@ class Fleet:
             row.update(label)
         if not (root / "jobs.json").exists():
             return row
+        from factorio_agent.layout_selection import run_layouts
+
+        row["layouts"] = run_layouts(root)
         tick = run_tick(root)
         row["game_minutes"] = round(tick / TICKS_PER_MINUTE, 1) if tick is not None else None
         timeline = cp_tool.Run(root)

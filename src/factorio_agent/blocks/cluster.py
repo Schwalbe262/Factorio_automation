@@ -50,7 +50,8 @@ from .params import DEFAULT_LIMITS, RowLimits, inserter_rate, lane_capacity, pol
 
 TEMPLATE = "direct_insertion_cluster_v1"
 MAX_NODES = 8  # machines in one cluster; a bigger tree is a row/bus design
-MAX_ROWS = 2
+MAX_ROWS = 2  # the default (first-fit) cluster
+VARIANT_MAX_ROWS = 3  # candidate layouts (``layout_variants``) may also try three machine rows
 MAX_DEPTH = 4
 DIRECT_MAX_CONSUMERS = 2  # consumer machines one producer can reach by adjacency in a row-shaped cluster
 MAX_ARMS_PER_EDGE = 3  # inserters on one shared 3-tile machine edge
@@ -200,8 +201,7 @@ def _output_sides(c: int, r: int, columns: int, rows: int, turned: bool, last_be
     return sides
 
 
-def embed(root: str, nodes: dict[str, Node], output_side: str | None = None) -> Embedding:
-    """Smallest grid placement satisfying adjacency, belt access and the output side (module doc)."""
+def _graph(root: str, nodes: dict[str, Node]):
     edges = {(child, name) for name, node in nodes.items() for child in node.made.values()}
     neighbours = {name: set() for name in nodes}
     for a, b in edges:
@@ -215,28 +215,96 @@ def embed(root: str, nodes: dict[str, Node], output_side: str | None = None) -> 
         order.append(name)
         queue.extend(sorted(neighbours[name] - set(order)))
     fed = {name for name, node in nodes.items() if node.sourced}
-    n = len(nodes)
-    options = []
-    for rows in range(1, MAX_ROWS + 1):
+    return order, neighbours, fed
+
+
+def _grids(n: int, max_rows: int = MAX_ROWS):
+    """``(columns, rows, turned)`` in the generator's fixed order."""
+    for rows in range(1, max_rows + 1):
         for columns in range(math.ceil(n / rows), n + 1):
             for turned in (False, True):
-                if turned and rows == 1:
-                    continue
-                for found in _search(order, neighbours, fed, root, columns, rows, turned, output_side):
-                    options.append(found)
-                    break
+                if not (turned and rows == 1):
+                    yield columns, rows, turned
+
+
+def _embed_score(e: Embedding):
+    width = 4 * e.columns + 4 + (2 if e.turned else 0)
+    height = 4 * e.rows + 4
+    return (width * height, e.turned, e.rows, e.columns)
+
+
+def embed(
+    root: str,
+    nodes: dict[str, Node],
+    output_side: str | None = None,
+    *,
+    grid: tuple[int, int] | None = None,
+    turned: bool | None = None,
+    cells: dict | None = None,
+) -> Embedding:
+    """Smallest grid placement satisfying adjacency, belt access and the output side (module doc).
+
+    ``grid`` (columns, rows), ``turned`` and ``cells`` (recipe -> (c, r)) pin the
+    search to one layout genome (``layout_variants``); a pinned layout that breaks
+    a rule is a ValueError, never silently replaced.
+    """
+    order, neighbours, fed = _graph(root, nodes)
+    if cells is not None and set(cells) != set(nodes):
+        raise ValueError(f"{root}: pinned cells {sorted(cells)} do not match the tree {sorted(nodes)}")
+    options = []
+    deepest = max(MAX_ROWS, grid[1] if grid else 0)
+    if deepest > VARIANT_MAX_ROWS:
+        raise ValueError(f"{root}: {deepest} machine rows exceed {VARIANT_MAX_ROWS}")
+    for columns, rows, bent in _grids(len(nodes), deepest):
+        if grid is not None and (columns, rows) != tuple(grid):
+            continue
+        if turned is not None and bent != turned:
+            continue
+        for found in _search(order, neighbours, fed, root, columns, rows, bent, output_side, fixed=cells):
+            options.append(found)
+            break
     if not options:
         raise ValueError(f"{root}: no adjacency layout within {MAX_ROWS} rows (needs belts between machines)")
-
-    def score(e: Embedding):
-        width = 4 * e.columns + 4 + (2 if e.turned else 0)
-        height = 4 * e.rows + 4
-        return (width * height, e.turned, e.rows, e.columns)
-
-    return min(options, key=score)
+    return min(options, key=_embed_score)
 
 
-def _search(order, neighbours, fed, root, columns, rows, turned, output_side):
+EMBEDDINGS_PER_GRID = 3  # machine arrangements kept per (grid, belt shape)
+SEARCH_CAP = 400  # arrangements looked at per (grid, belt shape)
+
+
+def embeddings(
+    root: str, nodes: dict[str, Node], *, per_grid: int = EMBEDDINGS_PER_GRID, max_rows: int = VARIANT_MAX_ROWS
+) -> list[Embedding]:
+    """Every grid / belt shape with up to ``per_grid`` arrangements, smallest first (bounded).
+
+    Inside one grid the first arrangement of each distinct set of free product sides is
+    kept (they place the output differently); an arrangement with an empty first column
+    is a padded copy of a narrower grid and skipped; the search stops after ``SEARCH_CAP``.
+    """
+    order, neighbours, fed = _graph(root, nodes)
+    found = []
+    for columns, rows, bent in _grids(len(nodes), max_rows):
+        seen = set()
+        for k, e in enumerate(_search(order, neighbours, fed, root, columns, rows, bent, None)):
+            if k >= SEARCH_CAP or len(seen) >= per_grid:
+                break
+            if min(c for _, (c, _r) in e.cells) != 0:
+                continue
+            sides = tuple(output_sides(e, root, nodes))
+            if sides not in seen:
+                seen.add(sides)
+                found.append(e)
+    return sorted(found, key=lambda e: (_embed_score(e), e.cells))
+
+
+def output_sides(e: Embedding, root: str, nodes: dict[str, Node]) -> list[str]:
+    """Free sides of the product machine in embedding ``e`` (the ``output_side`` choices)."""
+    cells = dict(e.cells)
+    last = max((cells[n][1] for n in nodes if nodes[n].sourced and cells[n][0] == e.columns - 1), default=-1)
+    return _output_sides(*cells[root], e.columns, e.rows, e.turned, last)
+
+
+def _search(order, neighbours, fed, root, columns, rows, turned, output_side, fixed=None):
     cells = [(c, r) for r in range(rows) for c in range(columns)]
     placed: dict[str, tuple[int, int]] = {}
     used: set = set()
@@ -272,7 +340,9 @@ def _search(order, neighbours, fed, root, columns, rows, turned, output_side):
                 yield Embedding(columns, rows, turned, tuple(sorted(placed.items())))
             return
         name = order[index]
-        for cell in cells:
+        for cell in [tuple(fixed[name])] if fixed else cells:
+            if cell not in cells:
+                continue
             if cell in used or not ok(name, cell):
                 continue
             placed[name] = cell
@@ -323,6 +393,9 @@ def cluster_block(
     plate_order: Iterable[str] | None = None,
     origin: tuple[float, float] = (0.5, 0.5),
     limits: RowLimits = DEFAULT_LIMITS,
+    grid: tuple[int, int] | None = None,
+    turned: bool | None = None,
+    cells: dict | None = None,
 ) -> dict:
     """One cluster plan (module doc); ValueError names why the tree needs a row or a belt.
 
@@ -330,6 +403,8 @@ def cluster_block(
     (start small, rule 3); ``chest`` None ends in a one-tile belt port.
     ``plate_order`` orders the two sourced items: the first gets the north
     feeder (left lane), so the caller can follow its bus lane order (rule 8).
+    ``grid`` / ``turned`` / ``cells`` pin the embedding (see ``embed``); a pinned
+    ``output_side`` that is not free is a ValueError instead of a fallback side.
     """
     ox, oy = require_tile_centre(origin)
     size, height = tile_size(catalog, machine)
@@ -360,7 +435,7 @@ def cluster_block(
     if plate_order is not None:
         wanted = [item for item in plate_order if item in plates]
         plates = wanted + [item for item in plates if item not in wanted]
-    layout = embed(root, nodes, output_side)
+    layout = embed(root, nodes, output_side, grid=grid, turned=turned, cells=cells)
     cells = dict(layout.cells)
     columns, rows, turned = layout.columns, layout.rows, layout.turned
     placed: list[dict] = []

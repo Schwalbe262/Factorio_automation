@@ -1,0 +1,90 @@
+{
+ "catalog_fingerprint": "284d4776bc3ab0b4cab69291afd367fac84c46ea17689a20010eb68de609f26d",
+ "entries": {
+  "adjacent/tall/meets/none": {
+   "descriptor": {
+    "aspect": "tall",
+    "counts": {
+     "belts": 22,
+     "inserters": 12,
+     "machines": 4,
+     "poles": 5
+    },
+    "footprint": [
+     22,
+     10
+    ],
+    "form": "cluster",
+    "growth": {
+     "kind": "none",
+     "limit": "one_product_machine",
+     "max_rate_in_place": 30.0,
+     "slots": 0
+    },
+    "id": "cl-am1-4x1s-b-30201000",
+    "input_sides": [
+     "W"
+    ],
+    "output_side": "S",
+    "pollution_per_min": null,
+    "port_relation": "adjacent",
+    "power_kw": 476.4,
+    "rate_now": 30.0,
+    "rate_requested": 30.0,
+    "raw_total": 218.0
+   },
+   "evidence": {},
+   "genome": {
+    "beacons": [],
+    "cells": {
+     "copper-cable": [
+      3,
+      0
+     ],
+     "electronic-circuit": [
+      2,
+      0
+     ],
+     "inserter": [
+      1,
+      0
+     ],
+     "iron-gear-wheel": [
+      0,
+      0
+     ]
+    },
+    "form": "cluster",
+    "grid": [
+     4,
+     1
+    ],
+    "machine": "assembling-machine-1",
+    "modules": {},
+    "output_side": "bottom",
+    "turned": false
+   },
+   "scores": {
+    "archive_cost": [
+     218.0,
+     22,
+     220,
+     44
+    ]
+   }
+  }
+ },
+ "format": "factorio-agent-layout-library",
+ "generator": "layout-variants-v1",
+ "item": "inserter",
+ "request": {
+  "chest": "iron-chest",
+  "inserter": "inserter",
+  "rate": 30,
+  "sourced": [
+   "copper-plate",
+   "iron-plate",
+   "steel-plate"
+  ]
+ }
+}

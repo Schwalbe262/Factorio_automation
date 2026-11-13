@@ -10,6 +10,13 @@ every input port from its source (``transport.plan_connection``), bridges
 power (``manufacturing.connect_power_groups``) and finishes with
 ``planning.preflight``. The first block that passes everything is kept
 (``site.placement.settle``); every other candidate is released.
+
+With ``design["candidates"]`` (``layout_variants.candidates``) the line is chosen
+first (``_choose``): each candidate (at most ``layout_selection.PROBE_LIMIT``) is
+probed on its own first allocation and best orientation, scored by
+``layout_selection.score`` (intrinsic terms + the orientation's port cost),
+optionally explored, and then placed in that order with the code above; the
+result carries the ``layout`` record (chosen genome, scores, runner-ups).
 """
 
 from __future__ import annotations
@@ -140,10 +147,100 @@ def _routes(game, builder, obs, board, line, owner, product, block=None, catalog
     }
 
 
+def _candidate_design(design: dict, candidate: dict) -> dict:
+    line = candidate["line"]
+    return dict(line, arguments=dict(design["arguments"], genome=candidate["genome"].to_dict()))
+
+
+def _no_mirror(t) -> bool:
+    return t.mirror is None
+
+
+def _choose(obs, catalog, site, design: dict, owner: str, returns_to_bus: bool) -> tuple[list[dict], dict]:
+    """Feasible options best first (probe: one allocation, best orientation) and the exploration choice."""
+    from . import layout_selection as selection
+
+    demand = design.get("demand") or selection.demand_for(design["spec"]["rate_per_minute"])
+    config = design.get("layout_settings") or selection.Settings()
+    options, infeasible = [], []
+    for candidate in design["candidates"][: selection.PROBE_LIMIT]:
+        size = footprint_size(candidate["line"])
+        try:
+            blocks = site.allocate_candidates(
+                "production",
+                size[0],
+                size[1],
+                name=owner,
+                count=1,
+                returns_to_bus=returns_to_bus,
+                world_id=obs["world_id"],
+            )
+        except Exception:  # noqa: BLE001 - a candidate without a block is just infeasible
+            blocks = []
+        if not blocks:
+            infeasible.append({"variant": candidate["descriptor"]["id"], "reason": "no_allocation"})
+            continue
+        block = blocks[0]
+        wants = block_wants(block, lambda plan: plan["inputs"], lambda plan: [_output_facing(plan)])
+        build = builder_for(catalog, _candidate_design(design, candidate))
+        placed = orientations(build, size, block.rect, wants, allowed=_no_mirror)
+        if not placed:
+            infeasible.append({"variant": candidate["descriptor"]["id"], "reason": "no_orientation"})
+            continue
+        options.append(selection.option(candidate, demand, placed[0].score))
+    settle(site, obs["world_id"], owner, None)
+    options = selection.ranked(options)
+    seed = design.get("layout_seed", 0)
+    index, pool = selection.choose([o["score"] for o in options], config, seed) if options else (0, 0)
+    return options, {"index": index, "pool": pool, "config": config, "infeasible": infeasible}
+
+
 def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner: str, returns_to_bus: bool = False):
     """Allocate, orient, route, power and preflight one line; a state dict or a failure."""
     if site is None:
         return {"ok": False, "reason": "production_row_requires_site_service"}
+    if not design.get("candidates"):
+        return _place_one(game, builder, obs, catalog, site, board, design, owner=owner, returns_to_bus=returns_to_bus)
+    from . import layout_selection as selection
+
+    options, choice = _choose(obs, catalog, site, design, owner, returns_to_bus)
+    if not options:
+        return {"ok": False, "reason": "no_layout_candidate_fits_a_site", "infeasible": choice["infeasible"][-6:]}
+    chosen = options[choice["index"]]
+    order = [chosen] + [o for o in options if o is not chosen]
+    tried = []
+    result = None
+    for option in order:
+        result = _place_one(
+            game,
+            builder,
+            obs,
+            catalog,
+            site,
+            board,
+            _candidate_design(design, option["candidate"]),
+            owner=owner,
+            returns_to_bus=returns_to_bus,
+        )
+        if result["ok"]:
+            result["layout"] = selection.record(
+                options,
+                option,
+                config=choice["config"],
+                pool_size=choice["pool"],
+                tick=obs.get("tick"),
+                fallback_from=tried or None,
+                library=design.get("layout_library"),
+                library_skipped=design.get("layout_skipped") or None,
+                infeasible=choice["infeasible"] or None,
+            )
+            return result
+        tried.append({"variant": option["id"], "reason": result.get("reason")})
+    return dict(result, layout_failures=tried[-6:])
+
+
+def _place_one(game, builder, obs, catalog, site, board, design: dict, *, owner: str, returns_to_bus: bool = False):
+    """``place_line`` for one canonical line (module doc)."""
     product = design["spec"]["product"]
     size = footprint_size(design)
     try:
