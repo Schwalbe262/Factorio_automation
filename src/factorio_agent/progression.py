@@ -346,7 +346,10 @@ def _same(row: Mapping, step: Step) -> bool:
     if step.capability == PRODUCE_CAPABILITY and isinstance(parameters, Mapping):
         # One row per item: any produce job or node for the item is this step's row
         # (a higher rate fills the row's reserved slots in place, production_rows).
-        return parameters.get("item") == step.parameters.get("item")
+        # A belt-output row of the same item is its own row (production_rows.row_key).
+        return parameters.get("item") == step.parameters.get("item") and parameters.get(
+            "output", "stock_chest"
+        ) == step.parameters.get("output", "stock_chest")
     return parameters == step.parameters
 
 

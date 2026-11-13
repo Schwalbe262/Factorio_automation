@@ -116,6 +116,17 @@ def _fluid_recipe(catalog, recipe: str) -> bool:
     return any(r.get("type") == "fluid" for r in (catalog.recipes.get(recipe) or {}).get("ingredients", ()))
 
 
+BELT_KEY = "__belt"
+
+
+def row_key(parameters: dict) -> str:
+    """State/block key of a request: the item for a stock row, ``<item>__belt`` for a belt row.
+
+    An item may have both (engine units: the engine row's stock chest feeds construction and
+    blue science, a belt row feeds electric engines); ``machine_stock`` reads the stock one."""
+    return parameters["item"] + (BELT_KEY if output_mode(parameters) == "belt" else "")
+
+
 def output_mode(parameters: dict) -> str:
     return parameters.get("output", "stock_chest")
 
@@ -178,7 +189,7 @@ class ProductionRows:
     def design(self, obs, board: dict, parameters: dict) -> dict:
         """Canonical line for the request, or a failure dict (tap needed, unsupported, locked)."""
         item = parameters["item"]
-        owner = BLOCK_PREFIX + item
+        owner = BLOCK_PREFIX + row_key(parameters)
         needs = self._requirements(obs, item)
         if not needs["ok"]:
             return needs
@@ -265,7 +276,7 @@ class ProductionRows:
             return designed
         from . import layout_selection as selection
 
-        owner = BLOCK_PREFIX + parameters["item"]
+        owner = BLOCK_PREFIX + row_key(parameters)
         design = dict(
             designed["line"],
             arguments=designed["arguments"],
@@ -326,7 +337,7 @@ class ProductionRows:
         board = self._board(obs)
         if board is None:
             return {"status": "blocked", "reason": "production_row_board_identity_changed"}
-        name = BLOCK_PREFIX + state["item"]
+        name = BLOCK_PREFIX + state.get("key", state["item"])
         changed = False
         if board["blocks"].get(name) != state["plan"]:
             board["blocks"][name] = state["plan"]
@@ -379,7 +390,7 @@ class ProductionRows:
             return {"type": "bar", "name": chest["name"], "position": chest["position"], "slots": slots}
         state["bar_set"] = True
         state["bar_tick"] = tick
-        self.save(state["item"], state)
+        self.save(state.get("key", state["item"]), state)
         return None
 
     def _extend(self, obs, state: dict, rate: float) -> dict | None:
@@ -404,21 +415,22 @@ class ProductionRows:
         added = [e for e in world["entities"] if (e["name"], *xy(e)) not in old]
         state["plan"] = dict(state["plan"], entities=state["plan"]["entities"] + added)
         state.update(line=world, canonical=canonical, requested_rate=rate, phase="build", extended=extra)
-        self.save(state["item"], state)
+        self.save(state.get("key", state["item"]), state)
         return None
 
     def step(self, obs, parameters: dict) -> dict:
         validate_parameters(parameters)
         item = parameters["item"]
-        state = self.state(item)
+        key = row_key(parameters)
+        state = self.state(key)
         if not state:
             prepared = self.prepare(obs, parameters)
             if prepared.get("reason") == "production_row_needs_bus_tap":
                 return self._install_tap(obs, prepared["tap"])
             if not prepared.get("ok"):
                 return {"status": "blocked", **prepared}
-            state = prepared
-            self.save(item, state)
+            state = dict(prepared, key=key)
+            self.save(key, state)
         if state["world_id"] != obs["world_id"] or state["catalog_fingerprint"] != self.catalog.fingerprint:
             return {"status": "blocked", "reason": "production_row_world_or_catalog_changed"}
         if output_mode(parameters) != state_output(state):
@@ -466,7 +478,7 @@ class ProductionRows:
         state["phase"] = "verified"
         if isinstance(state.get("layout"), dict) and state["layout"].get("verified_tick") is None:
             state["layout"]["verified_tick"] = obs.get("tick")
-        self.save(item, state)
+        self.save(key, state)
         reason = (
             f"belt-fed assemblers put {item} on a published output belt"
             if is_belt_output(state["line"])
@@ -476,7 +488,7 @@ class ProductionRows:
 
     def proof(self, obs, parameters: dict) -> dict | None:
         self.last_proof_failure = None
-        state = self.state(parameters["item"])
+        state = self.state(row_key(parameters))
         if not state or state["world_id"] != obs["world_id"] or not underground_proof(obs, state["plan"]):
             return None
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}

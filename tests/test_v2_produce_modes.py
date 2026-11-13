@@ -185,20 +185,22 @@ class BeltOutputRowTests(unittest.TestCase):
         state = self.rows.prepare(self.obs(), parameters)
         self.assertTrue(state["ok"], state)
         self.assertTrue(self.site.allocated[0][4])  # returns_to_bus: the product leaves on the bus edge
-        self.rows.save("pipe", state)
+        self.rows.save("pipe__belt", dict(state, key="pipe__belt"))
         waiting = self.rows.step(self.obs(), parameters)
         self.assertEqual(waiting["reason"], "waiting for machine-made pipe on the output belt")
         self.game.query.assert_not_called()  # no chest bar
         board = json.loads((self.root / "pcb-board.json").read_text(encoding="utf-8"))
-        ports = board["blocks"][BLOCK_PREFIX + "pipe"]["ports"]
+        ports = board["blocks"][BLOCK_PREFIX + "pipe__belt"]["ports"]
         self.assertIn(state["line"]["output"], ports)
-        self.assertEqual([p["block"] for p in free_board_ports(board, "pipe")], [BLOCK_PREFIX + "pipe"])
+        self.assertEqual([p["block"] for p in free_board_ports(board, "pipe")], [BLOCK_PREFIX + "pipe__belt"])
         done = self.rows.step(self.obs(self.live(state["plan"], "pipe")), parameters)
         self.assertEqual(done["status"], "succeeded", done)
         self.assertIn("output_port", done["evidence"])
         self.assertIsNone(MachineStock(self.rows)(self.obs(), "pipe"))
-        mismatch = self.rows.step(self.obs(), {"item": "pipe", "rate_per_minute": 30})
-        self.assertEqual(mismatch["reason"], "production_row_output_mode_differs")
+        # A stock row of the same item is a separate instance (production_rows.row_key).
+        self.assertFalse(self.rows.path("pipe").exists())
+        self.assertTrue(self.rows.path("pipe__belt").exists())
+        self.assertIn(BLOCK_PREFIX + "pipe__belt", board["blocks"])
 
 
 if __name__ == "__main__":
