@@ -502,8 +502,8 @@ class Lifecycle:
                     self.sleep(0.25)
             jobs = read(root / "jobs.json", {}).get("jobs", {})
             active = [key for key, q in jobs.items() if q.get("status") in ("pending", "running", "waiting")]
-            if len(active) > 1:
-                raise RuntimeError("multiple unfinished jobs require inspection; no checkpoint was reset")
+            # Up to MAX_ACTIVE_JOBS jobs are active at once now; a safe stop pauses each
+            # of them (this used to refuse more than one, from the single-job era).
             for key in active:
                 self._cli(root, "pause", "--key", key)
             local = dict(

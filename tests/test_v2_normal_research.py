@@ -93,7 +93,7 @@ class EngineResearchTests(unittest.TestCase):
                 "production": {"automation-science-pack": {"consumed": 10}, "logistic-science-pack": {"consumed": 0}},
             }
             request = {"technology": "advanced-material-processing"}
-            self.assertEqual(obj.step(obs, request)["reason"], "continuous_science_supply_not_implemented")
+            self.assertEqual(obj.step(obs, request)["reason"], "waiting_for_science_pack_supply")
             obj.green = SimpleNamespace(proof=lambda o: {"science_units": [2]})
             self.assertEqual(obj.step(obs, request)["type"], "research_queue")
 
@@ -155,7 +155,7 @@ class EngineResearchTests(unittest.TestCase):
             )
             obj.path = Path(directory) / "research.json"
             result = obj.step({"world_id": "w", "technologies": {}}, {"technology": "next"})
-            self.assertEqual(result["reason"], "continuous_science_supply_not_implemented")
+            self.assertEqual(result["reason"], "waiting_for_science_pack_supply")
             self.assertEqual(result["packs"], ["chemical-science-pack"])
 
 

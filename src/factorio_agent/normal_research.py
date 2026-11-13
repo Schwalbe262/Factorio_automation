@@ -104,9 +104,12 @@ class NormalResearch:
                 }
         unsupported = packs - supported
         if unsupported:
+            # The pack's permanent factory is a later roadmap step; wait for it
+            # instead of blocking (seed 4176033748: four research steps blocked
+            # before green science existed).
             return {
-                "status": "blocked",
-                "reason": "continuous_science_supply_not_implemented",
+                "status": "waiting",
+                "reason": "waiting_for_science_pack_supply",
                 "packs": sorted(unsupported),
             }
         supply = self.science.proof(obs)
