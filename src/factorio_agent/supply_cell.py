@@ -40,6 +40,13 @@ Lifecycle (rules in code, see ``docs/v2/PLANNERS.md``, "Supply cell"):
    ``mine``, contents return to the inventory), removes the board block and
    records ``phase: retired`` (never proposed again). Poles stay: other blocks'
    pole chains may hang on them.
+5. Retire one product (``{"retire_product": item}``, before the whole cell):
+   once a ``produce`` row for it is producing, it is recorded in
+   ``retired_products`` (no stock hook, no own feed), and the machines,
+   inserters and chests that serve only retired products no remaining product
+   takes (``dismantled_products``, ``owned_entities`` from the node graph) are
+   mined and dropped from the board block. A shared machine (the gear machine
+   of a remaining belt or inserter machine) stays and is still fed.
 
 Cell geometry for ``[gear, circuit, belt, inserter]`` (``render(layout(...))``
 on the real catalog). Every product has one product chest (``H``, bar 2
@@ -641,6 +648,72 @@ def _indices(value):
     return list(value.values()) if isinstance(value, dict) else list(value or [])
 
 
+# ----- per-product retirement (node graph) -----------------------------------
+def retired_products(state):
+    """Products retired one by one (``retire_product``): no stock hook, no own feed, never re-proposed."""
+    return set(state.get("retired_products") or {})
+
+
+def _closure(state, items):
+    """``items`` and, transitively, the stocked ingredients their machines take from other product chests."""
+    rows = {r["item"]: r for r in state.get("products", [])}
+    seen, todo = set(), [i for i in items if i in rows]
+    while todo:
+        item = todo.pop()
+        if item not in seen:
+            seen.add(item)
+            todo += [h for h in rows[item].get("stocked_inputs") or () if h in rows]
+    return seen
+
+
+def kept_products(state):
+    """Products whose machines stay: not retired, or a stocked ingredient of one that is not (shared machines)."""
+    retired = retired_products(state)
+    return _closure(state, [r["item"] for r in state.get("products", []) if r["item"] not in retired])
+
+
+def dismantled_products(state):
+    """Retired products no remaining product needs: their machines, inserters and chests are mined."""
+    return retired_products(state) - kept_products(state)
+
+
+def owned_entities(state, item):
+    """Plan entities that serve only ``item``: its machines, their inserters, its input chests and product chest.
+
+    From the node graph, not from names: a machine is one of the product's
+    nodes; an inserter belongs to the machine it touches (2 tiles from the
+    machine centre on one axis, the chest beyond); a chest belongs to the
+    product whose output or input chest it is. A stocked ingredient's chest
+    (the shared gear chest) belongs to that ingredient, not to its takers.
+    """
+    row = next((r for r in state.get("products", []) if r["item"] == item), None)
+    if row is None:
+        return []
+    machines = {(n["machine"]["x"], n["machine"]["y"]) for n in row["nodes"]}
+    chests = {(n["chest"]["x"], n["chest"]["y"]) for n in row["nodes"] if n.get("chest")}
+    chests.add((row["output"]["x"], row["output"]["y"]))
+    owned = []
+    for e in state["plan"]["entities"]:
+        x, y = _xy(e)
+        if e["name"] == MACHINE and (x, y) in machines:
+            owned.append(e)
+        elif e["name"] in CHESTS and (x, y) in chests:
+            owned.append(e)
+        elif e["name"] == INSERTER and any(sorted((abs(x - mx), abs(y - my))) == [0, 2] for mx, my in machines):
+            owned.append(e)
+    return owned
+
+
+def waits_on_cell(job, item):
+    """An active job waits for ``item`` from the cell's chest (not from a permanent row's chest)."""
+    if job.get("status") not in ACTIVE or f"machine-made {item}" not in str(job.get("reason", "")):
+        return False
+    machine = (job.get("evidence") or {}).get("machine")
+    if not isinstance(machine, dict):
+        return True  # source unknown: assume the cell
+    return machine.get("source") == CAPABILITY or "wait_factor" in machine
+
+
 # ----- controller ------------------------------------------------------------
 class SupplyCell:
     """One cell per map; state ``supply-cell.json``, board block ``supply_cell``."""
@@ -842,6 +915,8 @@ class SupplyCell:
         validate_parameters(parameters)
         if parameters.get("retire"):
             return self._retire(obs)
+        if "retire_product" in parameters:
+            return self._retire_product(obs, parameters["retire_product"])
         state = self.state()
         if not state:
             prepared = self.prepare(obs, parameters["products"])
@@ -896,7 +971,10 @@ class SupplyCell:
             return None
         demand = self.demand(obs)
         done = set()
+        gone = dismantled_products(state)
         for row in state["products"]:
+            if row["item"] in gone:
+                continue
             key = f"{row['output']['x']},{row['output']['y']}"
             name = self._chest_name(state)
             payload = json.dumps(json.dumps({"name": name, "position": row["output"]}))
@@ -914,8 +992,10 @@ class SupplyCell:
         return None
 
     def _chest_name(self, state):
-        output = state["products"][0]["output"]
-        return next(e["name"] for e in state["plan"]["entities"] if e["position"] == output)
+        # Every chest of the cell has the same name; a dismantled product's chest is no longer in the plan.
+        outputs = [r["output"] for r in state["products"]]
+        found = [e["name"] for e in state["plan"]["entities"] if e["position"] in outputs]
+        return found[0] if found else state.get("chest_name", CHESTS[0])
 
     def _find(self, obs, name, position):
         return next(
@@ -929,7 +1009,10 @@ class SupplyCell:
             return None
         chest = self._chest_name(state)
         rows = []
+        gone = dismantled_products(state)
         for row in state["products"]:
+            if row["item"] in gone:
+                continue
             machines = [self._find(obs, MACHINE, node["machine"]) for node in row["nodes"]]
             if any(m is None or m.get("products_finished", 0) < 1 for m in machines):
                 return None
@@ -962,13 +1045,17 @@ class SupplyCell:
 
     # feeding
     def _active_products(self, obs, state):
-        """Products still fed: no producing permanent row for them."""
-        items = []
+        """Products still fed: not retired and no producing permanent row, plus the stocked ingredients they take."""
+        retired = retired_products(state)
+        own = []
         for row in state["products"]:
+            if row["item"] in retired:
+                continue
             permanent = self.rows_stock(obs, row["item"]) if self.rows_stock is not None else None
             if permanent is None or permanent.get("status") != "producing":
-                items.append(row)
-        return items
+                own.append(row["item"])
+        fed = _closure(state, own)  # a shared gear machine is fed while a fed belt machine takes its gears
+        return [row for row in state["products"] if row["item"] in fed]
 
     def feed_targets(self, obs, state, *, minimum=0, demand=None, contested=frozenset()):
         """``[(deficit, item, chest position)]`` from the demand of each fed product, largest first.
@@ -1058,7 +1145,7 @@ class SupplyCell:
         """
         state = self._live(obs)
         row = next((r for r in state.get("products", []) if r["item"] == item), None)
-        if row is None or state.get("phase") == "retired":
+        if row is None or state.get("phase") == "retired" or item in retired_products(state):
             return None
         if state.get("phase") not in ("verified", "retiring"):
             return {"status": "building", "item": item}
@@ -1078,6 +1165,7 @@ class SupplyCell:
             "wait_seconds_per_unit": round(60.0 / row["units_per_minute"], 4),
             "hand_seconds_per_unit": row["hand_seconds_per_unit"],
             "wait_factor": WAIT_FACTOR,
+            "source": CAPABILITY,  # a waiting job's evidence names the cell (waits_on_cell)
         }
         if stock > 0:
             return dict(result, status="producing")
@@ -1111,7 +1199,8 @@ class SupplyCell:
         if not recipe:
             return None
         runs = math.ceil(missing / _out_amount(recipe, item))
-        stocked = {row["item"]: row for row in state["products"]}
+        retired = retired_products(state)
+        stocked = {row["item"]: row for row in state["products"] if row["item"] not in retired}
         carried = obs.get("inventory") or {}
         chest = self._chest_name(state)
         for row in recipe.get("ingredients") or ():
@@ -1151,11 +1240,10 @@ class SupplyCell:
                 state["phase"] = "retiring"  # feeding stops now
                 state["retiring_tick"] = obs.get("tick")
                 self._save(state)
-            products = {r["item"] for r in state["products"]}
-            dependent = obsolete.active_jobs(
-                self._jobs(obs), exclude=(CAPABILITY,), reason_markers=[f"machine-made {p}" for p in products]
-            )
-            if dependent:
+            products = {r["item"] for r in state["products"]} - retired_products(state)
+            markers = [f"machine-made {p}" for p in sorted(products)]
+            dependent = obsolete.active_jobs(self._jobs(obs), exclude=(CAPABILITY,), reason_markers=markers)
+            if dependent and markers:  # no markers would match every active job
                 return {
                     "status": "waiting",
                     "reason": "supply_cell_retire_waits_for_dependent_jobs",
@@ -1188,6 +1276,127 @@ class SupplyCell:
             "status": "succeeded",
             "reason": "temporary supply cell demolished and its block released",
             "evidence": evidence,
+        }
+
+    def _retire_product(self, obs, item):
+        """Retire one product whose permanent ``produce`` row is producing (obsolete-block rule, one product).
+
+        Record it retired (stock hook and own feed stop), then mine the machines,
+        inserters and chests that serve only the products no remaining product
+        needs (``dismantled_products``; the chest contents return to the
+        inventory), and drop them from the board block so their tiles are free.
+        A shared machine (gears for a remaining belt machine) stays.
+        """
+        state = self.state()
+        products = [r["item"] for r in state.get("products", [])]
+        if not state or item not in products:
+            return {"status": "succeeded", "reason": "not a supply cell product", "evidence": {"tick": obs.get("tick")}}
+        if not self._live(obs):
+            return {"status": "blocked", "reason": "supply_cell_world_or_catalog_changed"}
+        if state.get("phase") in ("retiring", "retired"):
+            return {
+                "status": "succeeded",
+                "reason": "the whole supply cell retires",
+                "evidence": self.retire_product_proof(obs, item),
+            }
+        if state.get("phase") != "verified":
+            return {"status": "blocked", "reason": "supply_cell_not_verified"}
+        if item not in retired_products(state):
+            permanent = self.rows_stock(obs, item) if self.rows_stock is not None else None
+            if not isinstance(permanent, dict) or permanent.get("status") != "producing":
+                return {
+                    "status": "blocked",
+                    "reason": "supply_cell_product_has_no_producing_row",
+                    "evidence": {"item": item, "row": (permanent or {}).get("status")},
+                }
+            waiting = [
+                j.get("key") for j in self._jobs(obs) if j.get("capability") != CAPABILITY and waits_on_cell(j, item)
+            ]
+            if waiting:
+                return {
+                    "status": "waiting",
+                    "reason": "supply_cell_retire_waits_for_dependent_jobs",
+                    "evidence": {"item": item, "jobs": waiting},
+                }
+            state.setdefault("retired_products", {})[item] = obs.get("tick")  # feeding and the stock hook stop now
+            state["chest_name"] = self._chest_name(state)
+            self._save(state)
+        remove = [e for p in sorted(dismantled_products(state)) for e in owned_entities(state, p)]
+        live = [(e, self._find(obs, e["name"], e["position"])) for e in remove]
+        room = obsolete.room_action(obs, obsolete.slots_needed(self.catalog, [x for _, x in live if x]))
+        if room is not None:
+            return room
+        rank = {INSERTER: 0, MACHINE: 1}
+        for e, found in sorted(live, key=lambda pair: rank.get(pair[0]["name"], 2)):
+            action = obsolete.guarded_mine(
+                found and dict(found, position=e["position"]),
+                obs["world_id"],
+                f"demolish the supply cell machines that only made the retired {item}",
+            )
+            if action is not None:
+                return action
+        if remove:
+            self._release_entities(state, remove)
+            self._save(state)
+            published = self._publish(obs, state)
+            if published:
+                return published
+        evidence = self.retire_product_proof(obs, item)
+        if evidence is None:
+            return {"status": "waiting", "reason": "supply_cell_product_demolition_not_observed_yet"}
+        return {
+            "status": "succeeded",
+            "reason": f"supply cell no longer makes {item}: a permanent row does",
+            "evidence": evidence,
+        }
+
+    @staticmethod
+    def _release_entities(state, removed):
+        """Drop mined entities from the plan (board block), its ports, item counts and reserved area."""
+        from collections import Counter
+
+        plan = state["plan"]
+        gone = {(e["name"], *_xy(e)) for e in removed}
+        spots = {_xy(e) for e in removed}
+        plan["entities"] = [e for e in plan["entities"] if (e["name"], *_xy(e)) not in gone]
+        plan["ports"] = [p for p in plan.get("ports") or () if (p["position"]["x"], p["position"]["y"]) not in spots]
+        plan["required_items"] = dict(Counter(e.get("item") or e["name"] for e in plan["entities"]))
+        old = plan.get("reserved_area")
+        inside = [
+            e
+            for e in plan["entities"]
+            if not old
+            or (old[0][0] <= e["position"]["x"] <= old[1][0] and old[0][1] <= e["position"]["y"] <= old[1][1])
+        ]
+        if inside:
+            plan["reserved_area"] = _area(inside)
+        state.setdefault("dismantled", []).extend({"name": e["name"], "position": dict(e["position"])} for e in removed)
+
+    def retire_product_proof(self, obs, item):
+        """The product is retired, nothing dismantled for it stands, and the board block no longer holds it."""
+        state = self.state()
+        if not state or item not in [r["item"] for r in state.get("products", [])]:
+            return {"tick": obs.get("tick"), "retired": "not a supply cell product"}
+        if state.get("world_id") != obs.get("world_id"):
+            return None
+        if state.get("phase") in ("retiring", "retired"):
+            return {"tick": obs.get("tick"), "item": item, "whole_cell": state["phase"]}
+        if item not in retired_products(state):
+            return None
+        mined = state.get("dismantled") or []
+        if any(self._find(obs, e["name"], e["position"]) for e in mined):
+            return None
+        block = Board(self.game, self.builder, self.catalog).state.get("blocks", {}).get(BLOCK) or {}
+        spots = {(e["name"], *_xy(e)) for e in mined}
+        if any((e["name"], *_xy(e)) in spots for e in block.get("entities") or ()):
+            return None
+        return {
+            "tick": obs.get("tick"),
+            "item": item,
+            "retired_tick": state["retired_products"][item],
+            "dismantled_products": sorted(dismantled_products(state)),
+            "machines_kept": item in kept_products(state),  # a remaining product still takes its stock
+            "entities_mined": len(mined),
         }
 
     def _plates_inside(self, obs, state):
@@ -1243,8 +1452,14 @@ def chain_stock(rows_hook, cell_hook):
 
 
 def validate_parameters(parameters):
-    """``{"products": [1..6 distinct item names]}`` to build, ``{"retire": true}`` to demolish."""
+    """``{"products": [1..6 distinct item names]}`` to build, ``{"retire": true}`` to demolish,
+    ``{"retire_product": item}`` to retire one product of the cell."""
     if parameters == {"retire": True}:
+        return
+    if isinstance(parameters, dict) and set(parameters) == {"retire_product"}:
+        item = parameters["retire_product"]
+        if not isinstance(item, str) or not 0 < len(item) <= 64:
+            raise ValueError("supply_cell retire_product must be an item name")
         return
     if not isinstance(parameters, dict) or set(parameters) != {"products"}:
         raise ValueError("supply_cell takes products (list of items) or retire: true")
@@ -1305,7 +1520,7 @@ def supply_cell_nodes(jobs, queue_nodes, observation, capabilities):
         ]
     if any((r.get("parameters") or {}).get("retire") for r in mine):
         return []
-    builds = [j for j in jobs if j.get("capability") == CAPABILITY]
+    builds = [j for j in jobs if j.get("capability") == CAPABILITY and "products" in (j.get("parameters") or {})]
     built = [j for j in builds if j.get("status") == "succeeded"]
     if not built:
         if builds and all(_abandoned(j, observation.get("tick")) for j in builds):
@@ -1318,6 +1533,23 @@ def supply_cell_nodes(jobs, queue_nodes, observation, capabilities):
         for j in jobs
         if j.get("capability") == "produce" and j.get("status") == "succeeded"
     }
-    if not all(demand.get(p, 0) <= HANDCRAFT_LIMIT or p in permanent for p in products):
-        return []
-    return [_retire_node("supply cell products have a permanent source or no remaining demand: drain and demolish")]
+    if all(demand.get(p, 0) <= HANDCRAFT_LIMIT or p in permanent for p in products):
+        return [_retire_node("supply cell products have a permanent source or no remaining demand: drain and demolish")]
+    # One product at a time: a product with a permanent produce row retires alone (its machines are
+    # mined unless a remaining product takes its stock); never while a job waits for its cell stock.
+    taken = {(r.get("parameters") or {}).get("retire_product") for r in mine}
+    for item in products:
+        if item not in permanent or item in taken:
+            continue
+        if any(waits_on_cell(j, item) for j in jobs if j.get("capability") != CAPABILITY):
+            continue
+        return [
+            obsolete.retire_node(
+                f"{RETIRE_NODE_ID}_{item}",
+                CAPABILITY,
+                {"retire_product": item},
+                f"{item} has a permanent produce row: stop feeding it and mine the cell machines that only make it",
+                RETIRE_PRIORITY,
+            )
+        ]
+    return []

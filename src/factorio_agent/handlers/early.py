@@ -112,6 +112,8 @@ def supply_cell_step(ex, obs, parameters):
 def supply_cell_proof(ex, obs, result, parameters):
     if (parameters or {}).get("retire"):
         return ex.supply_cell.retire_proof(obs)
+    if "retire_product" in (parameters or {}):
+        return ex.supply_cell.retire_product_proof(obs, parameters["retire_product"])
     return ex.supply_cell.proof(obs)
 
 

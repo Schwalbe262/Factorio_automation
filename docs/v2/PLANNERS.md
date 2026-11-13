@@ -195,6 +195,8 @@ build    node auto_supply_cell {"products": chosen} once per map, priority -52, 
 retire   node auto_supply_cell_retire {"retire": true} once, priority -1000, when
            the build job succeeded and every product has demand <= HANDCRAFT_LIMIT or a succeeded produce job, or
            every build job is blocked/failed for ABANDON_TICKS (36000) since blocked_at_tick
+retire one  else node auto_supply_cell_retire_<item> {"retire_product": item} once per item, priority -1000, when
+           a produce job for it succeeded and no active job waits for its cell stock (waits_on_cell)
 ```
 
 | Phase | Rule |
@@ -204,6 +206,7 @@ retire   node auto_supply_cell_retire {"retire": true} once, priority -1000, whe
 | build | `ensure_plan`, bar `OUTPUT_STACKS` (2) on each product chest, first feed for `PROOF_UNITS` (2), proof: every machine finished products, every product chest holds stock |
 | use | `ensure_item` collects from the product chest; above `HANDCRAFT_LIMIT` it waits when `(missing - stock) * wait_s <= WAIT_FACTOR * missing * hand_s` (`construction_supply._waiting_pays`), else hand crafts; before a hand craft with no finished stock to collect it takes the stocked direct ingredients the craft lacks (`intermediate_take`, batched `_take_output`); an unfed cell (`starved`) is fed from hand first; no progress for `STALL_TICKS` = hand crafting resumes |
 | feed (pre-production) | target per input chest = `min(FEED_CAP 100, ceil(need * raw per unit))`, need = demand - product stock - carried, demand = the whole upcoming demand, so stock for the next steps is made while the current one waits; a plate that another active job waits for (`contested_plates`: reason "waiting ... <plate>" or evidence item) feeds only `current` demand and is never collected from furnaces by the idle lane; a trip only when the deficit is >= `FEED_BATCH` (10) or covers the whole target; shared upkeep inserts only plates beyond `FEED_RESERVE` (50); no feed for a product whose `produce` row is producing |
+| retire one product | job blocks until the item's produce row is `producing` (`rows_stock`), waits while a job waits for its cell stock, then records `retired_products[item]` (no stock hook, no own feed, no `intermediate_take`); `dismantled_products` = retired products no remaining product takes as a stocked input (transitively), so a shared gear machine stays and is still fed for a remaining belt/inserter machine; `owned_entities` from the node graph (machines of its nodes, inserters 2 tiles from them, its input and product chests) are mined inserters first (room check, guarded `mine`, chest stock to the inventory), then dropped from the plan and the board block (ports, `required_items`, `reserved_area` shrink) |
 | retire | feeding stops (`phase: retiring`); waits while any job waits for "machine-made <product>", and at most `DRAIN_TICKS` (3600) while input chests of a barred cell still hold plates; mines inserters, machines, chests (paid, guarded `mine`, contents return to the inventory); keeps poles (other chains may hang on them); removes board block `supply_cell`; `phase: retired` is never proposed again |
 
 Keep the estimate honest: `DemandTests.test_builds_constants_cover_the_offline_plans`
@@ -267,7 +270,7 @@ node         proposed once (a blocked job is auto-retried, never proposed twice)
 
 | Block | Successor verified | Module |
 |---|---|---|
-| supply cell | every product has a succeeded `produce` row or demand <= `HANDCRAFT_LIMIT` | `supply_cell.py` |
+| supply cell | every product has a succeeded `produce` row or demand <= `HANDCRAFT_LIMIT`; one product alone when its `produce` row is producing | `supply_cell.py` |
 | starter cells of r | `PERMANENT_SOURCES[r]` + board source; coal last | `starter_retirement.py` |
 | startup science cell + slot labs + starter lab | see below | `science_retirement.py` |
 | hand-fed boiler fuelling | dedicated coal belt (phase switch, nothing mined) | `power_coal_feed.py` |
