@@ -131,6 +131,14 @@ class WorldBoundGame(DeterministicGame):
             from .defense_relocation import execute_reconcile_retirement
 
             return self._record_action(action, execute_reconcile_retirement(self, action))
+        if action.get("type") == "build_fluid_distribution":
+            from .fluid_distribution import execute_build_fluid_distribution
+
+            return self._record_action(action, execute_build_fluid_distribution(self, action))
+        if action.get("type") == "configure_advanced_petroleum":
+            from .advanced_petroleum import execute_configure_advanced_petroleum
+
+            return self._record_action(action, execute_configure_advanced_petroleum(self, action))
         if action.get("type") == "build_furnace_gap":
             from .furnace_gap import execute_gap_build
 

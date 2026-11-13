@@ -13,6 +13,7 @@ MODULES = (
     "smelting_and_science",
     "bus_and_industry",
     "fluids",
+    "late_fluids",
     "defense",
 )
 

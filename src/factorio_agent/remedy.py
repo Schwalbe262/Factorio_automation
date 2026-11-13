@@ -159,6 +159,10 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
             note="crude-oil survey rings widened from 512 to the hard maximum of 1024 tiles, scouting included",
         ),
     ),
+    # Late fluids: their typed pipe routes (chemical_production.plan_typed_fluid_connection) read route_relax.
+    "advanced_petroleum": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    "fluid_product": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    "fluid_distribution": (ROUTE_RELAX_1, ROUTE_RELAX_2),
 }
 
 

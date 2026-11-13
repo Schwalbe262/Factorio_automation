@@ -261,6 +261,104 @@ def material_flow(catalog, targets: Mapping[Key, float]) -> dict:
     return {"order": order, "choices": choices, "amounts": amounts, "crafts": dict(crafts), "surplus": surplus}
 
 
+def cracking_chain(catalog, refinery: Mapping) -> list[dict]:
+    """Cracking recipes between the fluid coproducts of ``refinery``, heaviest first.
+
+    A cracking recipe here: one coproduct in (plus raw water), one other coproduct out
+    (``heavy-oil-cracking``, ``light-oil-cracking`` in vanilla). Ordered so each stage
+    feeds the next (heavy -> light -> gas)."""
+    products = {_material(p) for p in refinery["products"] if p.get("type") == "fluid"}
+    raw = catalog._raw
+    found = {}
+    for recipe in catalog.recipes.values():
+        if recipe.get("hidden") or len(recipe["products"]) != 1:
+            continue
+        ins = [_material(i) for i in recipe["ingredients"]]
+        out = _material(recipe["products"][0])
+        fed = [k for k in ins if k in products]
+        if out in products and len(fed) == 1 and fed[0] != out and all(k in products or k in raw for k in ins):
+            found.setdefault(fed[0], recipe)
+    chain, seen = [], set()
+    starts = [k for k in found if not any(_material(r["products"][0]) == k for r in found.values())]
+    for key in sorted(starts):
+        while key in found and key not in seen:
+            seen.add(key)
+            chain.append(found[key])
+            key = _material(found[key]["products"][0])
+    return chain
+
+
+def crack_balance(catalog, flow: dict) -> dict:
+    """Crack the multi-product refinery's surplus down the chain instead of reporting it (in place).
+
+    The refinery runs only as many crafts as the binding product needs once every
+    surplus of a heavier product is cracked into the next one; what is cracked is
+    sized from the bill (``cracking`` recipe -> crafts). A coproduct that still has
+    surplus after the chain (gas when heavy or light demand binds) is reported in
+    ``surplus``: it would back the refinery up. Raw inputs (crude, water) follow."""
+    multi = [r for r in {r["name"]: r for r in flow["choices"].values()}.values() if len(r["products"]) > 1]
+    flow.setdefault("cracking", {})
+    for refinery in multi:
+        chain = cracking_chain(catalog, refinery)
+        if not chain:
+            continue
+        yields = {_material(p): _yield(p) for p in refinery["products"]}
+        made = {k: v * flow["crafts"].get(refinery["name"], 0.0) for k, v in yields.items()}
+        need = {k: max(0.0, made[k] - flow["surplus"].get(k, 0.0)) for k in yields}
+
+        def run(crafts: float):
+            have = {k: v * crafts for k, v in yields.items()}
+            cracked = {}
+            for recipe in chain:
+                fed = next(_material(i) for i in recipe["ingredients"] if _material(i) in yields)
+                per = next(_amount(i["amount"]) for i in recipe["ingredients"] if _material(i) == fed)
+                extra = max(0.0, have[fed] - need[fed])
+                count = extra / per
+                cracked[recipe["name"]] = count
+                have[fed] -= extra
+                out = recipe["products"][0]
+                have[_material(out)] += _yield(out) * count
+            return have, cracked
+
+        old = flow["crafts"].get(refinery["name"], 0.0)
+        if old <= 0:
+            continue
+        lo, hi = 0.0, old
+        for _ in range(80):
+            mid = (lo + hi) / 2
+            have, _ = run(mid)
+            if all(have[k] + 1e-9 >= need[k] for k in yields):
+                hi = mid
+            else:
+                lo = mid
+        have, cracked = run(hi)
+        flow["crafts"][refinery["name"]] = hi
+        for key, value in yields.items():
+            if key in flow["amounts"] or have[key] > 1e-9:
+                flow["amounts"][key] = need[key] + max(0.0, have[key] - need[key])
+            surplus = have[key] - need[key]
+            if surplus > 1e-6:
+                flow["surplus"][key] = surplus
+            else:
+                flow["surplus"].pop(key, None)
+        delta = {}
+        for ingredient in refinery["ingredients"]:
+            key = _material(ingredient)
+            delta[key] = delta.get(key, 0.0) + _amount(ingredient["amount"]) * (hi - old)
+        for recipe in chain:
+            count = cracked[recipe["name"]]
+            flow["crafts"][recipe["name"]] = count
+            flow["cracking"][recipe["name"]] = count
+            for ingredient in recipe["ingredients"]:
+                key = _material(ingredient)
+                if key not in yields:
+                    delta[key] = delta.get(key, 0.0) + _amount(ingredient["amount"]) * count
+        for key, change in delta.items():
+            if key not in flow["choices"]:  # raw sources only (crude, water)
+                flow["amounts"][key] = max(0.0, flow["amounts"].get(key, 0.0) + change)
+    return flow
+
+
 def machine_for(catalog, recipe: Mapping) -> tuple[str, float] | None:
     """Slowest non-character crafting machine of the recipe's category (a first build, conservative)."""
     categories = set(recipe.get("categories") or ())
@@ -332,6 +430,10 @@ def _capability_products(catalog) -> dict[str, dict]:
     for product in sorted(FLUID_PRODUCTS):
         add(recipe_of(product, "fluid"), "fluid_product", {"product": product}, module="fluid_products")
     return table
+
+
+# Research a block needs beyond its recipes' unlocks (advanced_petroleum: the crackers' circuit control).
+EXTRA_RESEARCH = {"advanced_petroleum": ("advanced-oil-processing", "circuit-network")}
 
 
 def _roadmap_capabilities() -> set[tuple[str, str]]:
@@ -535,11 +637,21 @@ def rocket_bill(
     total_targets = dict(silo_targets)
     for key, value in rocket_targets.items():
         total_targets[key] = total_targets.get(key, 0.0) + value
-    total = material_flow(catalog, total_targets)
-    silo_flow = material_flow(catalog, silo_targets)
-    rocket_flow = material_flow(catalog, rocket_targets)
+    total = crack_balance(catalog, material_flow(catalog, total_targets))
+    silo_flow = crack_balance(catalog, material_flow(catalog, silo_targets))
+    rocket_flow = crack_balance(catalog, material_flow(catalog, rocket_targets))
 
+    producers = classify(catalog, total, silo=silo, silo_name=silo_name, payload=payload)
     technologies = remaining_technologies(catalog, researched)
+    known = {row["name"] for row in technologies}
+    for capability in sorted({row["capability"] for row in producers.values()}):
+        for target in EXTRA_RESEARCH.get(capability, ()):
+            if target not in catalog.technologies:
+                continue
+            for row in remaining_technologies(catalog, researched, target=target):
+                if row["name"] not in known:
+                    known.add(row["name"])
+                    technologies.append(row)
     depth = {}
     for index, key in enumerate(total["order"]):
         if key in total["choices"]:
@@ -555,7 +667,6 @@ def rocket_bill(
         for recipe in row["unlocks"]:
             unlocked_by.setdefault(recipe, row["name"])
 
-    producers = classify(catalog, total, silo=silo, silo_name=silo_name, payload=payload)
     belt_rate = _belt_rate()
     consumers: dict[Key, set[str]] = defaultdict(set)
     for recipe_key, recipe in total["choices"].items():
@@ -636,6 +747,7 @@ def rocket_bill(
         "items": items,
         "raw": _rows({k: v for k, v in total["amounts"].items() if k not in total["choices"]}),
         "surplus": _rows(total["surplus"]),
+        "cracking": _cracking_rows(catalog, total, minutes),
         "bus": bus,
         "gaps": [{"capability": c, "status": s, "items": _gap_items(items, c)} for c, s in gaps],
         "assumptions": [
@@ -644,10 +756,41 @@ def rocket_bill(
             "factory construction and operating fuel excluded",
             "machine counts at the slowest machine of each category",
             "an item a multi-product recipe of the plan yields comes from that recipe",
-            "no cracking: coproducts above the need are reported as surplus",
+            "refinery coproducts above the need are cracked down the chain (crack_balance); what is left is surplus",
         ],
         "catalog_fingerprint": catalog.fingerprint,
     }
+
+
+def _cracking_rows(catalog, flow: Mapping, minutes: float) -> list[dict]:
+    """Cracking stages sized from the bill, with machines and whether the advanced block's plants carry them."""
+    rows = []
+    try:
+        from .advanced_petroleum import advanced_petroleum_rates
+
+        block = advanced_petroleum_rates(catalog)
+    except (KeyError, ValueError, TypeError):
+        block = None
+    capacity = {}
+    if block is not None:
+        capacity = {
+            "heavy-oil-cracking": block["heavy_cracking_crafts_required"],
+            "light-oil-cracking": block["light_cracking_crafts_required"],
+        }
+    for name, crafts in sorted(flow.get("cracking", {}).items()):
+        recipe = catalog.recipes[name]
+        machine = machine_for(catalog, recipe)
+        per_minute = crafts / minutes
+        row = {"recipe": name, "crafts": round(crafts, 3), "crafts_per_minute": round(per_minute, 3)}
+        if machine:
+            row["machine"] = machine[0]
+            row["machines"] = round(per_minute * float(recipe["energy"]) / 60.0 / machine[1], 2)
+        if name in capacity:
+            # The block's single cracker of this stage runs at most the refinery's full byproduct rate.
+            row["block_crafts_per_minute"] = round(capacity[name], 3)
+            row["fits_block"] = per_minute <= capacity[name] + 1e-9
+        rows.append(row)
+    return rows
 
 
 def _gap_items(items: list[dict], capability: str) -> list[str]:
@@ -737,9 +880,37 @@ def tail(bill: Mapping, *, existing: Iterable[str] = (), researched_by: Mapping[
         by_tech[tech["name"]] = node
     produced: dict[str, str] = {}
     makers = {r["recipe"]: r["producer"] for r in bill["items"] if r.get("recipe")}
+    supply = FluidSupply()
     for row in bill["items"]:
         producer = row["producer"]
-        if producer["kind"] != "generic" or producer["status"] == "roadmap":
+        if producer["status"] == "roadmap" or producer["kind"] not in ("generic", "block"):
+            continue
+        if producer["kind"] == "block":
+            # A registered block the hand-written roadmap does not build (advanced_petroleum, fluid_product).
+            node = step_id("rocket", producer["capability"], *map(str, producer["parameters"].values()))
+            produced[row["item"]] = node
+            if node in known:
+                continue
+            after = [TAIL_ANCHOR]
+            tech = row.get("technology")
+            if tech and by_tech.get(tech) in known:
+                after.append(by_tech[tech])
+            for extra in EXTRA_RESEARCH.get(producer["capability"], ()):
+                if by_tech.get(extra) in known:
+                    after.append(by_tech[extra])
+            for fluid, key in fluid_inputs(producer["capability"], producer["parameters"]).items():
+                for supply_row in supply.rows(fluid, key, produced, known):
+                    add(supply_row)
+                after.append(supply.node_of(key))
+            after += sorted({produced[c] for c in _inputs(bill, row) if c in produced and produced[c] != node})
+            add(
+                {
+                    "id": node,
+                    "capability": producer["capability"],
+                    "parameters": dict(producer["parameters"]),
+                    "after": sorted(set(after), key=after.index),
+                }
+            )
             continue
         if (
             producer["capability"] == PRODUCE
@@ -767,6 +938,89 @@ def tail(bill: Mapping, *, existing: Iterable[str] = (), researched_by: Mapping[
     add({"id": STAGE_PARTS, "capability": STAGE_PARTS, "parameters": {}, "after": [STAGE_SILO]})
     add({"id": STAGE_LAUNCH, "capability": STAGE_LAUNCH, "parameters": {}, "after": [STAGE_PARTS]})
     return rows
+
+
+def fluid_inputs(capability: str, parameters: Mapping) -> dict[str, str]:
+    """Fluid -> the source key a block reads (its module's own declaration)."""
+    if capability == "advanced_petroleum":
+        from .advanced_petroleum import INPUT_KEYS
+
+        return dict(INPUT_KEYS)
+    if capability == "fluid_product":
+        from .fluid_products import SOURCE_KEYS
+
+        return dict(SOURCE_KEYS.get(parameters.get("product"), {}))
+    return {}
+
+
+# Where a fluid is published before any distribution (fluid-sources.json registry keys).
+PUBLISHED_FLUID = {
+    "petroleum-gas": "advanced-petroleum-gas",
+    "light-oil": "light-oil",
+    "heavy-oil": "heavy-oil",
+    "sulfuric-acid": "sulfuric-acid",
+    "lubricant": "lubricant",
+}
+FLUID_PRODUCER = {
+    "petroleum-gas": "advanced-petroleum-gas",
+    "light-oil": "light-oil",
+    "heavy-oil": "heavy-oil",
+}
+
+
+class FluidSupply:
+    """Supply rows that publish one consumer's source key (``fluid_supply_rows`` rule).
+
+    Water and crude: an independent namespaced intake / pumpjack (``water_gathering`` /
+    ``oil_gathering`` with ``source_key``). A produced fluid: a ``fluid_distribution``
+    header splitting the fluid's current free outlet into the consumer's key and the next
+    free outlet (``<port>-2``, ``<port>-3``, ...), so N consumers form a chain and
+    no outlet is claimed twice (fluid_handoffs)."""
+
+    def __init__(self):
+        self.free: dict[str, str] = {}
+        self.count: dict[str, int] = {}
+        self.nodes: dict[str, str] = {}
+
+    def node_of(self, key: str) -> str:
+        return self.nodes[key]
+
+    def rows(self, fluid: str, key: str, produced: Mapping[str, str], known: set) -> list[dict]:
+        if key in self.nodes:
+            return []
+        if fluid == "water":
+            node = step_id("rocket", "water", key)
+            self.nodes[key] = node
+            return [
+                {"id": node, "capability": "water_gathering", "parameters": {"source_key": key}, "after": [TAIL_ANCHOR]}
+            ]
+        if fluid == "crude-oil":
+            node = step_id("rocket", "crude", key)
+            self.nodes[key] = node
+            return [
+                {"id": node, "capability": "oil_gathering", "parameters": {"source_key": key}, "after": [TAIL_ANCHOR]}
+            ]
+        port = PUBLISHED_FLUID.get(fluid, fluid)
+        current = self.free.get(fluid, port)
+        number = self.count.get(fluid, 1) + 1
+        self.count[fluid] = number
+        spare = f"{port}-{number}"
+        self.free[fluid] = spare
+        node = step_id("rocket", "split", key)
+        self.nodes[key] = node
+        after = [TAIL_ANCHOR] + [produced[fluid]] * (fluid in produced)
+        previous = next((n for k, n in self.nodes.items() if k == current), None)
+        if previous:
+            after.append(previous)
+        self.nodes[spare] = node
+        return [
+            {
+                "id": node,
+                "capability": "fluid_distribution",
+                "parameters": {"source_key": current, "aliases": [key, spare]},
+                "after": after,
+            }
+        ]
 
 
 def _makes_own_inputs(producer: Mapping | None) -> bool:

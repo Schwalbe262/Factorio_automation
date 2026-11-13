@@ -305,12 +305,12 @@ CAPABILITIES = {
         "effect": "normally build defended automatic stone/coal brick furnaces with fixed ports and prove native output",
     },
     "oil_gathering": {
-        "parameters": {},
+        "parameters": {"source_key": "optional: an independent namespaced crude source (advanced-crude)"},
         "requires": ["steel_production"],
         "effect": "normally build a defended powered pumpjack and real crude pipe outlet; naturally trigger native oil-processing research by extraction",
     },
     "water_gathering": {
-        "parameters": {},
+        "parameters": {"source_key": "optional: an independent namespaced intake (advanced-water, acid-water)"},
         "requires": ["power"],
         "effect": "normally build an independent defended shore intake with a typed water output while preserving existing steam-water pumps and their connections",
     },
@@ -338,6 +338,22 @@ CAPABILITIES = {
         "parameters": {},
         "requires": ["basic_petroleum"],
         "effect": "normally build a protected shared gas header before chemical consumers, preserve the original outlet and publish separate plastic/sulfur edges without multiplying source capacity",
+    },
+    "advanced_petroleum": {
+        "parameters": {},
+        "requires": ["basic_petroleum", "oil_gathering", "water_gathering"],
+        "native_recipes": ["advanced-oil-processing", "heavy-oil-cracking", "light-oil-cracking"],
+        "effect": "normally build a defended advanced refinery with circuit-controlled heavy and light cracking plants on the namespaced advanced-crude/advanced-water sources; prove all three products and publish heavy-oil, light-oil and advanced-petroleum-gas outlets",
+    },
+    "fluid_product": {
+        "parameters": {"product": "sulfuric-acid|lubricant"},
+        "requires": ["basic_petroleum", "water_gathering"],
+        "effect": "normally build chemical cells for sulfuric acid (water, gas, sulfur, iron tap) or lubricant (heavy oil) on exact published fluid sources; prove native fluid output and publish it",
+    },
+    "fluid_distribution": {
+        "parameters": {"source_key": "published fluid source", "aliases": "two new distinct outlet names"},
+        "requires": ["basic_petroleum"],
+        "effect": "normally build a same-fluid two-outlet header on an unclaimed published source and publish both outlets without multiplying source capacity",
     },
     "advanced_circuit_production": {
         "parameters": {},

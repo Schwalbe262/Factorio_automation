@@ -56,6 +56,12 @@ def space_age_catalog():
             {"fluid:water": 50, "fluid:crude-oil": 100},
             {"fluid:heavy-oil": 25, "fluid:light-oil": 45, "fluid:petroleum-gas": 55},
         ),
+        "heavy-oil-cracking": _recipe(
+            "chemistry", 2, {"fluid:water": 30, "fluid:heavy-oil": 40}, {"fluid:light-oil": 30}
+        ),
+        "light-oil-cracking": _recipe(
+            "chemistry", 2, {"fluid:water": 30, "fluid:light-oil": 30}, {"fluid:petroleum-gas": 20}
+        ),
         "plastic-bar": _recipe("chemistry", 1, {"coal": 1, "fluid:petroleum-gas": 20}, {"plastic-bar": 2}),
         "sulfur": _recipe("chemistry", 1, {"fluid:water": 30, "fluid:petroleum-gas": 30}, {"sulfur": 2}),
         "sulfuric-acid": _recipe(
@@ -191,7 +197,13 @@ class RocketBillTests(unittest.TestCase):
         result = bill()
         self.assertEqual(item(result, "petroleum-gas")["recipe"], "advanced-oil-processing")
         self.assertEqual(item(result, "light-oil")["recipe"], "advanced-oil-processing")
-        self.assertIn("fluid:heavy-oil", result["surplus"])
+        # Cracking takes the surplus: no refinery product backs up at the bill's ratios.
+        self.assertNotIn("fluid:heavy-oil", result["surplus"])
+        self.assertNotIn("fluid:light-oil", result["surplus"])
+        stages = {row["recipe"]: row for row in result["cracking"]}
+        self.assertEqual(set(stages), {"heavy-oil-cracking", "light-oil-cracking"})
+        self.assertTrue(all(row["machine"] == "chemical-plant" for row in stages.values()))
+        self.assertGreater(stages["heavy-oil-cracking"]["crafts"], 0)  # light oil binds here: heavy is cracked
 
     def test_every_item_names_its_producer_and_status(self):
         result = bill()
@@ -205,8 +217,8 @@ class RocketBillTests(unittest.TestCase):
             "processing-unit": ("fluid_assembly", "missing"),
             "rocket-fuel": ("fluid_assembly", "missing"),
             "solid-fuel": ("chemical_product", "missing"),
-            "sulfuric-acid": ("fluid_product", "unwired"),
-            "petroleum-gas": ("advanced_petroleum", "unwired"),
+            "sulfuric-acid": ("fluid_product", "wired"),
+            "petroleum-gas": ("advanced_petroleum", "wired"),
             "crude-oil": ("oil_gathering", "roadmap"),
             "rocket-part": ("rocket_parts", "missing"),
             "rocket-silo": ("rocket_silo", "missing"),
