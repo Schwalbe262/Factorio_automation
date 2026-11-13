@@ -69,6 +69,46 @@ def _inside_other_blocks(game, goal, positions):
     return {p for p in positions if any(x0 <= p[0] <= x1 and y0 <= p[1] <= y1 for x0, y0, x1, y1 in areas)}
 
 
+# Extra hop cost of a pole inside a site-plan zone that is not the goal's (or the source's).
+ZONE_POLE_COST = 2.0
+# ... inside the smelting zone, the bus or a bus-side block strip (they are built densely later).
+DENSE_ZONE_POLE_COST = 6.0
+DENSE_ZONE_KINDS = ("smelting", "bus")
+
+
+def _plan_zone_costs(game, world_id, goal):
+    """``[(x0, y0, x1, y1, cost)]`` of site-plan zones and bus strips a bridge pole should keep out of.
+
+    Fleet all-1113-2155 seed 852394612: the iron bank's bridge ran 23 poles straight across the
+    planned smelting zone (a column at x 16.5, then a diagonal); 7 of the 8 district slots stood on
+    a pole and every remaining site failed at the corridor stage. Poles may still cross a zone when
+    no way around exists inside the search box, at an extra cost per pole. Zones holding ``goal``
+    are the caller's own. Any problem reading the plan yields no costs.
+    """
+    try:
+        path = Path(game.cfg.runtime_dir) / "site-plan.json"
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if payload.get("world_id") != world_id:
+            return []
+        plan = payload["plan"]
+        rows = [(z.get("kind"), z["rect"]) for z in plan.get("zones", [])]
+        rows += [("strip", s["rect"]) for s in plan.get("strips", [])]
+    except (AttributeError, OSError, TypeError, ValueError, KeyError):
+        return []
+    costs = []
+    for kind, rect in rows:
+        x0, y0, x1, y1 = rect
+        if x0 <= goal[0] <= x1 and y0 <= goal[1] <= y1:
+            continue
+        cost = DENSE_ZONE_POLE_COST if kind in DENSE_ZONE_KINDS or kind == "strip" else ZONE_POLE_COST
+        costs.append((x0, y0, x1, y1, cost))
+    return costs
+
+
+def _zone_cost(costs, point) -> float:
+    return sum(c for x0, y0, x1, y1, c in costs if x0 <= point[0] <= x1 and y0 <= point[1] <= y1)
+
+
 def plan_connection(game, builder, obs, destination, reserved=()):
     networks = {
         e.get("electric_network_id") for e in obs["entities"] if e["name"] == "steam-engine" and e.get("energy", 0) > 0
@@ -197,6 +237,7 @@ return {ok=true,clear=clear}
     legal -= _foreign_block_points(game, builder, goal, legal) - set(starts)
     if goal not in legal:
         return {"ok": False, "reason": "power_target_footprint_obstructed"}
+    zone_costs = _plan_zone_costs(game, obs.get("world_id"), goal)
     frontier = []
     costs = {}
     parents = {}
@@ -214,7 +255,7 @@ return {ok=true,clear=clear}
             distance = math.dist(node, nxt)
             if distance == 0 or distance > 7:
                 continue
-            cost = costs[node] + 1 + distance * 0.001
+            cost = costs[node] + 1 + distance * 0.001 + (_zone_cost(zone_costs, nxt) if zone_costs else 0)
             if cost < costs.get(nxt, math.inf):
                 costs[nxt] = cost
                 parents[nxt] = node
