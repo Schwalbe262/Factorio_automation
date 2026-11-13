@@ -150,6 +150,7 @@ class StarterExecutors:
         from .inventory_storage import InventoryStorage
 
         self.storage = InventoryStorage(game, catalog)
+        self.storage.keep_extra = self._rocket_claims  # silo / payload materials stay carried
         from .carried_surplus import CarriedSurplus
 
         # Carried fuel/ore beyond known demand goes into consumers, then storage chests (depots).
@@ -350,6 +351,42 @@ class StarterExecutors:
         self.industrial_mode = any(
             j["capability"] == "smelting_district" and j["status"] == "succeeded" for j in ledger["jobs"].values()
         )
+
+    def _rocket_claims(self, obs):
+        """``{item: units}`` an active rocket stage job collects (its ``evidence.needs``), for storage."""
+        from .rocket_stages import STAGES
+
+        claims: dict = {}
+        for job in self._same_world_jobs(obs) or ():
+            if job.get("capability") not in STAGES or not is_active(job):
+                continue
+            needs = (job.get("evidence") or {}).get("needs")
+            for item, units in (needs or {}).items() if isinstance(needs, dict) else ():
+                if isinstance(units, (int, float)) and not isinstance(units, bool):
+                    claims[item] = max(claims.get(item, 0), int(units))
+        return claims
+
+    def _rocket_silo(self):
+        """The ``rocket_silo`` controller (lazy: the catalog's silo is read on first use)."""
+        if getattr(self, "rocket_silo", None) is None:
+            from .rocket_stages import RocketSilo
+
+            self.rocket_silo = RocketSilo(self.game, self.builder, self.bootstrap, self.catalog, site=self.site)
+        return self.rocket_silo
+
+    def _rocket_parts(self):
+        if getattr(self, "rocket_parts", None) is None:
+            from .rocket_feed import RocketParts
+
+            self.rocket_parts = RocketParts(self.game, self.builder, self.bootstrap, self.catalog, self._rocket_silo())
+        return self.rocket_parts
+
+    def _rocket_launch(self):
+        if getattr(self, "rocket_launch", None) is None:
+            from .rocket_feed import RocketLaunch
+
+            self.rocket_launch = RocketLaunch(self.game, self.bootstrap, self.catalog, self._rocket_silo())
+        return self.rocket_launch
 
     def _piercing_factory(self):
         if self.piercing_ammo is None:

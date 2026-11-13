@@ -15,6 +15,7 @@ MODULES = (
     "fluids",
     "late_fluids",
     "defense",
+    "rocket",
 )
 
 

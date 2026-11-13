@@ -457,6 +457,7 @@ def analyse(root: Path) -> dict:
         "end_minute": round(end / 3600, 1),
         "waste": w.as_dict(),
         "remedies": remedies,
+        "critical_chain": critical_chain(root, run),
     }
 
 
@@ -483,6 +484,195 @@ def actor_death_waste(root, end, w) -> list[dict]:
             },
         )
     return rows
+
+
+# --- critical chain ---------------------------------------------------------------------
+# Segments of the chain to the owner's 20-minute target (smelting district + main bus), each with
+# the constraint that bound it. Thresholds, documented here:
+# - research: lab-limited when elapsed <= LAB_BOUND_SLACK x the catalog lab time on the labs built
+#   when the drill research started; fewer than 2 labs is named (owner: 2 labs first).
+# - producer: the district's first bank (every plan entity before the second bank's first, the
+#   producer-first prefix) is complete; its last entity names the wait; a splitter/underground
+#   finished within RESEARCH_GATE_MINUTES of the logistics research is the research.
+# - district / bus: plate-bound when at least PLATE_SHORT_SHARE of the iron takes in the segment
+#   moved less than they asked for (the starter furnaces were empty).
+LAB_BOUND_SLACK = 1.25
+RESEARCH_GATE_MINUTES = 1.0
+PLATE_SHORT_SHARE = 0.4
+CHAIN_RESEARCH = ("electric-mining-drill", "logistics")
+
+
+def _job_end(run, capability, **parameters):
+    ticks = [
+        run.end[key][0]
+        for key, job in run.jobs.items()
+        if job.get("capability") == capability
+        and run.end.get(key, (0, ""))[1] == "succeeded"
+        and all((job.get("parameters") or {}).get(k) == v for k, v in parameters.items())
+    ]
+    return min(ticks) if ticks else None
+
+
+def _built_ticks(run):
+    out = {}
+    for tick, _key, a in sorted(run.actions, key=lambda r: r[0]):
+        rows = a.get("actions") if a.get("type") == "build_many" else [a] if a.get("type") == "build" else []
+        for b in rows or ():
+            p = b.get("position") or {}
+            out.setdefault((b.get("name"), p.get("x"), p.get("y")), tick)
+    return out
+
+
+def _iron_short_share(run, lo, hi):
+    """Share of iron take/take_many in [lo, hi) that moved less than requested (None without takes)."""
+    pending, rows = {}, []
+    for e in run.events:
+        if e.get("event") == "action_intent":
+            pending[e.get("key")] = e
+        elif e.get("event") == "action_result" and e.get("key") in pending:
+            intent = pending.pop(e.get("key"))
+            a, r = intent.get("action") or {}, e.get("result") or {}
+            tick = intent.get("tick")
+            if a.get("type") in ("take", "take_many") and a.get("item") == "iron-plate" and isinstance(tick, int):
+                if lo <= tick < hi and isinstance(a.get("count"), int):
+                    rows.append((r.get("moved") or 0) < a["count"])
+    return round(sum(rows) / len(rows), 2) if rows else None
+
+
+def _first_bank_prefix(root):
+    try:
+        state = json.loads((root / "smelting-district.json").read_text(encoding="utf-8"))
+        entities = state["plan"]["entities"]
+        banks = state.get("banks") or []
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    first = next((b.get("resource") for b in banks), None)
+    later = {
+        (e["name"], e["position"]["x"], e["position"]["y"])
+        for b in banks
+        if b.get("resource") != first
+        for e in b.get("entities") or ()
+    }
+    prefix = []
+    for e in entities:
+        key = (e["name"], e["position"]["x"], e["position"]["y"])
+        if key in later:
+            break
+        prefix.append(key)
+    return prefix, {(e["name"], e["position"]["x"], e["position"]["y"]) for e in entities}
+
+
+def critical_chain(root, run=None) -> list[dict]:
+    """The chain power -> research -> outposts -> district producer -> district -> bus of one run.
+
+    One row per segment: ``segment``, ``start``/``end`` (game minutes, None when not reached),
+    ``minutes``, ``binding`` (the constraint, rules above) and ``evidence``.
+    """
+    root = Path(root)
+    run = run or cp.Run(root)
+    techs = run.catalog.get("technologies", {})
+    m = lambda tick: None if tick is None else round(tick / 3600, 1)  # noqa: E731
+    power = _job_end(run, "power")
+    research_ticks = {}
+    labs = 0
+    for tick, _key, a in sorted(run.actions, key=lambda r: r[0]):
+        if a.get("type") == "build" and a.get("name") == "lab":
+            labs += 1
+        rows = a.get("actions") if a.get("type") == "build_many" else []
+        labs += sum(1 for b in rows or () if b.get("name") == "lab")
+        if a.get("type") == "research" and a.get("technology") in CHAIN_RESEARCH:
+            research_ticks.setdefault(a["technology"], (tick, labs))
+    drill_start = research_ticks.get(CHAIN_RESEARCH[0])
+    drill = _job_end(run, "bootstrap_research", technology=CHAIN_RESEARCH[0]) or _job_end(
+        run, "starter_research", technology=CHAIN_RESEARCH[0]
+    )
+    logistics = _job_end(run, "bootstrap_logistics")
+    iron = _job_end(run, "mining_outpost", resource="iron-ore")
+    district = _job_end(run, "smelting_district")
+    bus = _job_end(run, "planned_main_bus")
+    rows = [{"segment": "power", "start": 0.0, "end": m(power), "binding": "starter plates", "evidence": {}}]
+    lab_count = drill_start[1] if drill_start else None
+    work = sum(
+        (techs.get(t) or {}).get("unit_count", 0) * (techs.get(t) or {}).get("unit_energy", 0) / 60
+        for t in CHAIN_RESEARCH
+    )
+    research = {"segment": "research", "start": m(drill_start[0]) if drill_start else None, "end": m(logistics)}
+    if drill_start and logistics and lab_count:
+        elapsed = (logistics - drill_start[0]) / 60
+        bound = work / lab_count
+        if lab_count < 2:
+            binding = f"labs: {lab_count} lab"
+        elif elapsed <= LAB_BOUND_SLACK * bound:
+            binding = f"lab time ({lab_count} labs)"
+        else:
+            binding = "pack supply / funding"
+        research["binding"] = binding
+        research["evidence"] = {"labs": lab_count, "lab_bound_s": round(bound), "elapsed_s": round(elapsed)}
+    rows.append(research)
+    rows.append({"segment": "outposts", "start": m(drill), "end": m(iron), "binding": "drill research + build"})
+    producer = {"segment": "producer", "start": None, "end": None}
+    found = _first_bank_prefix(root)
+    built = _built_ticks(run)
+    prefix_end = None
+    if found:
+        prefix, every = found
+        district_builds = [t for k, t in built.items() if k in every]
+        producer["start"] = m(min(district_builds)) if district_builds else None
+        if prefix and all(k in built for k in prefix):
+            last = max(prefix, key=lambda k: built[k])
+            prefix_end = built[last]
+            producer["end"] = m(prefix_end)
+            gated = (
+                last[0] in ("splitter", "underground-belt")
+                and logistics is not None
+                and prefix_end - logistics <= RESEARCH_GATE_MINUTES * 3600
+            )
+            producer["binding"] = "logistics research" if gated else f"waits for {last[0]}"
+            producer["evidence"] = {"last_entity": last[0], "prefix_entities": len(prefix)}
+    rows.append(producer)
+    for name, lo, hi in (("district", prefix_end, district), ("bus", district, bus)):
+        row = {"segment": name, "start": m(lo), "end": m(hi)}
+        if lo is not None and hi is not None:
+            share = _iron_short_share(run, lo, hi)
+            row["binding"] = "plates" if share is not None and share >= PLATE_SHORT_SHARE else "not plates"
+            row["evidence"] = {"short_take_share": share}
+        rows.append(row)
+    for row in rows:
+        row.setdefault("binding", "not reached")
+        row.setdefault("evidence", {})
+        start, end = row.get("start"), row.get("end")
+        row["minutes"] = round(end - start, 1) if start is not None and end is not None else None
+    return rows
+
+
+def _text(value) -> str:
+    return "-" if value is None else str(value)
+
+
+def chain_totals(results) -> list[dict]:
+    """Fleet view of ``critical_chain``: per segment median end, median minutes, binding counts."""
+    by = defaultdict(list)
+    for result in results:
+        for row in result.get("critical_chain") or ():
+            by[row["segment"]].append(row)
+    out = []
+    for segment, rows in by.items():
+        ends = [r["end"] for r in rows if r.get("end") is not None]
+        spans = [r["minutes"] for r in rows if r.get("minutes") is not None]
+        counts = defaultdict(int)
+        for r in rows:
+            counts[r["binding"]] += 1
+        out.append(
+            {
+                "segment": segment,
+                "median_end": round(statistics.median(ends), 1) if ends else None,
+                "median_minutes": round(statistics.median(spans), 1) if spans else None,
+                "reached": len(ends),
+                "runs": len(rows),
+                "binding": dict(sorted(counts.items(), key=lambda kv: -kv[1])),
+            }
+        )
+    return out
 
 
 def idle_with_work(root) -> list[dict]:
@@ -649,6 +839,15 @@ def main(argv=None) -> int:
                 f"  rung  {rung:28s} checked {row['checked']:>3} fitted {row['fitted']:>3} "
                 f"applied {row['applied']:>3} resolved {row['resolved']:>3}"
             )
+    print(
+        "critical chain to the 20-min target (median end min, median segment min, reached; binding constraint x runs):"
+    )
+    for row in chain_totals(results):
+        binding = ", ".join(f"{k} x{v}" for k, v in row["binding"].items())
+        print(
+            f"  {row['segment']:9s} end {_text(row['median_end']):>5} span {_text(row['median_minutes']):>5} "
+            f"{row['reached']:>2}/{row['runs']}  {binding}"
+        )
     if len(results) > 1:
         return 0
     print("top items per type:")

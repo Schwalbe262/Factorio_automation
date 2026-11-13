@@ -83,7 +83,12 @@ COLUMNS = (
     ("smelt", "smelting_district"),
     ("bus", "main_bus"),
     ("red", "automation_science"),
+    ("silo", "rocket_silo"),
+    ("launch", "rocket_launch"),
 )
+# Generated tail stages (rocket_plan.tail, not in progression.ROADMAP) whose success is a milestone:
+# a job of this capability marks the step of the same id; rocket_launch is the final milestone.
+TAIL_STAGES = ("rocket_silo", "rocket_parts", "rocket_launch")
 
 # Problem runs kept alive for inspection (post-mortem). A paused client-free run is its
 # server only: ~0.37-0.45 GB and ~0.01 cores (tick paused, supervisor stopped).
@@ -258,14 +263,20 @@ def milestones(jobs, ends, roadmap, same):
         end = ends.get(key)
         if not end or end[1] != "succeeded" or type(end[0]) is not int:
             continue
+        minute = round(end[0] / TICKS_PER_MINUTE, 1)
         for step in roadmap:
             if same(job, step):
-                minute = round(end[0] / TICKS_PER_MINUTE, 1)
                 reached[step.id] = min(minute, reached.get(step.id, minute))
+        if job.get("capability") in TAIL_STAGES:
+            stage = job["capability"]
+            reached[stage] = min(minute, reached.get(stage, minute))
     furthest = None
     for index, step in enumerate(roadmap):
         if step.id in reached:
             furthest = (index, step.id, reached[step.id])
+    for offset, stage in enumerate(TAIL_STAGES, start=len(roadmap)):
+        if stage in reached:
+            furthest = (offset, stage, reached[stage])
     return reached, furthest
 
 
@@ -419,6 +430,31 @@ def git_commit(code) -> str | None:
         return None
 
 
+# Owner's oldest target: a human player has the smelting area and the main bus within 20 game minutes.
+PACE_TARGET_MINUTES = 20.0
+PACE_STEPS = (("smelt", "smelting_district"), ("bus", "main_bus"))
+
+
+def pace_line(runs, target=PACE_TARGET_MINUTES):
+    """``pace vs target``: per PACE_STEPS column, median minus ``target`` and the share of runs under it.
+
+    A run that never reached the step counts as over the target (it is in the
+    share's denominator, not in the median).
+    """
+    parts = []
+    for head, step in PACE_STEPS:
+        minutes = [r["milestones"].get(step) for r in runs]
+        reached = [m for m in minutes if isinstance(m, (int, float))]
+        under = sum(1 for m in reached if m <= target)
+        if reached:
+            median = round(statistics.median(reached), 1)
+            gap = f"{median} ({median - target:+.1f})"
+        else:
+            gap = "- (never)"
+        parts.append(f"{head} median {gap}, {under}/{len(runs)} under")
+    return f"pace vs target {target:g} min: " + "; ".join(parts)
+
+
 def _cell(value, width):
     text = "-" if value is None else (f"{value:.1f}" if isinstance(value, float) else str(value))
     return text.rjust(width)
@@ -470,6 +506,7 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
         lines.append(key.ljust(20) + _cell(gmin, 5) + "".join(_cell(c, 6) for c in cells) + _cell(lab, 10))
     reached = [(agg["columns"][h] or {}).get("n", 0) for h in heads]
     lines.append("reached".ljust(25) + "".join(_cell(n, 6) for n in reached))
+    lines.append(pace_line(runs))
     load = agg.get("query_load") or {}
     if any(load.values()):
         median = {key: (row or {}).get("median") for key, row in load.items()}

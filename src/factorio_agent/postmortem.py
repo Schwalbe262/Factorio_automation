@@ -280,6 +280,13 @@ DRY_RUN = {
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).prepare(obs),
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).step(obs),
     ),
+    # The rocket tail (rocket_stages / rocket_feed): the silo site and the stage-ii belt feed.
+    "rocket_silo": DryRun(
+        lambda ex, obs, p: ex._rocket_silo().prepare(obs, p), lambda ex, obs, p: ex._rocket_silo().step(obs, p)
+    ),
+    "rocket_parts": DryRun(
+        lambda ex, obs, p: ex._rocket_parts().prepare_feed(obs, p), lambda ex, obs, p: ex._rocket_parts().step(obs, p)
+    ),
     "water_gathering": DryRun(lambda ex, obs, p: ex._water_source(p.get("source_key")).prepare(obs)),
     # Late fluids (rocket tail): every prepare is read-only (advanced_petroleum, fluid_products, fluid_distribution).
     "advanced_petroleum": DryRun(lambda ex, obs, p: ex._advanced_petroleum().prepare(obs)),

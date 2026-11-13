@@ -128,6 +128,7 @@ def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=Non
         "jobs_succeeded": len(milestones),
         "minutes_since_last_success": round(minutes - last_success, 1) if last_success is not None else None,
         "milestones": milestones,
+        "final_milestone": rocket_launch(milestones, jobs),
         "recent_100_actions_top": repeated,
         "recent_repeat_share": repeat_share,
         "planning_seconds": round(planning, 1),
@@ -147,6 +148,30 @@ def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=Non
         "per_job": per_job,
         **incident_report(root, controller),
         **test_mode_label(root),
+    }
+
+
+FINAL_CAPABILITY = "rocket_launch"  # the roadmap's last stage (rocket_feed.RocketLaunch)
+
+
+def rocket_launch(milestones, jobs):
+    """The final milestone: the verified rocket launch (minute of its success), or None while not reached.
+
+    ``verified``: the job's evidence came from the independent proof on a fresh observation
+    (the launch receipt: platform hub built from the delivered pack, rockets_launched above baseline).
+    """
+    row = next((m for m in milestones if m.get("capability") == FINAL_CAPABILITY), None)
+    if row is None:
+        return None
+    job = next(
+        (j for j in jobs.values() if j.get("capability") == FINAL_CAPABILITY and j.get("status") == "succeeded"), {}
+    )
+    evidence = job.get("evidence") if isinstance(job.get("evidence"), dict) else {}
+    return {
+        "capability": FINAL_CAPABILITY,
+        "minute": row["minute"],
+        "verified": job.get("evidence_status") == "verified_postcondition",
+        "rockets_launched": evidence.get("rockets_launched"),
     }
 
 
@@ -339,6 +364,12 @@ def main(argv=None):
             print("milestones (TEST MODE):" if data.get("test_mode") else "milestones:")
             for row in value:
                 print("  {minute:6.1f} min  {capability}  ({reason})".format(**row))
+        elif key == "final_milestone":
+            if value is None:
+                print("final milestone: rocket launch not reached")
+            else:
+                proof = "verified" if value["verified"] else "UNVERIFIED"
+                print(f"final milestone: rocket launch at {value['minute']:.1f} min ({proof})")
         elif key == "per_job":
             print("per_job:")
             for job in value:
