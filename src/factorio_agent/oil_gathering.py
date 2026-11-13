@@ -6,6 +6,7 @@ from copy import deepcopy
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
@@ -86,11 +87,22 @@ def _key(e):
 
 
 class OilGathering:
-    def __init__(self, game, builder, catalog, perimeter):
+    def __init__(self, game, builder, catalog, perimeter, *, source_key="crude-oil"):
+        if not isinstance(source_key, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,47}", source_key):
+            raise ValueError("oil source key must be a bounded registry name")
+        if source_key in ("water", "petroleum-gas", "heavy-oil", "light-oil", "sulfuric-acid", "lubricant"):
+            raise ValueError("oil source key cannot replace another canonical fluid")
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
-        self.path = Path(game.cfg.runtime_dir) / "oil-gathering.json"
+        self.source_key = source_key
+        self.block_id = (
+            "oil_gathering" if source_key == "crude-oil" else "oil_gathering_" + source_key.replace("-", "_")
+        )
+        filename = "oil-gathering.json" if source_key == "crude-oil" else "oil-gathering-" + source_key + ".json"
+        self.path = Path(game.cfg.runtime_dir) / filename
         self.sources_path = self.path.parent / "fluid-sources.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        if self.state and source_key != "crude-oil" and self.state.get("source_key") != source_key:
+            raise ValueError("independent oil source checkpoint belongs to another profile")
 
     def _identity(self, obs, value):
         return (
@@ -120,13 +132,25 @@ class OilGathering:
         board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
         if not self._identity(obs, board):
             return {"ok": False, "reason": "oil_gathering_board_identity_changed"}
+        if self.source_key != "crude-oil" and self.sources_path.exists():
+            registry = json.loads(self.sources_path.read_text(encoding="utf-8"))
+            if not self._identity(obs, registry):
+                return {"ok": False, "reason": "fluid_source_registry_identity_changed"}
+            if registry.get("sources", {}).get(self.source_key):
+                return {"ok": False, "reason": "oil_source_exists_without_intake_checkpoint"}
         reserved = [b["reserved_area"] for b in board.get("blocks", {}).values() if b.get("reserved_area")]
         reserved += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
-        wells = self.game.query("""local wells={};for _,e in pairs(s.find_entities_filtered{position={0,0},radius=384,name="crude-oil",limit=64})do
+        well_query = """local wells={};for _,e in pairs(s.find_entities_filtered{position={0,0},radius=384,name="crude-oil",limit=64})do
  if e.amount>0 then wells[#wells+1]={position=pos(e.position),amount=e.amount}end end
 table.sort(wells,function(a,b)return a.position.x^2+a.position.y^2<b.position.x^2+b.position.y^2 end)
 local selected={};for i=1,math.min(8,#wells)do selected[#selected+1]=wells[i]end
-return {ok=true,wells=selected}""")
+return {ok=true,wells=selected}"""
+        if self.source_key != "crude-oil":
+            well_query = well_query.replace(
+                "if e.amount>0 then",
+                'if e.amount>0 and s.count_entities_filtered{position=e.position,radius=.1,name="pumpjack"}==0 then',
+            )
+        wells = self.game.query(well_query)
         if not wells.get("ok"):
             return wells
         failures = []
@@ -207,6 +231,7 @@ for _,spec in ipairs(specs)do if spec.name=="pipe"then local p=spec.position
                         "defense_preview": defense,
                         "bindings": bindings,
                         "wire_hops": power["wire_hops"],
+                        **({"source_key": self.source_key} if self.source_key != "crude-oil" else {}),
                     }
         return {
             "ok": False,
@@ -247,7 +272,7 @@ for _,spec in ipairs(specs)do if spec.name=="pipe"then local p=spec.position
         board = json.loads(path.read_text(encoding="utf-8"))
         if not self._identity(obs, board):
             return {"status": "blocked", "reason": "oil_gathering_board_identity_changed"}
-        name = "oil_gathering"
+        name = self.block_id
         area = self.state["core"]["reserved_area"]
         old = board["blocks"].get(name)
         if old and old.get("defense_scope_id") != self.state["defense_scope_id"]:
@@ -303,13 +328,13 @@ for _,spec in ipairs(specs)do if spec.name=="pipe"then local p=spec.position
         )
         if not self._identity(obs, registry):
             return {"status": "blocked", "reason": "fluid_source_registry_identity_changed"}
-        old = registry["sources"].get("crude-oil")
+        old = registry["sources"].get(self.source_key)
         if old and (
             old.get("unit_number") != evidence["source"]["unit_number"]
             or old.get("defense_scope_id") != self.state["defense_scope_id"]
         ):
             return {"status": "blocked", "reason": "published_crude_output_identity_changed"}
-        registry["sources"]["crude-oil"] = evidence["source"]
+        registry["sources"][self.source_key] = evidence["source"]
         _atomic_json(self.sources_path, registry)
         self.state.update(phase="verified", proof=evidence)
         self._save()

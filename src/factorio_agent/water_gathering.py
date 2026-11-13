@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 import math
 from pathlib import Path
 
@@ -85,11 +86,22 @@ def water_core(catalog, position, direction=0):
 
 
 class WaterGathering:
-    def __init__(self, game, builder, catalog, perimeter):
+    def __init__(self, game, builder, catalog, perimeter, *, source_key="water"):
+        if not isinstance(source_key, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,47}", source_key):
+            raise ValueError("water source key must be a bounded registry name")
+        if source_key in ("crude-oil", "petroleum-gas", "heavy-oil", "light-oil", "sulfuric-acid", "lubricant"):
+            raise ValueError("water source key cannot replace another canonical fluid")
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
-        self.path = Path(game.cfg.runtime_dir) / "water-gathering.json"
+        self.source_key = source_key
+        self.block_id = (
+            "water_gathering" if source_key == "water" else "water_gathering_" + source_key.replace("-", "_")
+        )
+        filename = "water-gathering.json" if source_key == "water" else "water-gathering-" + source_key + ".json"
+        self.path = Path(game.cfg.runtime_dir) / filename
         self.sources_path = self.path.parent / "fluid-sources.json"
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        if self.state and source_key != "water" and self.state.get("source_key") != source_key:
+            raise ValueError("independent water source checkpoint belongs to another profile")
         self.last_proof_failure = None
 
     def _identity(self, obs, value):
@@ -120,7 +132,7 @@ class WaterGathering:
             registry = json.loads(self.sources_path.read_text(encoding="utf-8"))
             if not self._identity(obs, registry):
                 return {"ok": False, "reason": "water_registry_identity_changed"}
-            if registry.get("sources", {}).get("water"):
+            if registry.get("sources", {}).get(self.source_key):
                 return {"ok": False, "reason": "water_source_exists_without_intake_checkpoint"}
         areas = [b["reserved_area"] for b in board.get("blocks", {}).values() if b.get("reserved_area")]
         areas += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
@@ -195,6 +207,7 @@ class WaterGathering:
                 "preserved_pumps": sites.get("preserved_pumps", []),
                 "defense_scope_id": scope,
                 "defense_preview": defense,
+                **({"source_key": self.source_key} if self.source_key != "water" else {}),
             }
         return {
             "ok": False,
@@ -230,7 +243,7 @@ class WaterGathering:
         board = json.loads(path.read_text(encoding="utf-8"))
         if not self._identity(obs, board):
             return {"status": "blocked", "reason": "water_board_identity_changed"}
-        old = board["blocks"].get("water_gathering")
+        old = board["blocks"].get(self.block_id)
         plan = self.state["plan"]
         scope = self.state["defense_scope_id"]
         if plan.get("defense_scope_id") is None and self.state.get("phase") == "verified":
@@ -240,7 +253,7 @@ class WaterGathering:
             if not self.proof(obs):
                 return {"status": "blocked", "reason": "water_scope_upgrade_native_proof_required"}
             if old != desired:
-                board["blocks"]["water_gathering"] = desired
+                board["blocks"][self.block_id] = desired
                 _atomic_json(path, board)
             self.state["plan"] = desired
             self._save()
@@ -250,13 +263,13 @@ class WaterGathering:
         if old and old != plan:
             return {"status": "blocked", "reason": "water_reservation_changed"}
         if any(
-            k != "water_gathering" and overlap(plan["reserved_area"], b["reserved_area"])
+            k != self.block_id and overlap(plan["reserved_area"], b["reserved_area"])
             for k, b in board["blocks"].items()
             if b.get("reserved_area")
         ):
             return {"status": "blocked", "reason": "water_reservation_conflict"}
         if not old:
-            board["blocks"]["water_gathering"] = plan
+            board["blocks"][self.block_id] = plan
             _atomic_json(path, board)
         return None
 
@@ -311,10 +324,10 @@ class WaterGathering:
         )
         if not self._identity(obs, registry):
             return {"status": "blocked", "reason": "water_registry_identity_changed"}
-        old = registry["sources"].get("water")
+        old = registry["sources"].get(self.source_key)
         if old and old != evidence["source"]:
             return {"status": "blocked", "reason": "published_water_output_identity_changed"}
-        registry["sources"]["water"] = evidence["source"]
+        registry["sources"][self.source_key] = evidence["source"]
         _atomic_json(self.sources_path, registry)
         self.state.update(phase="verified", proof=evidence)
         self._save()

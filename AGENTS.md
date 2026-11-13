@@ -88,5 +88,5 @@ Non-negotiable:
 - Measure progress with `python -B tools/report_run.py runtime/v2/<name>` milestones, not actions/min.
 - Never hand-edit `jobs.json`, state files or the live game; fix the rule, add a test, `lifecycle new-map`.
 - Run `powershell -ExecutionPolicy Bypass -File tools/check.ps1` from PowerShell before every commit.
-- `git add` specific files only; `oil_gathering.py` and `water_gathering.py` hold frozen WIP and stay unstaged.
+- `git add` specific files only; keep the working tree clean (commit or discard, never leave WIP unstaged for days).
 - Merge finished worktrees promptly and delete them.
