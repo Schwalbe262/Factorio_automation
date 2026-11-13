@@ -252234,3 +252234,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - metrics: the receipt shape now grows labs 2 -> 4; plate limit 2 -> 7 with 60/30 spare in the unit test.
 - result: offline only.
 - next action: live map: science_growth grows labs, blocked_by_missing_pack names logistic-science-pack.
+
+## 2026-11-14 Part 52 - science blocks as layout families, green split row, fleet exploration, pollution export
+- goal: owner direction (layout genome -> audited candidates -> selection by site, other designs tried periodically) for red science, the lab row and green science; exploration switchable per fleet; pollution metric.
+- actions: science_layout (machines single|direct x labs row|both_sides|chain, frame from the request, generated pack link, audits incl. lab reach / stage prefixes / lane loads / green entry, descriptor with rebuild_ahead for non-row labs, library section science_block); science.prepare ranks on probe allocations and records `layout` (template record for older maps). green_layout split row (inserter + belt sub-clusters on one intermediate belt, pack row with reserved slots) vs the cluster; planned_green_layouts ranks both. fleet.py start --explore (manifest + layout-settings.json); report compares variants per block (proof rate, median build s, proof -> next milestone s, leader). Catalog export emissions_per_minute, excluded from the fingerprint (real catalog fingerprint unchanged 284d47...).
+- metrics: real catalog frame 6: square site -> sci-single-row 332, narrow 26x44 -> sci-direct-row 347, shallow 44x28 frame 2 -> sci-direct-bothsides 282; green default cluster 154 vs split 210 (test site).
+- result: offline only; gate PASS per item.
+- failure reason / open: twin machine rows refused (red on both lab-belt lanes); green has no growth capability for the split's reserved slots; direct pairs and both_sides/chain labs never built live.
+- next action: fleet round with --explore; read "layout variants used" for automation_science and logistic_science.

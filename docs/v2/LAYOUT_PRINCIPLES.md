@@ -111,8 +111,8 @@ stored as entities.
 * Descriptor (module doc of `layout_variants`): footprint, entity counts, raw cost,
   ports with sides and lanes, edges (direct / belt / port), rate now, growth ceiling,
   what limits it and what a larger rate needs, `power_kw` (catalog `energy_usage`)
-  and `pollution_per_min` (catalog `emissions_per_minute` when exported; today's
-  catalog export has none, so it shows `-`).
+  and `pollution_per_min` (catalog `emissions_per_minute`; `-` for a catalog exported
+  before that field existed).
 * Library (`data/layouts/<item>.json`, `python -B tools/layouts.py build`): generator
   version + catalog fingerprint + request; niche -> genome, compact descriptor, scores,
   optional `evidence` (`tools/layouts.py evidence <runs>` merges runs / proofs / median
@@ -128,12 +128,28 @@ stored as entities.
   `PROBE_LIMIT` candidates on a real allocation, ranks them, places the winner (the
   next one on failure) and saves `layout` in `production-row-<item>.json`: variant,
   genome, descriptor, score terms, runner-ups, `chosen_tick`, `verified_tick`.
-* Exploration (off by default): `<runtime>/layout-settings.json` `{"explore": true}`
-  (optional `top_k`, `margin`) or `FACTORIO_LAYOUT_EXPLORE=1` in the environment of
-  `fleet.py start`. A seed from the world id and block picks among the best `top_k`
-  feasible candidates within the margin. `fleet.py report` prints "layout variants
-  used": block, variant, runs, median build game-seconds, proofs, explored, kW,
-  pollution.
+* Exploration (off by default): `python -B tools/fleet.py start ... --explore` records
+  `explore: true` in the fleet manifest and writes every run's
+  `<runtime>/layout-settings.json` (`{"explore": true}`; without the flag an explicit
+  `{"explore": false}`, so nothing inherited switches it on; the older
+  `FACTORIO_LAYOUT_EXPLORE=1` in the environment of `start` still counts as the flag).
+  Optional keys `top_k`, `margin`. A seed from (world id, block) picks among the best
+  `top_k` feasible candidates within the margin, so one map always explores the same way;
+  produce rows, red science and green science all use it. `fleet.py status` / `report`
+  headers say "layout EXPLORATION on". The report's "layout variants used" section lists the
+  variants of each block side by side: runs, proofs, proof rate, median build game-seconds
+  (chosen -> verified), median game-seconds from the block's proof to its next milestone
+  (science blocks: the next `research_*` milestone; produce rows: any), explored, kW,
+  pollution; with two or more variants of a block, `-> leading:` names the one the data
+  favours (proof rate, then the quicker follow-up, then build time; at least
+  `MIN_RUNS_TO_LEAD` runs). `tools/layouts.py evidence <runs>` merges the same numbers into
+  the library entries (the science section too).
+* Pollution: the catalog export now carries `emissions_per_minute` per entity (the energy
+  source's `emissions_per_joule` x max energy usage x 3600). The field is excluded from
+  `WorldCatalog.fingerprint` (`FINGERPRINT_EXCLUDED`), so a running map's catalog identity is
+  the same whether its `catalog.json` was exported before or after; until a map re-exports
+  its catalog the metric shows `-`. `tools/layouts.py show` prints kW and pollution per
+  candidate (now and at the full frame for science blocks).
 
 Used by `produce` (and through it the planned `ammo_production` and
 `engine_production` rows), by red science (`science_layout`) and green science

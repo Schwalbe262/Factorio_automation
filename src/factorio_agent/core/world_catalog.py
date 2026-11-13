@@ -115,6 +115,15 @@ local function export(p)
     mining_speed=optional(function() return p.mining_speed end),
     rocket_parts_required=optional(function() return p.rocket_parts_required end),
     energy_usage=optional(function() return p.get_max_energy_usage("normal") end),
+    emissions_per_minute=optional(function()
+      local source = p.electric_energy_source_prototype or p.burner_prototype
+      local per_joule = source and source.emissions_per_joule
+      local usage = p.get_max_energy_usage("normal")
+      if not per_joule or not usage or usage <= 0 then return nil end
+      local out = {}
+      for pollutant, value in pairs(per_joule) do out[pollutant] = value * usage * 3600 end
+      return out
+    end),
     energy_production=optional(function() return p.get_max_energy_production("normal") end),
     burner=optional(function() return p.burner_prototype ~= nil end),
     electric=optional(function() return p.electric_energy_source_prototype ~= nil end)}
@@ -187,6 +196,15 @@ def _yield(row: Mapping[str, Any]) -> float:
     if row.get("amount_min") == row.get("amount_max") and "amount_min" in row:
         return _amount(row["amount_min"])
     raise CatalogError(f"variable yield requires a probability-aware plan: {row['name']}")
+
+
+# Fields left out of ``WorldCatalog.fingerprint``: force state, and export additions that only
+# feed metrics (a catalog exported before such a field existed keeps its fingerprint).
+FINGERPRINT_EXCLUDED = (
+    ("recipes", ("enabled",)),
+    ("technologies", ("enabled", "researched")),
+    ("entities", ("emissions_per_minute",)),
+)
 
 
 class WorldCatalog:
@@ -330,7 +348,10 @@ return {version=helpers.game_version, active_mods=script.active_mods,
         if cached is not None:
             return cached
         data = dict(self._data)
-        for table, fields in (("recipes", ("enabled",)), ("technologies", ("enabled", "researched"))):
+        # ``emissions_per_minute`` (pollution at full activity, read by layout metrics only) was added
+        # to the export later: it is left out of the hash so a map's catalog identity, kept in every
+        # state and board file, is the same whether its catalog was exported before or after.
+        for table, fields in FINGERPRINT_EXCLUDED:
             data[table] = {
                 name: {key: value for key, value in row.items() if key not in fields}
                 for name, row in data[table].items()
