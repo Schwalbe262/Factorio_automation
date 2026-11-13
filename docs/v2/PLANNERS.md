@@ -295,6 +295,51 @@ A lab is never added while a built lab is idle. The startup cell (`industry._ext
 `_grow_cell`) adds no slot lab while research runs and a powered lab is idle without packs.
 Pinned by `tests/test_v2_science_growth.py`, `tests/test_v2_template_power.py`.
 
+## Plate throughput growth (`throughput_growth.py`, capabilities `mining_outpost`, `smelting_capacity`)
+
+Ore and furnaces of the paired district follow upcoming plate demand. Seed
+2644599892 (min 28-41): iron 2 drills (60/min) under 4 furnaces (75/min),
+copper 2 furnaces (37.5/min) under 60/min of ore, `planned_main_bus` waited 8+
+minutes for plates; `smelting_capacity_nodes` never fired (taps claimed only a
+stock row, and the ore cap hid the furnace target) and nothing grew drills.
+
+```
+per plate (iron, copper), H = DEMAND_HORIZON_MINUTES (10):
+demand   taps  = declared demand of built bus taps, minus production_row_* (stock rows: already in the bill)
+         bill  = shortfall + max(0, lookahead - spare stock)           (capacity_planning, incl. hand collection)
+         work  = bill + taps * H;  demand = work / H
+supply   capacity = min(built furnaces nominal, connected ore nominal, 2 x lane belt)   (installed units at nominal:
+                    a step never looks like a deficit while it ramps)
+         measured = production counter (reported only; it includes starter cells)
+         signals  = built furnaces idle for ore | full output, drills waiting for belt space
+settle   any open mining_outpost/smelting_capacity job of the resource, or one finished < SETTLE_TICKS (3600) ago -> wait
+covered  capacity >= demand * COVER_MARGIN (1.1)                         -> no growth
+stage    furnace output full -> demand (none); idle furnaces + backed drills -> transport (none);
+         furnaces idle for ore (>= STARVED_SHARE 0.5) -> ore; drills backed (>= BACKED_SHARE 0.5) -> furnaces;
+         else the smaller nominal stage; equal -> ore first; capacity at the belt -> belt (next unit: another bank)
+step     ore:      mining_outpost {resource, rate: ore + 2 x drill rate}  (one pair in reserved_pair_slots;
+                   a full bank gets a connected module from outposts.prepare_connected_bank)
+         furnaces: smelting_capacity {resource, rate: min(2 (per_side + 1) x furnace rate, ore)} (one slot per row)
+                   every slot built -> no growth, reason paired_bank_full_next_growth_is_another_bank
+         when the other stage binds next below demand, the step is valued together with that stage's step;
+         only the first is proposed, the second is re-decided after the first is measured
+pays     T0 = 60 work / capacity
+         T1 = fund (other inputs: stock then production, wood 2 s) + trips 30 s + 3 s per entity
+              + 60 (work + own plate cost) / (capacity + gain)
+         grow when T0 - T1 >= 60 s and T1 <= 0.85 T0
+node     auto_throughput_<resource>_<capability>_<rate>, after smelting_district succeeded, one per resource,
+         never again after the same step stalled;
+         bottleneck_blocks_critical_path(plate) (an active job waits for the plate or "district plates")
+           -> critical: priority SMELTING_CAPACITY_PRIORITY (-52), proposed before the roadmap
+           -> slack:    SCIENCE_GROWTH_PRIORITY + 1 (-599), after the roadmap
+```
+
+Receipt `throughput_growth.plates[]` holds demand, supply, signals, bottleneck,
+step (unit, gain, cost), times (wait, expand, saving) and the reason.
+`bottleneck_blocks_critical_path` is the single swap point for the shared
+critical-path rule. Furnace growth adds coal burn (1.35/min per stone furnace)
+that this rule does not size. Pinned by `tests/test_v2_throughput_growth.py`.
+
 ## Threat-sized defense (`defense_policy.py`, `defense_perimeter.py`, capabilities `defense_perimeter`, `defense_growth`)
 
 Posts follow the live threat, never a fixed list (doc: `DEFENSE_POLICY.md`):

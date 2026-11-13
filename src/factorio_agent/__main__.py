@@ -261,6 +261,15 @@ def execute(argv=None, services=None):
                     obs["science_growth"] = growth
             except Exception as exc:  # a growth estimate must never break observe
                 obs["science_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .throughput_growth import growth_receipt as throughput_growth_receipt
+
+            try:
+                jobs_list = list(Ledger(root).data["jobs"].values())
+                throughput = throughput_growth_receipt(root, services.catalog(root, game), jobs_list, obs)
+                if throughput is not None:
+                    obs["throughput_growth"] = throughput
+            except Exception as exc:  # a growth estimate must never break observe
+                obs["throughput_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .defense_perimeter import growth_receipt as defense_growth_receipt
 
             try:

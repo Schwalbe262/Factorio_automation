@@ -509,7 +509,7 @@ def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
 
     Only in the burner starter phase: once a ``mining_outpost`` job for a
     resource succeeded, electric outposts replace its starter cells and the
-    item is skipped (sizing outposts from demand is a later step). Requires
+    item is skipped (outposts then grow by ``throughput_growth``). Requires
     the capability's ``requires`` (``starter``) to have succeeded jobs.
     """
     if CAPACITY_CAPABILITY not in capabilities:
@@ -582,6 +582,12 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     from .supply_cell import supply_cell_nodes  # temporary hand-fed cell: build once, retire once
 
     proposed += supply_cell_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .throughput_growth import throughput_growth_nodes  # plate growth: critical class before the roadmap
+
+    seen = list(queue_nodes) + proposed
+    proposed += throughput_growth_nodes(jobs, seen, observation, capabilities, critical=True)[
+        : max(0, limit - len(proposed))
+    ]
     for index, step in enumerate(ROADMAP):
         if len(proposed) >= limit:
             break
@@ -618,6 +624,9 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
                 "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}{note}"[:300],
             }
         )
+    proposed += throughput_growth_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities, critical=False)[
+        : max(0, limit - len(proposed))
+    ]
     proposed += science_growth_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     proposed += defense_growth_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     from .starter_retirement import starter_retirement_nodes  # mine starter cells a permanent source replaced
