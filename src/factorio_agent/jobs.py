@@ -112,6 +112,16 @@ CAPABILITIES = {
         "native_recipes": ["splitter"],
         "effect": "chest, inserter and side belt with an input-priority splitter replacing one patch trunk belt just downstream of the trunk head and upstream of every tap; the chest is the item's carried surplus sink, so returned items reach every trunk consumer first",
     },
+    # Remote smelting (remote_smelting.py): proposed when a plate ore cannot grow at home.
+    "remote_smelting": {
+        "parameters": {
+            "resource": "iron-ore|copper-ore",
+            "rate_per_minute": "finite number (0,960], ore draw the block is sized for",
+        },
+        "requires": ["mining_outpost", "planned_main_bus"],
+        "native_recipes": ["electric-mining-drill", "splitter"],
+        "effect": "a mining bank on the next lasting patch of the ore, a paired furnace block beside it fed by a coal trunk tap, and its plates onto the planned bus through a feed upstream of the lane's taps",
+    },
     # Feed head rework (head_rework.py): proposed when a district bank's shared head limits growth.
     "feed_head_rework": {
         "parameters": {"block": "smelting_district", "resource": "iron-ore|copper-ore"},

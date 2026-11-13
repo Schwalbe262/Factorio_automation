@@ -166,6 +166,8 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     "planned_main_bus": (ROUTE_RELAX_1,),
     "brick_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "steel_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
+    # The long coal and plate routes of a remote smelting block (remote_smelting.py).
+    "remote_smelting": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "steel_supply": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "supply_cell": (
         ROUTE_RELAX_1,

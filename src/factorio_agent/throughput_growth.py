@@ -930,6 +930,18 @@ def expected_growth(catalog, jobs, observation, stations) -> dict[str, tuple[flo
     }
 
 
+def feed_supply(stations, plate: str) -> float:
+    """Nominal plates/min built bus feeds put on the ``plate`` trunk (``remote_smelting``).
+
+    A feed's plates serve the lane's taps alongside the district: its supply comes off the tap
+    rate the district bank must cover (``plate_facts``)."""
+    return sum(
+        float(s.get("supply_per_minute") or 0)
+        for s in stations
+        if isinstance(s, Mapping) and s.get("kind") == "planned_feed" and s.get("item") == plate and s.get("built")
+    )
+
+
 def plate_facts(
     catalog,
     plate,
@@ -991,16 +1003,21 @@ def plate_facts(
     connected, off_bus = _measured_split(measured, furnace_status, each, nominal)
     bill = _bill(plate, observation)
     module_items = dict(MINING_OUTPOST_BUILDS)
+    feeds = feed_supply(stations, plate)
     return PlateFacts(
         plate=plate,
         resource=resource,
-        tap_rate=sum(
-            float(s.get("demand_per_minute") or 0)
-            for s in stations
-            if isinstance(s, Mapping)
-            and s.get("item") == plate
-            and s.get("built", True)
-            and not str(s.get("owner") or "").startswith("production_row")
+        tap_rate=max(
+            0.0,
+            sum(
+                float(s.get("demand_per_minute") or 0)
+                for s in stations
+                if isinstance(s, Mapping)
+                and s.get("item") == plate
+                and s.get("built", True)
+                and not str(s.get("owner") or "").startswith("production_row")
+            )
+            - feeds,
         )
         + max(0.0, finite_number(growth_taps) or 0.0),
         growth_tap_rate=max(0.0, finite_number(growth_taps) or 0.0),

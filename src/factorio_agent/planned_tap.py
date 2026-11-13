@@ -66,7 +66,7 @@ from pathlib import Path
 from .board import blocks_without_bus, entity, foreign_belts, surface_conflict
 from .core.deterministic_builder import _plan
 from .core.deterministic_state import _atomic_json
-from .planned_bus import branch_priorities, configure_action, tap_priorities
+from .planned_bus import branch_priorities, configure_action, splitter_side, tap_priorities
 from .site.busframe import Bus, compass_of, right_of
 from .smelting import merge_entities
 from .transport import compile_crossings, plan_connection, xy
@@ -168,6 +168,10 @@ class BusView:
 def station(tap: dict) -> dict:
     """Board summary of one tap (``shared_main_bus.stations``)."""
     keys = ("name", "owner", "item", "lane", "side", "along", "demand_per_minute", "port", "built")
+    if tap.get("kind") == "feed":  # plates enter the bus here (``feed_layout``): a supply, no demand
+        row = {k: tap.get(k) for k in keys}
+        row.update(demand_per_minute=0, supply_per_minute=tap.get("supply_per_minute", 0))
+        return {"kind": "planned_feed", **row, "splitter": tap["splitter"]["position"]}
     return {"kind": "planned_tap", **{k: tap.get(k) for k in keys}, "splitter": tap["splitter"]["position"]}
 
 
@@ -296,6 +300,160 @@ def layout(view: BusView, item: str, side: str, along: int, *, span: int, foreig
         "extension": extension,
         "port": port,
     }
+
+
+FEED = "feed"  # tap record kind of a feed: plates enter the bus instead of leaving it
+
+
+def feed_layout(view: BusView, item: str, side: str, along: int, *, span: int, reach: int = 0) -> dict:
+    """One *feed* of ``item`` from ``side``: a tap mirrored about its splitter row ``s = along + 3``.
+
+    ``reach`` moves the port that many tiles farther out on the branch row (the belts between
+    are the feed's): a route then ends beyond a line that runs beside the band, such as a pipe
+    the feed bridges (``remote_smelting``).
+
+    A block that makes ``item`` away from the district (a remote smelting block) puts its
+    plates onto the built trunk of ``item`` (``remote_smelting``). Rows, bus-local::
+
+        row along      built trunks between the partner tile and the edge dive (input)
+        row along+1    branch row: the port tile P outside the band, belts inward to the
+                       partner tile, turning there into the bus direction; reserved and spare
+                       lanes tunnelled under (as a tap's branch row)
+        row along+2    belt on the partner tile, bus direction; the dived trunks surface here
+        row along+3    splitter on the trunk lane and the partner tile
+
+    The splitter's partner output (row ``along + 4``, partner tile) stays free; its output
+    priority is the trunk side, input priority none (trunk and feed share the lane fairly).
+    ``along`` is the window start, as for a tap, so tap and feed windows keep apart alike.
+    The trunk must run past the splitter (no extension: a feed only joins a standing trunk).
+    """
+    bus = view.bus
+    if item not in view.items:
+        return {"ok": False, "reason": "feed_item_has_no_built_trunk", "item": item}
+    if side not in ("left", "right"):
+        return {"ok": False, "reason": "feed_side_unknown", "side": side}
+    lane = view.lanes[view.items[item]]
+    s = 1 if side == "right" else -1
+    if along < FIRST_ROW:
+        return {"ok": False, "reason": "feed_row_too_close_to_head"}
+    a = along + WINDOW_ROWS - 1  # splitter row
+    if a + 1 >= view.lengths[lane.index]:
+        return {"ok": False, "reason": "feed_beyond_built_trunk", "along": along}
+    edge = bus.half if s > 0 else -bus.half - 1
+    port_lateral = edge + s * (1 + reach)
+    partner = lane.offset + s
+    built = view.built_offsets()
+    if partner in built:
+        return {"ok": False, "reason": "feed_partner_tile_is_a_built_trunk"}
+    lo, hi = sorted((partner, edge))
+    dived = []
+    for off in sorted(built):
+        index = built[off]
+        if not lo < off < hi or off == lane.offset:
+            continue
+        if view.lengths[index] <= along:
+            continue  # the trunk ends before the window: its tiles are tunnelled like a reserved lane
+        if view.lengths[index] < a:
+            return {"ok": False, "reason": "feed_rows_meet_trunk_end", "lane": index}
+        dived.append(index)
+    replaced = [(lane.index, a)] + [(index, row) for index in dived for row in range(along, a)]
+    remove = []
+    for index, row in replaced:
+        spot = view.world(row, view.lanes[index].offset)
+        here = view.tiles.get(_tile(spot))
+        if here is None or here["name"] != "transport-belt" or here.get("direction") != view.facing:
+            return {"ok": False, "reason": "feed_rows_meet_trunk_crossing", "lane": index, "along": row}
+        remove.append(spot)
+    for index in dived:
+        offset = view.lanes[index].offset
+        for row in range(along - span, a + span):
+            here = view.tiles.get(_tile(view.world(row, offset)))
+            if here is not None and here["name"] == "underground-belt":
+                return {"ok": False, "reason": "feed_dive_near_trunk_underground", "lane": index, "along": row}
+    for row in (along + 1, along + 2, a, a + 1):  # branch turn, partner belt, splitter, its free output
+        if _tile(view.world(row, partner)) in view.tiles:
+            return {"ok": False, "reason": "feed_partner_tile_taken", "along": row}
+    centre = view.world(a, min(lane.offset, partner) + 0.5)
+    splitter = dict(entity("splitter", centre["x"], centre["y"], view.facing), _width=2, _height=1)
+    entities = [splitter, entity("transport-belt", **view.world(a - 1, partner), direction=view.facing)]
+    inward = _outward(bus, -s)
+    laterals = list(range(port_lateral, partner, -s))
+    segments = [{"position": view.world(along + 1, lat), "direction": inward} for lat in laterals]
+    segments.append({"position": view.world(along + 1, partner), "direction": view.facing})
+    dived_offsets = {view.lanes[i].offset for i in dived}
+    lane_offsets = {ln.offset for ln in bus.lanes}
+    virtual = [
+        entity("transport-belt", **view.world(along + 1, lat), direction=view.facing)
+        for lat in laterals
+        if lat in lane_offsets and lat not in dived_offsets
+    ]
+    route = {"ok": True, "segments": segments, "metrics": {"length": len(segments), "turns": 1}}
+    branch = compile_crossings(route, virtual, maximum_span=span)
+    if not branch.get("ok"):
+        return {"ok": False, "reason": "feed_branch_cannot_tunnel_under_lanes", "detail": branch.get("reason")}
+    entities += branch["entities"]
+    pairs = list(branch["underground_pairs"])
+    for index in dived:
+        offset = view.lanes[index].offset
+        first, last = view.world(along, offset), view.world(a - 1, offset)
+        entities += [
+            dict(entity("underground-belt", first["x"], first["y"], view.facing), belt_to_ground_type="input"),
+            dict(entity("underground-belt", last["x"], last["y"], view.facing), belt_to_ground_type="output"),
+        ]
+        pairs.append({"input": list(_tile(first)), "output": list(_tile(last)), "direction": view.facing, "span": 2})
+    port = {
+        "kind": "item",
+        "item": item,
+        "position": view.world(along + 1, port_lateral),
+        "facing": inward,
+        "direction": "input",
+    }
+    trunk_side = splitter_side(splitter, view.world(a, lane.offset))
+    splitter.update(splitter_input_priority="none", splitter_output_priority=trunk_side)
+    return {
+        "ok": True,
+        "kind": FEED,
+        "item": item,
+        "lane": lane.index,
+        "side": side,
+        "along": along,
+        "splitter_row": a,
+        "splitter": splitter,
+        "entities": entities,
+        "underground_pairs": pairs,
+        "remove": remove,
+        "dived_lanes": dived,
+        "extension": {},
+        "port": port,
+    }
+
+
+def feed_candidates(
+    view: BusView, item: str, side: str, *, span: int, limit: int = ATTEMPTS, accept=None, reach: int = 0
+):
+    """Up to ``limit`` feasible feeds of ``item`` from ``side``, nearest the bus head first.
+
+    Nearest the head first: a feed there reaches every tap of the lane (the remote block's
+    plates serve the whole bus, not only the consumers downstream of it). Returns
+    ``(layouts, rejected)`` like :func:`candidates`.
+    """
+    found, rejected = [], Counter()
+    if item not in view.items:
+        return found, {"feed_item_has_no_built_trunk": 1}
+    for along in range(FIRST_ROW, view.lengths[view.items[item]]):
+        if len(found) >= limit:
+            break
+        if not view.window_free(along):
+            rejected["feed_window_taken"] += 1
+            continue
+        row = feed_layout(view, item, side, along, span=span, reach=reach)
+        if not row["ok"]:
+            rejected[row["reason"]] += 1
+        elif accept is not None and not accept(row):
+            rejected["feed_not_accepted"] += 1
+        else:
+            found.append(row)
+    return found, dict(rejected)
 
 
 def candidates(

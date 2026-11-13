@@ -185,6 +185,7 @@ class StarterExecutors:
         )
         self.carried_surplus.return_feeds = self.trunk_return_feed
         self.carried_surplus.root = Path(game.cfg.runtime_dir)
+        self._remote = {}  # resource -> RemoteSmelting (remote_smelting), built on first use
         from .trunk_lane import TrunkLane
 
         self.trunk_lane = TrunkLane(game, self.builder, catalog, outposts=self.outposts, smelting=self.smelting)
@@ -639,6 +640,16 @@ class StarterExecutors:
                 self.game, self.builder, self.catalog, self.perimeter, source_key=source_key
             )
         return cache["oil", source_key]
+
+    def remote_smelting(self, resource):
+        """``RemoteSmelting`` of ``resource``'s plate (one block per ore, ``remote-smelting-<ore>.json``)."""
+        if resource not in self._remote:
+            from .remote_smelting import RemoteSmelting
+
+            self._remote[resource] = RemoteSmelting(
+                self.game, self.builder, self.catalog, site=self.site, outposts=self.outposts, resource=resource
+            )
+        return self._remote[resource]
 
     def _steam_stage(self, parameters):
         """``SteamExpansion`` of a power growth stage (``power_growth.stage_of``; stage 1 is ``steam_expansion``)."""

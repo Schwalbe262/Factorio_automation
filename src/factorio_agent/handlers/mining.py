@@ -81,6 +81,26 @@ def mining_outpost_proof(ex, obs, result, parameters):
     return ex.outposts.proof(obs, parameters or {})
 
 
+def remote_smelting_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "remote_smelting")
+    if early is not None:
+        return early
+    result = ex.builder.ensure_power(obs)
+    if result.get("status") != "succeeded":
+        return result
+    return ex.remote_smelting(parameters["resource"]).step(obs, parameters)
+
+
+def remote_smelting_proof(ex, obs, result, parameters):
+    return ex.remote_smelting(parameters["resource"]).proof(obs, parameters)
+
+
+def validate_remote_smelting(parameters):
+    from ..remote_smelting import validate_parameters
+
+    validate_parameters(parameters)
+
+
 def validate_mining_outpost(parameters):
     from ..outposts import validate_parameters
 
@@ -199,6 +219,7 @@ register(
     validate=validate_trunk_return_feed,
 )
 register("mining_outpost", step=mining_outpost_step, proof=mining_outpost_proof, validate=validate_mining_outpost)
+register("remote_smelting", step=remote_smelting_step, proof=remote_smelting_proof, validate=validate_remote_smelting)
 register("paired_mining", step=paired_mining_step, proof=paired_mining_proof)
 register(
     "dedicated_materials",

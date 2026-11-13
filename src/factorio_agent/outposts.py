@@ -429,7 +429,24 @@ class MiningOutposts:
             options["grid_origin"] = {"origin": policy["grid_origin"], "flow": policy["flow"]}
         return reservations, options
 
-    def _other_patch(self, obs, resource, count, reservations, options, failure, exit_record=None, trail=None):
+    def prepare_on_patch(self, obs, resource, count, patch):
+        """A new bank on one named patch of the site plan (``{"centroid", "bbox"}``), no state write.
+
+        ``remote_smelting`` plans its bank on the patch its patch rule chose
+        (``remote_smelting.choose_patches``), not on the resource's planned patch;
+        every side of the patch is tried as in :meth:`_other_patch`."""
+        board_path = self.path.parent / "pcb-board.json"
+        board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
+        if board and board.get("world_id") != obs["world_id"]:
+            return {"ok": False, "reason": "mining_planning_board_world_changed"}
+        exit_record = site_exit(getattr(self, "site", None), obs.get("world_id"), resource)
+        reservations, options = self._planning_inputs(obs, board, resource)
+        failure = {"ok": False, "reason": NO_COMPLIANT_BANK, "candidate_count": 0, "candidate_failures": []}
+        return self._other_patch(obs, resource, count, reservations, options, failure, exit_record, [], patches=[patch])
+
+    def _other_patch(
+        self, obs, resource, count, reservations, options, failure, exit_record=None, trail=None, *, patches=None
+    ):
         """Plan the bank on the site plan's next patches of ``resource`` when its own patch has no site.
 
         Fleet auto-1113-1758 seed 2072381151: the planned coal patch (215
@@ -451,11 +468,12 @@ class MiningOutposts:
         trail = [] if trail is None else trail
         if failure.get("reason") not in (NO_COMPLIANT_BANK, SURVEY_EMPTY):
             return failure  # a budget or policy failure is no answer about the patch
-        patches = [
-            p
-            for p in other_patches(getattr(self, "site", None), obs.get("world_id"), resource)
-            if p["distance"] <= MAX_OTHER_PATCH_DISTANCE
-        ]
+        if patches is None:
+            patches = [
+                p
+                for p in other_patches(getattr(self, "site", None), obs.get("world_id"), resource)
+                if p["distance"] <= MAX_OTHER_PATCH_DISTANCE
+            ]
         if not patches:
             return _with_evidence(failure, trail)
         zones = plan_zone_areas(getattr(self, "site", None), obs.get("world_id"), exclude_prefix="mining:" + resource)
