@@ -15,7 +15,10 @@ adjacent service-pole sites per well. When no field fits:
 
 - ungenerated chunks inside the radius: `prepare` returns a `waiting` result
   with `scout` (nearest ungenerated chunk, a generated enemy-free stand chunk
-  within `OIL_SCOUT_WINDOW_CHUNKS`) and `wait_for` naming that chunk; `step`
+  within `OIL_SCOUT_WINDOW_CHUNKS` whose stand is a land tile the actor fits on,
+  `find_non_colliding_position` within `OIL_SCOUT_STAND_RADIUS` inside the chunk;
+  a target that `OIL_SCOUT_MOVES_PER_TARGET` moves do not bring closer is given
+  up) and `wait_for` naming that chunk; `step`
   walks the actor there with an ordinary paid `move` and waits. Generation
   follows the actor (a connected player; client-free:
   `emulate_player_presence`). A target still ungenerated

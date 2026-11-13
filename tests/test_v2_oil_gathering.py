@@ -10,6 +10,7 @@ from factorio_agent import plan_needs, postmortem, remedy
 from factorio_agent.oil_gathering import (
     OIL_SCOUT_GENERATE_WAIT_TICKS,
     OIL_SCOUT_MAX_TARGETS,
+    OIL_SCOUT_MOVES_PER_TARGET,
     OIL_SURVEY_LUA,
     OIL_SURVEY_RADIUS_MAX,
     OilGathering,
@@ -482,6 +483,10 @@ function s.find_entities_filtered(q)local out={}
  for _,e in ipairs(ores)do if (e.position.x-q.position.x)^2+(e.position.y-q.position.y)^2<=q.radius^2 then out[#out+1]=e end end
  return out end
 function s.is_chunk_generated(c)return c.x<=5 end
+water={}
+function s.find_non_colliding_position(name,p,r,precision)
+ if water[math.floor(p.x/32)..","..math.floor(p.y/32)] then return nil end
+ return {x=p.x,y=p.y} end
 function s.count_entities_filtered(q)local n=0
  for _,e in ipairs(enemies)do if e.x>=q.area[1][1] and e.x<q.area[2][1] and e.y>=q.area[1][2] and e.y<q.area[2][2] then n=n+1 end end
  return n end""")
@@ -492,6 +497,7 @@ function s.count_entities_filtered(q)local n=0
             "abandoned": [],
             "window": 4,
             "candidates": 16,
+            "stand_radius": 16,
         }
 
         def run(a):
@@ -511,6 +517,33 @@ function s.count_entities_filtered(q)local n=0
         lua.execute("enemies={}")
         result = run(dict(args, abandoned=["6,0"]))
         self.assertNotEqual(result["scout"]["chunk"], {"x": 6, "y": 0})
+        # eval-1575138435: the chunk beside the target was deep water; the stand is the nearest land chunk.
+        lua.execute('water={["5,0"]=true}')
+        result = run(args)
+        self.assertEqual(result["scout"]["chunk"], {"x": 6, "y": 0})
+        self.assertNotEqual(result["scout"]["stand"], {"x": 5 * 32 + 16.5, "y": 16.5})
+        self.assertIn(result["scout"]["stand"]["x"], (4 * 32 + 16.5, 5 * 32 + 16.5))
+        lua.execute("water={}")
+
+    def test_a_scout_target_the_moves_do_not_reach_is_given_up(self):
+        # eval-1575138435, 320 min: every move to the stand failed position_blocked; after
+        # OIL_SCOUT_MOVES_PER_TARGET moves without getting closer the target is abandoned.
+        scout = {"chunk": {"x": 24, "y": -6}, "distance": 900, "stand": {"x": 752.5, "y": -175.5}}
+        self.survey([], scout=scout, unknown=5)
+        self.obs["position"] = {"x": 80.5, "y": -751.5}
+        for _ in range(OIL_SCOUT_MOVES_PER_TARGET):
+            self.assertEqual(self.c.step(self.obs)["type"], "move")
+        waiting = self.c.step(self.obs)
+        self.assertEqual((waiting["status"], waiting["reason"]), ("waiting", "oil_scout_target_unreachable"))
+        self.c.prepare(self.obs)
+        self.assertEqual(self.payload()["abandoned"], ["24,-6"])
+
+    def test_a_walk_that_gets_closer_is_not_given_up(self):
+        scout = {"chunk": {"x": 24, "y": -6}, "distance": 900, "stand": {"x": 752.5, "y": -175.5}}
+        self.survey([], scout=scout, unknown=5)
+        for x in range(0, 100 * (OIL_SCOUT_MOVES_PER_TARGET + 3), 100):
+            self.obs["position"] = {"x": float(x), "y": -175.5}
+            self.assertEqual(self.c.step(self.obs)["type"], "move")
 
 
 if __name__ == "__main__":

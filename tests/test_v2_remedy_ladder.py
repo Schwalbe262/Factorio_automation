@@ -456,6 +456,17 @@ class SupervisorLadderTests(LadderFixture):
         self.assertEqual(node["needs"]["kind"], "site")
         self.assertEqual(node["retry_plan"]["next_remedy"]["rung"], "site:longer_connection")
 
+    def test_an_executor_failure_is_replanned_first_by_the_ladder(self):
+        # eval-1575138435: oil_gathering blocked repeated_executor_failure:position_blocked (no needs then).
+        self.s.max_seconds = None
+        ladder = LadderCLI(self.cli, lambda rung, options: {"fits": True, "reason": "plan"})
+        self.blocked("oil", "oil_gathering", "repeated_executor_failure:position_blocked")
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(REMEDY_CHECK_SECONDS + 1)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(ladder.what_ifs, ["replan"])
+        self.assertEqual(json.loads(self.retries()[-1][-1])["rung"], "replan")
+
     def test_a_spent_ladder_waits_for_new_facts_or_the_recheck_period(self):
         self.s.max_seconds = None
         ladder = LadderCLI(self.cli, lambda rung, options: {"fits": False, "reason": "no"})
@@ -737,6 +748,50 @@ class JobRunnerTests(unittest.TestCase):
         run_slice(harness.root, harness.game, Recording({"power": [failure]}), "power")
         self.assertEqual(seen, [None, 1])
         self.assertEqual(Ledger(harness.root).data["jobs"]["power"]["remedy"]["rung"], "site:longer_connection")
+
+
+class ExecutorFailureTests(unittest.TestCase):
+    """eval-1575138435, 320 min: oil_gathering's scout move onto deep water failed position_blocked
+    three times; the job blocked repeated_executor_failure with no needs, off the ladder, retried blind."""
+
+    MOVE = {"type": "move", "position": {"x": 752.5, "y": -175.5}, "reason": "scout beside ungenerated chunk 24,-6"}
+
+    def test_the_failing_action_and_position_are_preflight_needs(self):
+        needs = plan_needs.from_result(
+            "oil_gathering",
+            {"status": "blocked", "reason": "repeated_executor_failure:position_blocked", "executor_action": self.MOVE},
+        )
+        self.assertEqual((needs["kind"], needs["check"], needs["at"]), ("preflight", "executor:move", [752.5, -175.5]))
+        self.assertEqual(
+            needs["blockers"], [{"entity": "move", "position": [752.5, -175.5], "reason": "position_blocked"}]
+        )
+        self.assertIn("does not fail position_blocked", needs["change"])
+        # A job blocked before needs existed resolves from its reason alone.
+        old = {
+            "capability": "oil_gathering",
+            "status": "blocked",
+            "reason": "repeated_executor_failure:position_blocked",
+        }
+        self.assertEqual(remedy.needs_of(old)["kind"], "plan")
+        self.assertTrue(remedy.eligible(old))
+        rung, _ = remedy.choose("oil_gathering", needs)
+        self.assertEqual(rung.name, "replan")
+
+    def test_the_job_runner_stores_the_needs_and_the_supervisor_replans_it(self):
+        from factorio_agent.jobs import Ledger, run_slice
+        from factorio_agent.supervisor import _replannable
+        from test_v2_concurrent_jobs import ConcurrentJobTests, Executor
+
+        harness = ConcurrentJobTests("test_two_jobs_can_be_active_together")
+        harness.setUp()
+        self.addCleanup(harness.doCleanups)
+        harness.submit("oil", "power")
+        harness.game.act = lambda action: {"ok": False, "reason": "position_blocked"}
+        run_slice(harness.root, harness.game, Executor({"power": [dict(self.MOVE)]}), "oil")
+        row = Ledger(harness.root).data["jobs"]["oil"]
+        self.assertEqual(row["reason"], "repeated_executor_failure:position_blocked")
+        self.assertEqual((row["needs"]["kind"], row["needs"]["at"]), ("preflight", [752.5, -175.5]))
+        self.assertTrue(_replannable(row["reason"]))
 
 
 class WasteReportTests(unittest.TestCase):

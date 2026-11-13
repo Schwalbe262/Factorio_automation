@@ -101,6 +101,9 @@ SITE_RETRY_FACT_FILES = ("pcb-board.json", "material-sources.json", "site-plan.j
 def _replannable(reason: str) -> bool:
     return (
         reason.startswith("no_clear_")
+        # The same action failed three times (a move onto water, a refused build): the next
+        # plan sees the world as it is now; never a dead end (plan_needs.from_executor_failure).
+        or reason.startswith(plan_needs.EXECUTOR_FAILURE)
         or reason.endswith(REPLAN_SUFFIXES)
         or reason in REPLAN_REASONS
         or _site_blocked(reason)
@@ -2138,9 +2141,11 @@ class Supervisor:
             if state.get("blocked_at") != job.get("blocked_at_time"):
                 # A fresh block is itself the plain re-plan's answer for these needs.
                 state.update(blocked_at=job.get("blocked_at_time"), confirmed=None, last=now)
-                state["tried"] = remedy.record(
-                    state["tried"], remedy.REPLAN, needs, {"fits": False, "reason": "blocked"}, now
-                )
+                if not str(needs.get("reason") or "").startswith(plan_needs.EXECUTOR_FAILURE):
+                    # (An executor failure was no planning answer: its plain re-plan is checked first.)
+                    state["tried"] = remedy.record(
+                        state["tried"], remedy.REPLAN, needs, {"fits": False, "reason": "blocked"}, now
+                    )
             if state.get("confirmed"):
                 if self._remedy_retry(job, state["confirmed"]):
                     state["confirmed"] = None

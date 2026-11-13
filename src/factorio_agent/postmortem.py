@@ -323,6 +323,11 @@ def _row_prepare(ex, obs, name):
     request = getattr(planned_products, name)
     if not planned_products.active(ex.production_rows, obs, request["item"]):
         return {"reason": "no_planned_world_row"}  # not a plan result: fits None
+    saved = ex.production_rows.state(request["item"])
+    if saved and saved.get("world_id") == obs.get("world_id") and saved.get("plan"):
+        # The row is sited and published: a fresh prepare would find its own board port taken
+        # (eval-1575138435: "production_row_input_source_missing" for the engine row in build).
+        return {"ok": True, "reason": "saved_row_plan", "phase": saved.get("phase")}
     return ex.production_rows.prepare(obs, dict(request))
 
 
