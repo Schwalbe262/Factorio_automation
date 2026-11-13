@@ -162,6 +162,24 @@ class ConcurrentJobTests(unittest.TestCase):
         self.assertTrue(self.jobs()["a"]["reason"].startswith("planner_fault:FileNotFoundError"))
         self.assertGreaterEqual(receipt["jobs"]["b"]["actions"], 1)
 
+    def test_an_operator_stop_raised_while_planning_is_a_clean_stop(self):
+        # Fleet aud-1114-0703 seed 3743340251: the builder's can_place saw stop.json mid-plan and
+        # its InterruptedError escaped the slice as an "invalid typed CLI receipt" traceback.
+        root = self.root
+
+        class Stopping(Executor):
+            def step(self, capability, obs, parameters=None):
+                (root / "stop.json").write_text("{}", encoding="utf-8")  # the stop arrives mid-plan
+                raise InterruptedError("operator_stop_requested")
+
+        self.submit("a", "power")
+        receipt = run_jobs(self.root, self.game, Stopping({}), seconds=0.05)
+        self.assertEqual(self.jobs()["a"]["status"], "waiting")
+        self.assertEqual(self.jobs()["a"]["reason"], "operator_stop_requested")
+        self.assertNotIn("pending_action", self.jobs()["a"])
+        self.assertEqual(self.game.actions, [])
+        self.assertIsInstance(receipt, dict)
+
     def test_capacity_jobs_for_different_resources_run_side_by_side(self):
         # Seed 283895142: copper capacity waited 2.5 min behind iron capacity.
         iron = {"cells": 3, "resource": "iron-ore"}

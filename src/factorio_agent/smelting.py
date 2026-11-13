@@ -465,6 +465,21 @@ def feed_lanes_ok(lanes) -> bool:
 DISTRICT_SOURCES = (("iron-ore", 60), ("copper-ore", 30), ("coal", 30))
 SEARCH_INTERRUPTIONS_PER_SITE = 2  # budget cut-offs before one candidate counts as failed
 SEARCH_FAILURES_KEPT = 12  # failure records the resumable sweep carries between passes
+PORT_EXIT_TILES = 3  # tiles straight past a plate output port no other block's frame may cover
+PORT_FACING = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
+
+
+def _port_exits(banks) -> list[tuple[float, float]]:
+    """Tile centres straight past each bank output port, where its plate feed leaves the district."""
+    exits = []
+    for bank in banks:
+        for port in bank.get("ports", ()):
+            step = PORT_FACING.get(port.get("facing"))
+            if port.get("direction") != "output" or step is None:
+                continue
+            x, y = port["position"]["x"], port["position"]["y"]
+            exits += [(x + step[0] * k, y + step[1] * k) for k in range(1, PORT_EXIT_TILES + 1)]
+    return exits
 
 
 def _site_key(site):
@@ -875,6 +890,18 @@ class SmeltingDistrict:
                 and area[1][0] > b["reserved_area"][0][0]
                 and area[0][1] < b["reserved_area"][1][1]
                 and area[1][1] > b["reserved_area"][0][1]
+                for b in board.get("blocks", {}).values()
+                if b.get("reserved_area")
+            ):
+                continue
+            # A plate feed leaves each output port straight ahead: another block's frame in the
+            # tiles just past the port leaves it no way out (aud-1114-0614 seed 3261696077: the
+            # supply cell's frame began two tiles in front of the iron port and the bus feed route
+            # failed from 24 to 45 game minutes).
+            if any(
+                b["reserved_area"][0][0] < x < b["reserved_area"][1][0]
+                and b["reserved_area"][0][1] < y < b["reserved_area"][1][1]
+                for x, y in _port_exits(candidate["banks"])
                 for b in board.get("blocks", {}).values()
                 if b.get("reserved_area")
             ):
