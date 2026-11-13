@@ -295,6 +295,12 @@ def execute(argv=None, services=None):
                 obs["rocket_plan"] = rocket_receipt(services.catalog(root, game), obs, capabilities=CAPABILITIES)
             except Exception as exc:  # a plan estimate must never break observe
                 obs["rocket_plan_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .rocket_stages import receipt as rocket_stages_receipt
+
+            try:  # are the silo / part / payload inputs produced anywhere (progression gate)
+                obs["rocket_stages"] = rocket_stages_receipt(root, obs, services.catalog(root, game))
+            except Exception as exc:  # a gate estimate must never break observe
+                obs["rocket_stages_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .production_sources import plate_sources
 
             try:  # where a new produce row's plates would come from (progression.produce_nodes)

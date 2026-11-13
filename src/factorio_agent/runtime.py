@@ -147,6 +147,10 @@ class WorldBoundGame(DeterministicGame):
             from .storage_transfer import execute_deposit
 
             return self._record_action(action, execute_deposit(self, action))
+        if action.get("type") == "feed_rocket_silo":
+            from .rocket_feed import execute_feed_silo
+
+            return self._record_action(action, execute_feed_silo(self, action))
         if action.get("type") == "insert" and {"expected_entity_unit", "expected_entity_world_id"}.intersection(action):
             p = action.get("position")
             unit = action.get("expected_entity_unit")

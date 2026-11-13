@@ -208,15 +208,17 @@ class RocketBillTests(unittest.TestCase):
             "sulfuric-acid": ("fluid_product", "unwired"),
             "petroleum-gas": ("advanced_petroleum", "unwired"),
             "crude-oil": ("oil_gathering", "roadmap"),
-            "rocket-part": ("rocket_parts", "missing"),
-            "rocket-silo": ("rocket_silo", "missing"),
-            "space-platform-starter-pack": ("rocket_launch", "missing"),
+            # Registered stages (rocket_stages / rocket_feed), proposed from the generated tail.
+            "rocket-part": ("rocket_parts", "wired"),
+            "rocket-silo": ("rocket_silo", "wired"),
+            "space-platform-starter-pack": ("rocket_launch", "wired"),
         }
         for name, (capability, status) in expect.items():
             producer = item(result, name)["producer"]
             self.assertEqual((producer["capability"], producer["status"]), (capability, status), name)
         gaps = {gap["capability"] for gap in result["gaps"]}
-        self.assertTrue({"fluid_assembly", "rocket_silo", "rocket_parts", "rocket_launch"} <= gaps)
+        self.assertIn("fluid_assembly", gaps)
+        self.assertFalse({"rocket_silo", "rocket_parts", "rocket_launch"} & gaps)
 
     def test_belts_follow_the_rate(self):
         result = bill(minutes=1)
@@ -316,14 +318,39 @@ class RoadmapTailTests(unittest.TestCase):
     def test_unregistered_tail_capabilities_are_never_proposed(self):
         observation = self.observation()
         jobs = self.done()
-        for _ in range(12):
+        proposed = []
+        for _ in range(16):
             nodes = pg.autopilot_nodes(jobs, [], observation, CAPABILITIES, limit=3)
             if not nodes:
                 break
             for node in nodes:
                 self.assertIn(node["capability"], CAPABILITIES)
+                proposed.append(node["capability"])
                 jobs.append({"capability": node["capability"], "parameters": node["parameters"], "status": "succeeded"})
-        self.assertNotIn("rocket_silo", CAPABILITIES)  # until (d) registers it
+        for stage in ("rocket_silo", "rocket_parts", "rocket_launch"):
+            self.assertIn(stage, CAPABILITIES)
+        # The registered stages end the tail in order (the missing production rows are never proposed).
+        stages = [c for c in proposed if c.startswith("rocket_")]
+        self.assertEqual(stages, ["rocket_silo", "rocket_parts", "rocket_launch"])
+        self.assertNotIn("fluid_assembly", proposed)
+
+    def test_rocket_stage_waits_while_its_inputs_are_produced_nowhere(self):
+        observation = dict(
+            self.observation(),
+            rocket_stages={"rocket_silo": {"ready": False, "missing": [{"item": "concrete"}]}},
+        )
+        jobs = self.done()
+        seen = []
+        for _ in range(16):
+            nodes = pg.autopilot_nodes(jobs, [], observation, CAPABILITIES, limit=3)
+            if not nodes:
+                break
+            seen += [n["capability"] for n in nodes]
+            jobs += [
+                {"capability": n["capability"], "parameters": n["parameters"], "status": "succeeded"} for n in nodes
+            ]
+        self.assertNotIn("rocket_silo", seen)
+        self.assertNotIn("rocket_parts", seen)  # after rocket_silo only
 
     def test_a_faster_produce_row_satisfies_a_tail_row(self):
         step = pg.Step("rocket_produce_pipe", "produce", {"item": "pipe", "rate_per_minute": 8.3})

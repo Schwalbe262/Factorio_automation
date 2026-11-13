@@ -159,6 +159,25 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
             note="crude-oil survey rings widened from 512 to the hard maximum of 1024 tiles, scouting included",
         ),
     ),
+    # rocket_stages.RocketSilo.prepare: hard maxima CANDIDATES_MAX and RING_MIN.
+    "rocket_silo": (
+        Rung(
+            "site:more_silo_blocks",
+            "site",
+            {"rocket_silo_candidates": 12},
+            kinds=("site", "power", "preflight"),
+            note="twelve production blocks probed for the 13x13 silo block instead of four",
+        ),
+        Rung(
+            "relax:narrow_silo_ring",
+            "relax",
+            {"rocket_silo_ring": 1},
+            kinds=("site", "power", "preflight"),
+            note="an 11x11 block: feed inserters inside, belt ports just outside the reservation",
+        ),
+    ),
+    # rocket_feed.RocketParts.prepare_feed routes with transport.plan_connection (route_relax).
+    "rocket_parts": (ROUTE_RELAX_1, ROUTE_RELAX_2),
 }
 
 

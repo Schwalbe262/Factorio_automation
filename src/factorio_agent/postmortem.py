@@ -274,6 +274,13 @@ DRY_RUN = {
     "oil_gathering": DryRun(
         lambda ex, obs, p: ex.oil_gathering.prepare(obs), lambda ex, obs, p: ex.oil_gathering.step(obs)
     ),
+    # The rocket tail (rocket_stages / rocket_feed): the silo site and the stage-ii belt feed.
+    "rocket_silo": DryRun(
+        lambda ex, obs, p: ex._rocket_silo().prepare(obs, p), lambda ex, obs, p: ex._rocket_silo().step(obs, p)
+    ),
+    "rocket_parts": DryRun(
+        lambda ex, obs, p: ex._rocket_parts().prepare_feed(obs, p), lambda ex, obs, p: ex._rocket_parts().step(obs, p)
+    ),
 }
 
 

@@ -14,6 +14,7 @@ MODULES = (
     "bus_and_industry",
     "fluids",
     "defense",
+    "rocket",
 )
 
 

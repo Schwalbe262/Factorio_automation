@@ -252269,3 +252269,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: rocket_plan.rocket_bill (rocket-silo closure 1000x3 packs; SA silo 50 parts of PU+LDS+RF; payload starter pack; flow to ores/crude/water, coproduct rule), tools/rocket_plan.py, tail rows -> observe receipt rocket_plan -> progression.roadmap_for; produce rows match by item, satisfied at >= rate.
 - result: 25-step tail on the real 2.1.20 catalog; 13 research, 4 produce rows (EC, pipe, foundation), inert rows for missing capabilities. Gate passed (worktree, lupa skipped).
 - next: fluid_assembly (PU, RF, concrete, EEU), chemical_product (solid fuel), produce_merged (LDS), wire advanced_petroleum/fluid_products, rocket_silo/parts/launch; verify on a long fleet.
+
+## 2026-11-14 rocket tail stages (worktree agent-a0355b868db7d77d8)
+- part: rocket_silo / rocket_parts / rocket_launch capabilities.
+- goal: the generated roadmap tail can finish with a verified launch.
+- actions: rocket_stages.py (silo spec, StageSupply leaf collection with named waits, rocket_stages receipt gate, RocketSilo: 13x13 site with feed ring, power headroom POWER_LUA, paid hand craft, proof powered + recipe), rocket_feed.py (RocketParts: guarded feed_rocket_silo into crafter_input, belt feed by feed_choice; RocketLaunch over LaunchStage; launch_verified), LAUNCH_LUA unlock + hub-before-delivery guards, summary rocket_launch_verified/rocket_plan/rocket_stages, progression gate, DRY_RUN + RELAXATIONS, report_run final milestone, fleet launch column.
+- result: tests/test_v2_rocket_stages.py (lupa one-line bodies, reconcile, no-grant scan) pass; create_space_platform = free player button (hub only from the delivered pack).
+- failure/risk: no repeatable power growth capability; production rows for PU/LDS/RF/concrete/EEU still missing; unproven live.
+- next: merge, then a long fleet past chemical science once fluid_assembly exists.

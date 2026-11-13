@@ -83,7 +83,12 @@ COLUMNS = (
     ("smelt", "smelting_district"),
     ("bus", "main_bus"),
     ("red", "automation_science"),
+    ("silo", "rocket_silo"),
+    ("launch", "rocket_launch"),
 )
+# Generated tail stages (rocket_plan.tail, not in progression.ROADMAP) whose success is a milestone:
+# a job of this capability marks the step of the same id; rocket_launch is the final milestone.
+TAIL_STAGES = ("rocket_silo", "rocket_parts", "rocket_launch")
 
 # Problem runs kept alive for inspection (post-mortem). A paused client-free run is its
 # server only: ~0.37-0.45 GB and ~0.01 cores (tick paused, supervisor stopped).
@@ -249,14 +254,20 @@ def milestones(jobs, ends, roadmap, same):
         end = ends.get(key)
         if not end or end[1] != "succeeded" or type(end[0]) is not int:
             continue
+        minute = round(end[0] / TICKS_PER_MINUTE, 1)
         for step in roadmap:
             if same(job, step):
-                minute = round(end[0] / TICKS_PER_MINUTE, 1)
                 reached[step.id] = min(minute, reached.get(step.id, minute))
+        if job.get("capability") in TAIL_STAGES:
+            stage = job["capability"]
+            reached[stage] = min(minute, reached.get(stage, minute))
     furthest = None
     for index, step in enumerate(roadmap):
         if step.id in reached:
             furthest = (index, step.id, reached[step.id])
+    for offset, stage in enumerate(TAIL_STAGES, start=len(roadmap)):
+        if stage in reached:
+            furthest = (offset, stage, reached[stage])
     return reached, furthest
 
 

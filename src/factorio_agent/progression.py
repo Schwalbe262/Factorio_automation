@@ -549,6 +549,18 @@ def _packs_unsupplied(step: Step, observation: Mapping, succeeded: set[str]) -> 
     return sorted(p for p in packs if p in PACK_PRODUCERS and PACK_PRODUCERS[p] not in succeeded)
 
 
+def _rocket_inputs_ready(step: Step, observation: Mapping) -> bool:
+    """A rocket stage waits until the ``rocket_stages`` receipt finds every input produced somewhere.
+
+    ``rocket_stages.receipt``: each hand-craft leaf of the silo, of one rocket's parts or of the
+    payload is carried or published by a block's output port. Without the receipt (or a row for
+    the stage) the stage is proposed and its job names what it waits for.
+    """
+    stages = observation.get("rocket_stages")
+    row = stages.get(step.capability) if isinstance(stages, Mapping) else None
+    return not (isinstance(row, Mapping) and row.get("ready") is False)
+
+
 def _natively_queued(step: Step, observation: Mapping) -> bool:
     """A research step whose technology already sits in the native research queue needs no job.
 
@@ -734,6 +746,8 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
         if not _research_ready(step, observation) or _packs_unsupplied(step, observation, succeeded):
             continue
         if _natively_queued(step, observation) or not gate_ready(step, jobs, observation):
+            continue
+        if not _rocket_inputs_ready(step, observation):
             continue
         parameters, note = _sized_parameters(step, observation)
         note += early

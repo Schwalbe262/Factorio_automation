@@ -400,6 +400,25 @@ CAPABILITIES = {
         "requires": ["automation_science"],
         "effect": "select normal native research; machine packs and belt-fed labs only; missing science tiers are explicit blockers",
     },
+    # The rocket tail (rocket_stages.py, rocket_feed.py): generated roadmap rows after chemical science.
+    "rocket_silo": {
+        "parameters": {},
+        "requires": ["chemical_science"],
+        "native_recipes": ["rocket-silo"],
+        "effect": "collect the silo's ingredients from published stock in batches (named waits per item and producer), hand-craft the silo, place it on a reserved 13x13 production block with a feed ring, bridge power after a measured headroom check; prove it standing, charged and on the part recipe",
+    },
+    "rocket_parts": {
+        "parameters": {},
+        "requires": ["rocket_silo"],
+        "native_recipes": ["rocket-part"],
+        "effect": "feed the silo's crafter input until a rocket stands ready: carried ingredients in stacks (guarded paid transfer), or a routed inserter feed from free belt ports when it costs less actor time; never writes the part counter; prove rocket_ready",
+    },
+    "rocket_launch": {
+        "parameters": {},
+        "requires": ["rocket_parts"],
+        "native_recipes": ["space-platform-starter-pack"],
+        "effect": "collect or hand-craft the starter pack, load it into the rocket, request a platform like the player's button and launch; prove the platform hub built from the delivered pack and rockets_launched above the baseline",
+    },
 }
 
 
@@ -519,6 +538,10 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "wood_burner_feed": obs.get("wood_burner_feed"),
         "trunk_return_feeds": obs.get("trunk_return_feeds"),
         "feed_head_rework": obs.get("feed_head_rework"),
+        # The generated roadmap tail (progression.tail_steps) and its stage gates (rocket_stages.receipt).
+        "rocket_plan": obs.get("rocket_plan"),
+        "rocket_stages": obs.get("rocket_stages"),
+        "launch": obs.get("launch"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {
@@ -543,8 +566,15 @@ def summary(obs: dict, ledger: Ledger) -> dict:
             }
             for job in ledger.data["jobs"].values()
         ],
-        "rocket_launch_verified": False,
+        # From the live launch receipt (OBSERVE_LAUNCH_LUA), never from a job's saved claim.
+        "rocket_launch_verified": _launch_verified(obs),
     }
+
+
+def _launch_verified(obs: dict) -> bool:
+    from .rocket_feed import launch_verified
+
+    return launch_verified(obs)
 
 
 MAX_ACTIVE_JOBS = 4

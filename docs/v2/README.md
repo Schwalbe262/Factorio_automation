@@ -14,6 +14,7 @@
 | [LIFECYCLE.md](LIFECYCLE.md) | BAT menu and `lifecycle` commands; parallel measurement runs: "Fleet runs" below |
 | [AUTOMATION_CONFIG.md](AUTOMATION_CONFIG.md) | `automation_config.json` fields and ranges |
 | [HEADLESS.md](HEADLESS.md) | probe: what works without a connected client, why red science needs one |
+| [ROCKET_LAUNCH.md](ROCKET_LAUNCH.md) | rocket_silo / rocket_parts / rocket_launch, the 2.1 Space Age launch API facts, why `create_space_platform` is no grant |
 
 ## Dashboard (read-only run view)
 
