@@ -136,13 +136,72 @@ stored as entities.
   pollution.
 
 Used by `produce` (and through it the planned `ammo_production` and
-`engine_production` rows). `logistic_science` records its genome and metrics; its
-tree has one cluster topology under this generator (the pack machine needs two
-belt-fed neighbours and a free side), so there is nothing to rank yet. Smelting banks
-and the science / lab rows are single-variant generators; giving them genomes needs
-the same three things: parameters on the generator (bank length / pairing, lab row
-length and entry side), a descriptor, and their own place loop calling
-`layout_selection.score`.
+`engine_production` rows) and by red science (`science_layout`, below). Smelting banks are still a single-variant generator; giving them genomes needs
+the same three things: parameters on the generator (bank length / pairing), a descriptor,
+and their own place loop calling `layout_selection.score`.
+
+### Science blocks (`science_layout.py`)
+
+The red science block (machine part + lab part + the pack link between them) is a genome
+family, chosen on the site by `AutomaticScience.prepare` (`_choose_layout`): every
+candidate is probed on one allocation (`science_layout.rank`: `site.fit` port cost of the
+plate inputs towards the tap band + `layout_selection.score`), optionally explored, then
+placed in that order; `automation-science.json` keeps the `layout` record (`chosen_tick`,
+`verified_tick` stamped at the first proof). A block planned before this keeps its built
+template and gets the record `sci-single-row-template` (`science_layout.legacy_record`).
+
+* Genome: `machines` `single` (the proven row: one shared gear machine at the head
+  side-loading gears; ports N/S of the head) | `direct` (pairs `[R][G][R]`: one gear
+  machine between two pack machines by direct insertion, iron and copper on the two
+  lanes of one plate belt fed at its head; both ports face W), `labs` `row` (the eight-lab
+  row) | `both_sides` (labs on both sides of a half-length belt) | `chain` (a belt-fed row
+  plus a second row behind its first columns fed lab-to-lab), `lab_slots` 8. The machine
+  frame is the request's (`science_growth.frame_size`), so a library genome regenerates at
+  any frame.
+* Composition: labs on top, machines below, plates at the west end; the pack belt runs to
+  a link column one tile east of the lab head, north, and west into the head (turns only,
+  red keeps the right lane of the westbound lab belt; green side-loads onto the left one
+  and its entry tunnels under the column, as under the routed link of the template). A
+  longer machine row moves the labs east to the column. Sides are padded to even lengths
+  so quarter turns stay on the tile grid.
+* Audit (`science_layout.audit`, hard): slots readable (`slot_shapes` for the direct pairs),
+  no overlap, parts inside their reservations, every inserter between a belt and a machine,
+  every pack machine's packs reach the lab head on one lane by turns only, every lab
+  reachable (belt or fed lab), every stage prefix (machines x labs) powered per part and
+  every built inserter's both ends built (growth never moves a built entity), lane loads at
+  the full frame within the lane capacity, `layout_findings` of the machine part (the
+  template's gear side-load beside its first machine is the one accepted
+  `belt_wraps_machine`), green's lab entry fits.
+* Descriptor: rate now (start stage) and at the full frame, in-place ceiling and its limit
+  (`gear_output_inserter`: the single row's one head arm moves every gear, 30/min at the
+  conservative plain-inserter budget, so 5 machines; `frame_slots` for the pairs), entities
+  now (the build term) and at the full frame, raw plates of the full frame (`raw_total`)
+  and of the start, kW now / full, pollution, plate draw at full frame, lane loads, growth
+  slots, `green_entry`, `blue_lab_extension` (only the row takes
+  `chemical_science.blue_lab_extension`) and `rebuild_ahead` (a lab part that cannot: its
+  later rebuild as the row, 2 x `W_ENTITY` per lab-part entity + `W_AREA` x the row's 512
+  tiles; scored with `W_REBUILD_AHEAD`).
+* Library: section `science_block` of `data/layouts/automation-science-pack.json`
+  (`python -B tools/layouts.py build automation-science-pack`), one entry per niche
+  `aspect / machines / labs`; `python -B tools/layouts.py show science-block [--frame N]`
+  draws every candidate (start stage, `:` = reserved slot) and ranks them in
+  `science_layout.contexts()`.
+
+Selection on the real catalog, request 6/min, default demand:
+
+```
+frame 6, square 40x40 site, bus W     sci-single-row 332, sci-single-bothsides 381, sci-single-chain 388
+frame 6, shallow 44 along x 28 deep   sci-direct-row 387 (the single row's 32 tiles do not fit the depth)
+frame 6, narrow 26 along x 44 deep    sci-direct-row 347
+frame 2, square 40x40                 sci-direct-row 263, sci-direct-bothsides 282, sci-single-row 288
+frame 2, shallow 44 x 28              sci-direct-bothsides 282, sci-direct-row 295 (turned, port 48)
+frame 6, 48x48, horizon 60/min        sci-direct-row (its ceiling 36/min passes the row's gear arm 30/min)
+```
+
+Not yet: twin machine rows sharing one plate belt. Their two output belts put red packs on
+both lanes of the lab belt (an inserter always drops on the far lane, a side-load moves
+items to the side they come from), which green's lane check refuses; it needs a lane
+merge that keeps one lane (or green on its own belt) first.
 
 Examples (`python -B tools/layouts.py show <item>`, real catalog; letters: G gear,
 B belt, A magazine, E engine, P pipe, `@` input, `O` output, `:` reserved slot).

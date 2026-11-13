@@ -39,6 +39,7 @@ W_AREA = 0.05  # per reserved tile: space left for neighbours
 W_POWER = 0.0  # per kW: off by default; a caller with a tight grid may raise it
 W_POLLUTION = 0.0  # per pollution/min: off by default (owner: later, with evolution pressure)
 W_OVER_BUDGET = 10.0  # per kW above ``Demand.power_budget_kw``: the grid would brown out
+W_REBUILD_AHEAD = 1.0  # per tile-equivalent of a rebuild the descriptor already knows is coming (``rebuild_ahead``)
 HORIZON_GROWTH = 2.0  # without a demand model, a produce request is expected to double over the horizon
 HORIZON_MINUTES = 30.0  # upcoming roadmap units (supply_demand.item_demand) are needed within about this long
 EARLY_TICKS = 2 * 60 * 60 * 60  # plates count as scarce during the first two game hours
@@ -89,6 +90,9 @@ def score(descriptor: dict, demand: Demand, port_cost: float = 0.0) -> tuple[flo
     }
     power = float(descriptor.get("power_kw") or 0.0)
     pollution = float(descriptor.get("pollution_per_min") or 0.0)
+    if descriptor.get("rebuild_ahead"):
+        # A known later rebuild (a lab part the blue extension cannot use), already in tile-equivalents.
+        terms["rebuild_ahead"] = W_REBUILD_AHEAD * float(descriptor["rebuild_ahead"])
     if demand.w_power:
         terms["power"] = demand.w_power * power
     if demand.w_pollution:
@@ -186,7 +190,7 @@ def record(options: list[dict], chosen: dict, *, config: Settings, pool_size: in
         "niche": chosen["niche"],
         "source": chosen["source"],
         "genome": candidate["genome"].to_dict(),
-        "descriptor": compact(candidate["descriptor"]),
+        "descriptor": candidate.get("compact") or compact(candidate["descriptor"]),
         "score": chosen["score"],
         "terms": chosen["terms"],
         "explore": asdict(config),

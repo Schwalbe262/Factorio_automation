@@ -31,7 +31,15 @@ def validate_rate(parameters):
         raise ValueError("red science target must be finite in (0,30]")
 
 
-def science_row(x, y, count):
+def science_row(x, y, count, frame=6):
+    """The single-row red science template; belts and reservation are drawn for ``frame`` slots.
+
+    ``frame`` 6 is the historical row (belts always for six slots whatever ``count``); a
+    generated variant (``science_layout``) passes its sized frame (``count == frame``).
+    """
+    if frame < count:
+        raise ValueError("science_row frame below its slot count")
+    end = 4 * frame - 2  # x offset of the last output belt / the pack port
     es = []
     for i in range(count):
         dx = 4 * i
@@ -41,8 +49,8 @@ def science_row(x, y, count):
             entity("inserter", x + dx, y + 2, 0),
             entity("small-electric-pole", x + dx + 2, y),
         ]
-    es += [entity("transport-belt", x + dx, y - 3, 4) for dx in range(-4, 23)]
-    es += [entity("transport-belt", x + dx, y + 3, 4) for dx in range(23)]
+    es += [entity("transport-belt", x + dx, y - 3, 4) for dx in range(-4, end + 1)]
+    es += [entity("transport-belt", x + dx, y + 3, 4) for dx in range(end + 1)]
     es += [
         entity("transport-belt", x - 2, y - 5, 8),
         entity("transport-belt", x - 2, y - 4, 8),
@@ -64,14 +72,14 @@ def science_row(x, y, count):
     ports = [
         port("iron-plate", x - 7, y + 8, 0),
         port("copper-plate", x - 2, y - 5, 8),
-        port("automation-science-pack", x + 22, y + 3, 4, "output"),
+        port("automation-science-pack", x + end, y + 3, 4, "output"),
     ]
     return _plan(
         es,
         ports,
         template="permanent_red_science_row",
         count=count,
-        reserved_area=[[x - 8.5, y - 6.5], [x + 23.5, y + 9.5]],
+        reserved_area=[[x - 8.5, y - 6.5], [x + end + 1.5, y + 9.5]],
     )
 
 
@@ -229,19 +237,89 @@ class AutomaticScience:
                 "needed": per_machine[item],
                 "available_nominal": available[item],
             }
-        candidates = []
+        context = dict(
+            board=board,
+            bus=bus,
+            span=span,
+            source_ports=source_ports,
+            per_machine=per_machine,
+            count=count,
+            nominal_each=nominal_each,
+            parameters=parameters,
+        )
         # Sites come from the master plan; the fixed development-map list is
         # only for a controller built without a site service.
-        if self.site is not None:
-            blocks = planned_science_candidates(self.site, obs["world_id"], slots)
-        else:
-            blocks = legacy_science_candidates(slots)
+        if self.site is None:
+            return self._try_blocks(obs, legacy_science_candidates(slots), context)
+        return self._choose_layout(obs, root, slots, context)
+
+    def _choose_layout(self, obs, root, slots, context):
+        """The block among audited layout candidates (``science_layout``): ranked on one probe
+        allocation each (``layout_selection.score`` + the site's port cost), optionally explored,
+        then placed in that order; the result carries the ``layout`` record."""
+        from . import layout_selection as selection
+        from . import science_layout
+
+        nominal_each, count = context["nominal_each"], context["count"]
+        request = science_layout.request_for(
+            context["parameters"]["rate_per_minute"],
+            slots,
+            start_machines=science_growth.start_machines(self._queue_targets(obs), nominal_each, count),
+            start_labs=science_growth.START_LABS,
+        )
+        found = science_layout.candidates(self.catalog, request)
+        demand = selection.demand_for(context["parameters"]["rate_per_minute"], tick=obs.get("tick"))
+        config = selection.settings(root)
+        seed = selection.seed_for(obs["world_id"], "automation_science")
+        options, choice = science_layout.rank(
+            self.site, obs["world_id"], found["candidates"], slots, demand, config, seed
+        )
+        if not options:
+            settle(self.site, obs["world_id"], "automation_science", None)
+            return {
+                "ok": False,
+                "reason": "no_science_layout_candidate_fits_a_site",
+                "infeasible": choice["infeasible"][-6:],
+                "skipped": found["skipped"][-6:],
+            }
+        chosen = options[choice["index"]]
+        failed, result = [], None
+        for option in [chosen] + [o for o in options if o is not chosen]:
+            blocks = science_layout.placements(self.site, obs["world_id"], option["candidate"], slots)
+            result = self._try_blocks(obs, blocks, context)
+            if result.get("ok"):
+                result["layout"] = selection.record(
+                    options,
+                    option,
+                    config=choice["config"],
+                    pool_size=choice["pool"],
+                    tick=obs.get("tick"),
+                    fallback_from=failed or None,
+                    library=found["library"],
+                    library_skipped=found["skipped"] or None,
+                    infeasible=choice["infeasible"] or None,
+                )
+                return result
+            failed.append({"variant": option["id"], "reason": result.get("reason")})
+            if result.get("reason") != "no_reserved_science_and_lab_slots_with_clean_connections":
+                break  # a survey failure is the map's, not the layout's
+        return dict(result, layout_failures=failed[-6:])
+
+    def _try_blocks(self, obs, blocks, context):
+        """Plan the first of ``blocks`` (science + lab parts, optional internal pack ``link``) that connects."""
+        board, bus, span = context["board"], context["bus"], context["span"]
+        source_ports, per_machine = context["source_ports"], context["per_machine"]
+        count, nominal_each, parameters = context["count"], context["nominal_each"], context["parameters"]
+        candidates = []
         for block in blocks:
             science, labs = block["science"], block["labs"]
             areas = [science["reserved_area"], labs["reserved_area"]]
             if any(overlap(area, b["reserved_area"]) for area in areas for b in board["blocks"].values()):
                 continue
-            candidates.append({"science": science, "labs": labs, "areas": areas, "allocation": block.get("allocation")})
+            link = list((block.get("link") or {}).get("entities") or [])
+            candidates.append(
+                {"science": science, "labs": labs, "areas": areas, "allocation": block.get("allocation"), "link": link}
+            )
         survey = survey_slots(self.game, [c["areas"] for c in candidates])
         if not survey.get("ok"):
             settle(self.site, obs["world_id"], "automation_science", None)
@@ -250,7 +328,8 @@ class AutomaticScience:
         for index in survey.get("legal", []):
             site = candidates[index - 1]
             science, labs = site["science"], site["labs"]
-            es = merge_entities(science["entities"], labs["entities"])
+            # A generated layout brings its pack link (turns only, one lane); the template's is routed.
+            es = merge_entities(science["entities"], labs["entities"], site["link"])
             routes = []
             clearance = preflight(self.game, self.builder, obs, es)
             if not clearance.get("ok"):
@@ -275,9 +354,10 @@ class AutomaticScience:
                 for route in tapped["routes"]:
                     obstacles.update({(e["name"], *xy(e)): e for e in route["clear_obstacles"]})
             connections = [(sources[p["item"]], p) for p in inputs]
-            connections += [(science["ports"][-1], labs["ports"][0])]
+            if not site["link"]:
+                connections += [(science["ports"][-1], labs["ports"][0])]
             # Tap routes are already planned with their taps; the rest is routed here.
-            pending = connections[-1:] if bus is not None else connections
+            pending = connections[len(inputs) :] if bus is not None else connections
             good = True
             for source, destination in pending:
                 route = belt_connection(self.game, self.builder, obs, source, destination, es, ignored_units=ignored)
@@ -426,6 +506,7 @@ class AutomaticScience:
         if proof:
             # Built routes protect themselves as observed belts from here on.
             self._retire_routes_block(obs)
+            self._mark_layout(obs)
             return {
                 "status": "succeeded",
                 "reason": "normally belt-fed machine science reaches powered labs",
@@ -479,6 +560,18 @@ class AutomaticScience:
             return queue_targets(self.catalog, jobs, obs, horizon=horizon)
         except (KeyError, TypeError, ValueError, AttributeError):
             return []
+
+    def _mark_layout(self, obs):
+        """Stamp the layout record's ``verified_tick`` once (fleet report); an older block gets its
+        template record (``science_layout.legacy_record``): its built block is kept as it is."""
+        from .science_layout import legacy_record
+
+        layout = self.state.get("layout")
+        if not isinstance(layout, dict):
+            layout = legacy_record(self.state)
+        if layout.get("verified_tick") is None:
+            self.state["layout"] = dict(layout, verified_tick=obs.get("tick"))
+            _atomic_json(self.path, self.state)
 
     def _retire_routes_block(self, obs):
         """Drop the routes block once everything it lists is built (observed hardware replaces it)."""

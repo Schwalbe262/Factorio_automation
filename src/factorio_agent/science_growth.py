@@ -84,16 +84,26 @@ def _key(e):
 
 
 def _slots(plan, shape):
+    """Slot entity groups: ``count`` groups of ``shape``, or of the plan's own cycle ``slot_shapes``.
+
+    A generated science variant (``science_layout``) whose slots differ (a direct-insertion
+    pair: the gear machine belongs to the first slot of each pair) declares ``slot_shapes``,
+    a list of name tuples taken in turn; the template rows have none and use ``shape``.
+    """
     count = plan.get("count") if isinstance(plan, Mapping) else None
     entities = plan.get("entities") if isinstance(plan, Mapping) else None
-    if type(count) is not int or count < 1 or not isinstance(entities, list) or len(entities) < count * len(shape):
+    if type(count) is not int or count < 1 or not isinstance(entities, list):
         return None
-    slots = []
+    declared = plan.get("slot_shapes")
+    cycle = [tuple(s) for s in declared] if isinstance(declared, list) and declared else [shape]
+    slots, index = [], 0
     for i in range(count):
-        group = entities[i * len(shape) : (i + 1) * len(shape)]
-        if tuple(e.get("name") for e in group) != shape:
+        names = cycle[i % len(cycle)]
+        group = entities[index : index + len(names)]
+        if len(group) != len(names) or tuple(e.get("name") for e in group) != names:
             return None
         slots.append(group)
+        index += len(names)
     return slots
 
 
@@ -160,6 +170,9 @@ def frame_slot_groups(science_plan, others=()):
     if not slots:
         return []
     groups = [list(group) for group in slots]
+    if science_plan.get("slot_shapes"):
+        # A generated variant reserves its whole frame at plan time (``science_layout``).
+        return groups
     if len(groups) < 2 or not science_plan.get("reserved_area"):
         return groups
     a, b = groups[0][0]["position"], groups[1][0]["position"]
