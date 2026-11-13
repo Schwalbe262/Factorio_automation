@@ -1,6 +1,6 @@
 """Local read-only web dashboard for one v2 runtime and the fleet runs.
 
-Usage: python -B tools/dashboard.py [--runtime runtime/v2/<name>] [--base runtime] [--port 8765]
+Usage: python -B tools/dashboard.py [--runtime runtime/v2/<name>] [--base runtime] [--port 8765] [--host 0.0.0.0]
 
 Tab "병렬 실행" polls ``/api/fleets``: every ``<base>/fleets/*.json`` manifest
 with per-run milestones (``fleet.milestones`` over job-events read
@@ -1073,6 +1073,9 @@ def main(argv=None):
     parser.add_argument("--runtime", type=Path, help="runtime folder (default: <base>/active-runtime.json)")
     parser.add_argument("--base", type=Path, default=REPO / "runtime", help="runtime base (fleets/, v2/)")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="bind address; 0.0.0.0 serves the read-only page to the LAN"
+    )
     args = parser.parse_args(argv)
     base = args.base if args.base.is_absolute() else (Path.cwd() / args.base).resolve()
     root = args.runtime if args.runtime is not None else default_runtime(base=base)
@@ -1080,7 +1083,7 @@ def main(argv=None):
         root = (Path.cwd() / root).resolve()
     if not root.is_dir():
         raise SystemExit(f"runtime folder not found: {root}")
-    server = serve(root, args.port, base=base, follow=args.runtime is None)
+    server = serve(root, args.port, host=args.host, base=base, follow=args.runtime is None)
     print(
         f"dashboard for {root} (fleets of {base}) at http://127.0.0.1:{server.server_address[1]}/  (Ctrl+C stops)",
         flush=True,
