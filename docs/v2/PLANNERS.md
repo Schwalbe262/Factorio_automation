@@ -20,6 +20,47 @@ tuning = change the dataclass default and the test that pins it.
   of `power_coal_feed`); a step with a fixed `priority` uses it instead of `-100 - index`.
 - Tune: `ROADMAP` order/`after`/`builds`; pinned by `tests/test_v2_progression.py`.
 
+## Critical path and item allocation (`critical_path.py`, used by `jobs.run_jobs`)
+
+One computed definition for every stage of the run (no listed early-game steps):
+
+- Satisfied step: a matching job succeeded or its technology is researched
+  (`STEP_TECHNOLOGY` too). On-path step: no fixed `priority` (a fixed priority is
+  the roadmap's way of keeping a step off the path, e.g. `power_coal_feed`).
+- Dependencies are computed: `after`; the first roadmap step of each `requires`
+  capability without a succeeded job; the steps researching each unresearched
+  catalog prerequisite of the step's technology; the steps researching a
+  technology that unlocks a locked `native_recipes` recipe.
+- Frontier = first `CRITICAL_HORIZON = 3` unsatisfied, on-path, not stalled steps
+  in roadmap order that do not wait on an unsatisfied off-path or stalled step.
+  Critical steps = frontier + their transitive unsatisfied on-path dependencies.
+- Critical jobs = active jobs matching a critical step, plus active jobs whose
+  `parameters.products/item/product` supply a non-raw item a critical job claims
+  (a critical job never waits on a starved slack supplier). Everything else
+  (starter capacity, supply cell, produce rows, growth, retirements) is slack.
+- Claims (items in general): catalog item names in a critical job's reason,
+  `evidence.item` (reserving `evidence.need` units when given) and
+  `evidence.needs` `{item: units}`. A job states what it waits for this way.
+
+Allocation rule, applied per pass in `run_jobs`: critical jobs advance first (in
+priority order), then slack jobs (in priority order). A slack job plans against
+`slack_view`: the claimed units are removed from the character's inventory and
+claimed items from machine/furnace outputs and belts; any slack `take`/`take_many`
+of a claimed item, an `insert`/`build` that would cut into the claimed units, or a
+`craft` that spends an item claimed without a unit count becomes a wait
+(`slack_refusal`, reason "slack work yields <item> to the critical path"). Research
+jobs and other controllers that store their own transfer intent are not refused
+(`GUARD_EXEMPT`), only given the view. So: while a critical job waits for a plate,
+no capacity expansion, supply cell feed or pre-crafting takes that plate; capacity
+uses plates nobody on the path is waiting for. The node priorities above still
+order dispatch and the slack jobs among themselves.
+
+Measure it: `python -B tools/critical_path.py runtime/v2/<name> --from 0 --to 30
+--at 10` (critical path at given minutes, per critical job submitted/first
+action/end and wait reasons, actor seconds on critical vs slack work, lab idle
+seconds after power). Tool limits: technologies researched by the native queue
+without a job are not seen; waits are attributed per slice end (25 s).
+
 ## Starter power in two phases (`power_coal_feed.py`, `FactoryBuilder.ensure_power` / `ensure_coal_feed`)
 
 The dedicated coal drill and its belt (95 and 141 hand-crafted belts on two

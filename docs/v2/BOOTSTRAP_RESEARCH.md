@@ -40,6 +40,17 @@ intent. Partial transfers leave only the original remainder available; missing
 or invalid receipts preserve intent and require reconciliation. A zero transfer
 is an explicit blocker, never an unlimited retry or fresh budget.
 
+Funding is incremental (`BootstrapLogistics._incremental_funding`): whatever the
+hands hold of an unfunded input, at least `FUND_CHUNK = 10` plates or the item's
+whole remainder, is inserted at once (never more than the remaining allowance),
+so the machines start on the first plates. The research starts and the courier
+carries packs while the rest arrives. With nothing worth inserting the job
+collects, else waits naming the plate, with `evidence.needs` listing every
+unfunded remainder: that is its critical-path claim (PLANNERS.md "Critical path
+and item allocation"), so slack jobs leave those plates alone. The audited
+diversion recovery only runs once the batch is fully funded (an empty cell while
+plates trickle in is the plate wait, not a diversion).
+
 Proof requires the target natively researched, sufficient new production on the
 same red machine and positive native science consumption since the baseline.
 Historical cell production cannot satisfy a new target. If research completes

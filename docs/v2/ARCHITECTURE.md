@@ -20,7 +20,7 @@ Supervisor.run (supervisor.py) loops _cycle():
   7 _dispatch        submit ready nodes by priority while < 4 jobs active   (jobs.submit)
   8 _run_slice       "run --all --seconds 25" -> jobs.run_jobs
 Commands go through kernel.InProcessBridge -> kernel.Session -> __main__.execute (one RCON socket).
-jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.step(capability)
+jobs.run_jobs: per pass one observe; critical-path jobs first, then slack jobs on a slack view (critical_path.py), each group in priority order; StarterExecutors.step(capability)
   -> shared prelude, then the capability's handler (capability_registry.handler_for)
   -> action dict: durable pending_action, game.act, receipt -> pass ends (fresh observe next)
   -> status dict: recorded; next job gets the same observation
@@ -41,6 +41,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Jobs | `capability_registry.py`, `handlers/` | one `Handler` (step, proof, validate, record_action) per capability, grouped by domain; `handlers/upkeep.py` shared upkeep |
 | Plan | `progression.py` | `ROADMAP` (Step list), `autopilot_nodes`, `capacity_nodes`, `produce_nodes`, `lookahead_demand`, `bulk_item_demand` |
 | Plan | `early_start.py` | early start ("pre-build"): `CAPABILITIES[c]["early_start"]`, inputs checks (receipt `early_start_inputs`), `early_ready`, admission requires, `Deferral` for `ensure_plan(defer=)`, early clock |
+| Plan | `critical_path.py` | computed critical path of the roadmap; critical jobs first in `run_jobs`, slack jobs plan on `slack_view` and may not take or spend items critical jobs claim (PLANNERS.md "Critical path and item allocation"); also used by `tools/critical_path.py` |
 | Plan | `capacity_planning.py` | `plan_capacity`: starter cells, wait vs expand by time |
 | Plan | `research_capacity.py` | labs + science assemblers sized together; `research_capacity_receipt`, `recommended_science_rate` |
 | Plan | `science_growth.py` | staged red science block: start size, reserved slots, evidence growth rule (`science_growth` capability) |

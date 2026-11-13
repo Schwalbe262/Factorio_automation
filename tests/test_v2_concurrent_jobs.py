@@ -171,12 +171,48 @@ class ConcurrentJobTests(unittest.TestCase):
             self.submit("iron2", "starter_capacity", parameters={"cells": 4, "resource": "iron-ore"})
 
     def test_priority_decides_who_acts_first(self):
-        self.submit("low", "power")
+        # Neither job is on the critical path (power is the frontier): priority decides.
+        self.submit("low", "regularize_power_layout")
         self.submit("high", "defense_perimeter", priority=3)
-        executor = Executor({"power": [act("low")], "defense_perimeter": [act("high"), WAIT]})
+        executor = Executor({"regularize_power_layout": [act("low")], "defense_perimeter": [act("high"), WAIT]})
         run_jobs(self.root, self.game, executor, seconds=0.05)
         self.assertEqual(self.game.actions[0]["job"], "high")
         self.assertEqual(self.game.actions[1]["job"], "low")
+
+    def test_critical_job_acts_before_a_higher_priority_slack_job(self):
+        self.submit("power", "power")
+        self.submit("slack", "defense_perimeter", priority=3)
+        executor = Executor({"power": [act("power"), WAIT], "defense_perimeter": [act("slack")]})
+        run_jobs(self.root, self.game, executor, seconds=0.05)
+        self.assertEqual(self.game.actions[0]["job"], "power")
+        self.assertEqual(self.game.actions[1]["job"], "slack")
+
+    def test_slack_job_never_spends_an_item_a_critical_job_waits_for(self):
+        self.game.observation["inventory"] = {"iron-plate": 30, "coal": 5}
+        self.submit("power", "power")
+        self.submit("slack", "defense_perimeter", priority=3)
+        waiting = {
+            "status": "waiting",
+            "reason": "waiting for drill-fed iron-plate production",
+            "evidence": {"item": "iron-plate", "have": 30, "need": 50},
+        }
+        seen = []
+
+        class Recording(Executor):
+            def step(self, capability, obs, parameters=None):
+                if capability == "defense_perimeter":
+                    seen.append(dict(obs.get("inventory") or {}))
+                return super().step(capability, obs, parameters)
+
+        spend = {"type": "insert", "name": "wooden-chest", "item": "iron-plate", "count": 10, "job": "slack"}
+        executor = Recording({"power": [waiting], "defense_perimeter": [spend]})
+        run_jobs(self.root, self.game, executor, seconds=0.05)
+        self.assertEqual(self.game.actions, [])  # the insert became a wait
+        self.assertEqual(seen[0], {"coal": 5})  # 30 iron held, 50 claimed: the slack view shows none
+        slack = self.jobs()["slack"]
+        self.assertEqual(slack["status"], "waiting")
+        self.assertEqual(slack["evidence"]["reserved_item"], "iron-plate")
+        self.assertIn("power", slack["evidence"]["reserved_for"])
 
     def test_equal_priority_runs_oldest_first(self):
         self.submit("first", "power")
