@@ -178,6 +178,24 @@ class MineTrunkGrowth(unittest.TestCase):
         running[0]["status"] = "running"
         self.assertEqual(mine_trunk.mine_trunk_nodes(running, [], {"mine_trunks": receipt}, {"mining_outpost": {}}), [])
 
+    def test_a_bank_whose_output_feeds_nothing_is_no_supply(self):
+        # eval-1575138435: coal_mining_2 (2 drills, port 39.5,15.5) ended on the patch and its 60/min
+        # kept coal growth at "trunk declared demand within supply".
+        dead = patch_bank()
+        dead["plan"] = mining_pair(-40.5, -20.5, 1, "coal")
+        (self.root / "mining-outposts.json").write_text(json.dumps({"world_id": "w", "banks": [self.bank, dead]}))
+        self.record("bricks:coal", 60)
+        port = dead["plan"]["ports"][0]
+        belt = {"name": "transport-belt", "position": dict(port["position"]), "direction": port["facing"]}
+        receipt = mine_trunk.trunk_receipt(self.root, [], {"world_id": "w", "entities": [belt]})
+        self.assertEqual(receipt["trunks"][0]["supply_per_minute"], 60.0)
+        from factorio_agent.transport import VECTORS
+
+        v = VECTORS[port["facing"]]
+        ahead = dict(belt, position={"x": port["position"]["x"] + v[0], "y": port["position"]["y"] + v[1]})
+        receipt = mine_trunk.trunk_receipt(self.root, [], {"world_id": "w", "entities": [belt, ahead]})
+        self.assertEqual(receipt["trunks"][0]["supply_per_minute"], 120.0)
+
     def test_build_ahead_stays_inside_the_reserved_pairs(self):
         # 170 x 1.25 = 212.5 is above the 180/min frame (3 reserved pairs): the target stops at the frame.
         self.assertEqual(mine_trunk.ahead_target(170.0, 60.0, self.bank), 180.0)

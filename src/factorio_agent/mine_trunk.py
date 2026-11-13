@@ -907,10 +907,23 @@ def _trunk_rows(state, mining, obs, belt) -> list[dict]:
             continue
         resource = bank["plan"]["resource"]
         seed = patch_seed(obs, resource)
+        from .outposts import belt_tiles, port_runs_into_nothing
+
+        # A bank whose output feeds nothing is no supply (eval-1575138435: coal_mining_2, 60/min,
+        # its port belt ending on the patch, kept coal growth at "demand within supply").
+        belts = belt_tiles(obs)
+        dead = [
+            b
+            for b in mining.get("banks", [])
+            if b is not bank and not b.get("consumer_connection") and port_runs_into_nothing(b, belts)
+        ]
         supply = sum(
             float(b.get("nominal_rate_per_minute", 0))
             for b in mining.get("banks", [])
-            if b.get("ready") and on_patch(b, resource, seed) and not b.get("material_supply_id")
+            if b.get("ready")
+            and on_patch(b, resource, seed)
+            and not b.get("material_supply_id")
+            and all(b is not d for d in dead)
         )
         taps = sum(float(t.get("demand_per_minute", 0)) for t in trunk.get("taps", {}).values())
         demand = primary_demand(trunk) + taps

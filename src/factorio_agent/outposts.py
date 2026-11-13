@@ -175,6 +175,23 @@ def mining_bank(x, y, count, resource):
     )
 
 
+def belt_tiles(obs) -> dict:
+    """``{tile: entity}`` of the observed belts, undergrounds and splitters."""
+    return {
+        xy(e): e for e in obs.get("entities", []) if e.get("name") in ("transport-belt", "underground-belt", "splitter")
+    }
+
+
+def port_runs_into_nothing(bank, belts) -> bool:
+    """The bank's live port belt stands and no belt is in front of it (its output feeds nothing)."""
+    p = xy(bank["plan"]["ports"][0])
+    live = belts.get(p)
+    if live is None or live.get("name") != "transport-belt":
+        return False
+    v = VECTORS[live.get("direction", 0)]
+    return (p[0] + v[0], p[1] + v[1]) not in belts
+
+
 class MiningOutposts:
     """Electric mining banks per resource, grown to a requested nominal rate.
 
@@ -821,12 +838,7 @@ class MiningOutposts:
                 continue
             port = plan["ports"][0]
             p = xy(port)
-            live = belts.get(p)
-            if p in fed or live is None or live.get("name") != "transport-belt":
-                continue
-            v = VECTORS[live.get("direction", 0)]
-            ahead = (p[0] + v[0], p[1] + v[1])
-            if ahead in belts:
+            if p in fed or not port_runs_into_nothing(bank, belts):
                 continue
             found.append(bank)
         return found
