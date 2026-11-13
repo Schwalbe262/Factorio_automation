@@ -117,6 +117,147 @@ class NeedsContractTests(unittest.TestCase):
         self.assertNotEqual(plan_needs.signature(a), plan_needs.signature(c))
 
 
+class PlannerNeedsTests(unittest.TestCase):
+    """Each blocking planner's failure shape (as its prepare/step returns it) yields needs of the right kind."""
+
+    SHAPES = {
+        # outposts.MiningOutposts.step (bank / extension)
+        "mining_outpost": (
+            {
+                "status": "blocked",
+                "reason": "no_policy_compliant_paired_bank_with_growth_and_power",
+                "evidence": {
+                    "candidate_count": 0,
+                    "candidate_failures": [],
+                    "exit_sides_tried": ["E"],
+                    "attempts": [{"patch": "seed", "side": "E", "reason": "x"}],
+                    "needs": "another_patch_or_smaller_row",
+                },
+            },
+            "bank",
+        ),
+        # material_supply.MaterialSupply.prepare: trunk tap failed, then no new bank
+        "dedicated_materials": (
+            {
+                "status": "blocked",
+                "ok": False,
+                "reason": "no_policy_compliant_paired_bank_with_growth_and_power",
+                "candidate_count": 1,
+                "candidate_failures": [],
+                "attempted_banks": 1,
+                "trunk_tap": {"reason": "planned_bus_tap_unavailable"},
+            },
+            "bank",
+        ),
+        # smelting.SmeltingDistrict.prepare
+        "smelting_district": (
+            {
+                "status": "blocked",
+                "reason": "no_clear_pcb_smelting_district_with_corridors",
+                "legal_sites": 5,
+                "corridor_failures_by_item": {"iron-ore": 5},
+            },
+            "site",
+        ),
+        # planned_bus.PlannedBus (feeds, trunks)
+        "planned_main_bus": (
+            {
+                "status": "blocked",
+                "reason": "planned_bus_feed_route_failed",
+                "route_failures": [
+                    {
+                        "item": "iron-plate",
+                        "source": {"x": 1, "y": 1},
+                        "destination": {"x": 9, "y": 1},
+                        "reason": "no_clean_trunk_corridor",
+                    }
+                ],
+            },
+            "route",
+        ),
+        # production_site.place_line (rows) with a tap that did not route
+        "produce": (
+            {
+                "status": "blocked",
+                "reason": "no_production_row_site_with_complete_connections",
+                "candidates": 4,
+                "failures": [
+                    {
+                        "allocation": "b1",
+                        "reason": "planned_bus_tap_route_failed",
+                        "item": "iron-plate",
+                        "side": 1,
+                        "failures": [],
+                    }
+                ],
+            },
+            "tap",
+        ),
+        # supply_cell.SupplyCell.prepare
+        "supply_cell": ({"status": "blocked", "reason": "no_clear_supply_cell_site", "candidates": 3}, "site"),
+        # steam_expansion.SteamExpansion.prepare
+        "steam_expansion": (
+            {
+                "status": "blocked",
+                "reason": "steam_expansion_layout_unroutable",
+                "failures": [{"kind": "pair", "reason": "steam_no_coal_stub_variant_available"}],
+            },
+            "plan",
+        ),
+        # planned_furnaces.PlannedFurnaces.prepare (brick / steel)
+        "brick_production": (
+            {
+                "status": "blocked",
+                "reason": "no_brick_furnace_block_with_complete_connections",
+                "failures": [
+                    {"allocation": "b", "reason": "route_port_escape_reserved_by_unbuilt_plan", "item": "stone"}
+                ],
+            },
+            "plan",
+        ),
+        # trunk_return_feed.TrunkReturnFeed.prepare
+        "trunk_return_feed": ({"status": "blocked", "reason": "no_return_feed_site_at_the_trunk_head"}, "site"),
+        # green_science.LogisticScience.prepare (taps for the science cluster)
+        "logistic_science": (
+            {
+                "status": "blocked",
+                "reason": "no_green_science_site_with_clean_connections",
+                "failures": [
+                    {
+                        "ok": False,
+                        "reason": "planned_bus_tap_route_failed",
+                        "item": "iron-plate",
+                        "side": -1,
+                        "failures": [{"reason": "no_clean_trunk_corridor"}],
+                    }
+                ],
+            },
+            "tap",
+        ),
+    }
+
+    def test_every_blocking_planner_returns_needs(self):
+        for capability, (result, kind) in self.SHAPES.items():
+            with self.subTest(capability=capability):
+                needs = plan_needs.from_result(capability, result)
+                self.assertEqual(needs["kind"], kind)
+                self.assertTrue(needs["change"])
+                self.assertTrue(remedy.ladder(capability))
+                self.assertIn(capability, remedy.dry_runs())
+
+    def test_the_trunk_tap_failure_is_the_named_change(self):
+        result, _ = self.SHAPES["dedicated_materials"]
+        self.assertIn("trunk", plan_needs.from_result("dedicated_materials", result)["change"])
+
+    def test_bus_trunk_and_unbuilt_hardware_are_planning_failures(self):
+        for reason in (
+            "planned_bus_trunk_blocked",
+            "furnace_block_meets_planned_hardware",
+            "steam_expansion_no_buildable_bank_slot",
+        ):
+            self.assertTrue(plan_needs.is_planning_failure(reason), reason)
+
+
 class ResolverTests(unittest.TestCase):
     def test_rungs_come_in_ladder_order_once_per_needs_signature(self):
         needs = plan_needs.make("site", "no_green_science_site_with_clean_connections", block="logistic_science")
@@ -551,6 +692,51 @@ class LedgerTests(unittest.TestCase):
             self.assertIn("remedy_applied", events)
             with self.assertRaises(ValueError):
                 jobs.control(root, Game(), "k", "pause", remedy_rung={"options": {}})
+
+
+class JobRunnerTests(unittest.TestCase):
+    def test_a_blocked_planning_failure_stores_needs_and_the_retry_plans_with_the_rung(self):
+        from factorio_agent.jobs import Ledger, control, run_slice
+        from test_v2_concurrent_jobs import ConcurrentJobTests, Executor
+
+        harness = ConcurrentJobTests("test_two_jobs_can_be_active_together")
+        harness.setUp()
+        self.addCleanup(harness.doCleanups)
+        harness.submit("power", "power")
+        failure = {
+            "status": "blocked",
+            "reason": "no_clear_power_site",
+            "failures": [
+                {
+                    "reason": "no_clean_trunk_corridor",
+                    "item": "coal",
+                    "source": {"x": 1, "y": 1},
+                    "destination": {"x": 5, "y": 1},
+                }
+            ],
+        }
+        seen = []
+
+        class Recording(Executor):
+            def step(self, capability, obs, parameters=None):
+                seen.append(remedy.option("route_relax"))
+                return super().step(capability, obs, parameters)
+
+        run_slice(harness.root, harness.game, Recording({"power": [failure]}), "power")
+        row = Ledger(harness.root).data["jobs"]["power"]
+        self.assertEqual((row["status"], row["needs"]["kind"]), ("blocked", "route"))
+        terminal = [json.loads(line) for line in (harness.root / "job-events.jsonl").read_text().splitlines()]
+        self.assertEqual(terminal[-1]["needs"]["kind"], "route")
+        control(
+            harness.root,
+            harness.game,
+            "power",
+            "retry",
+            remedy_rung={"rung": "site:longer_connection", "kind": "site", "options": {"route_relax": 1}},
+        )
+        run_slice(harness.root, harness.game, Recording({"power": [failure]}), "power")
+        self.assertEqual(seen, [None, 1])
+        self.assertEqual(Ledger(harness.root).data["jobs"]["power"]["remedy"]["rung"], "site:longer_connection")
 
 
 class WasteReportTests(unittest.TestCase):

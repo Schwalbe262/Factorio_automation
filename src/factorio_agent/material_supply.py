@@ -303,7 +303,13 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
                     return budget.failure(candidate_failures=failures, attempted_banks=attempt)
                 bank = prepare_new_bank(planning_game, self.builder, obs, resource, 2, planning_reservations)
                 if not bank.get("ok"):
-                    return dict(bank, candidate_failures=failures, attempted_banks=attempt + 1)
+                    # The trunk-tap failure stays visible (plan_needs: the change that would unblock it).
+                    return dict(
+                        bank,
+                        candidate_failures=failures,
+                        attempted_banks=attempt + 1,
+                        **({"trunk_tap": second_group} if second_group else {}),
+                    )
                 if resource != "coal":
                     break
                 hub = self._coal_hub(

@@ -53,6 +53,12 @@ PLANNING_MARKERS = (
     "reserved_by_unbuilt_plan",
     "obstructed",
     "power_bridge",
+    "unroutable",  # steam_expansion_layout_unroutable
+    "_no_buildable",  # steam_expansion_no_buildable_bank_slot
+    "trunk_blocked",  # planned_bus_trunk_blocked
+    "meets_planned_hardware",  # planned furnaces, mining banks
+    "no_coal_stub_variant",  # steam expansion coal stub
+    "board_reservation_overlap",
 )
 # Reasons that start with "no_" but wait for something other than space.
 NOT_SPATIAL = ("no_minable", "no_progress", "no_science", "no_fuel", "no_research")
@@ -200,6 +206,16 @@ def from_result(capability: str, result: Mapping, parameters: Mapping | None = N
     common = {"block": capability}
     string_needs = data.get("needs") if isinstance(data.get("needs"), str) else None
     failures = data.get("failures") if isinstance(data.get("failures"), list) else []
+    if not failures:
+        # Layout candidates that did not fit (production_site.place_line) count like site failures.
+        for name in ("layout_failures", "infeasible"):
+            if isinstance(data.get(name), list) and data[name]:
+                failures = data[name]
+                break
+    trunk_tap = data.get("trunk_tap") if isinstance(data.get("trunk_tap"), Mapping) else None
+    if trunk_tap and not string_needs:
+        # dedicated_materials: tapping the patch's bank trunk failed first, then a new bank found no anchor.
+        string_needs = _text(f"a tap on the patch trunk ({trunk_tap.get('reason')}) or a new bank anchor")
     # Tap rows: the bus tap could not be placed or routed.
     tap = next((f for f in failures if isinstance(f, Mapping) and "tap" in str(f.get("reason", ""))), None)
     if tap is None and "planned_bus_tap" in reason:

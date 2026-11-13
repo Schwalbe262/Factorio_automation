@@ -262,7 +262,19 @@ DRY_RUN = {
         lambda ex, obs, p: ex.material_supply.prepare(obs, p), lambda ex, obs, p: ex.material_supply.step(obs, p)
     ),
     "logistic_science": DryRun(lambda ex, obs, p: ex.green.prepare(obs, p)),
+    "brick_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "brick")),
+    "steel_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "steel")),
+    "steam_expansion": DryRun(lambda ex, obs, p: ex.steam_expansion.prepare(obs)),
+    "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
 }
+
+
+def _furnace_prepare(ex, obs, kind):
+    """The planned furnace block (``planned_furnaces``) on a planned world, else the legacy industrial plan."""
+    planned = ex.industrial_operations.planned(kind, obs)
+    if planned is not None:
+        return planned.prepare(obs)
+    return getattr(ex.industrial_operations, f"prepare_{kind}_production")(obs)
 
 
 def _handler_step(ex, obs, parameters, capability):
