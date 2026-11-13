@@ -20,7 +20,8 @@ from factorio_agent.core.deterministic_builder import _plan
 
 from .manufacturing import connect_power_groups
 from .planning import overlap, preflight
-from .production_layout import audit_line, design_line
+from . import planned_tap
+from .production_layout import audit_line, design_line, input_demand
 from .production_sources import resolve
 from .site.fit import orientations
 from .site.placement import block_wants, settle
@@ -54,14 +55,65 @@ def _output_facing(line: dict) -> dict:
     return dict(line["output"], facing=belt_out["facing"])
 
 
-def _routes(game, builder, obs, board, line, owner, product):
-    entities = list(line["entities"])
-    routes, connections, sources = [], [], []
-    for port in line["inputs"]:
-        found = resolve(board, product, port["item"], owner=owner)
+def _taps(game, builder, obs, board, line, owner, block, ports, catalog):
+    """Planned-bus taps and routes for ``ports`` (``planned_tap.connect_inputs``)."""
+    if not ports:
+        return {
+            "ok": True,
+            "entities": list(line["entities"]),
+            "routes": [],
+            "taps": [],
+            "ignored_units": [],
+            "sources": {},
+        }
+    span = planned_tap.max_span(game)
+    if span is None:
+        return {"ok": False, "reason": "planned_bus_underground_span_unknown"}
+    demand = {p["item"]: input_demand(catalog, line, p["item"]) for p in ports}
+    bus = planned_tap.published(board, obs["world_id"])
+    if bus is None:
+        return {"ok": False, "reason": "planned_bus_world_changed"}
+    return planned_tap.connect_inputs(
+        game,
+        builder,
+        obs,
+        bus,
+        owner=owner,
+        allocation=block,
+        inputs=ports,
+        entities=list(line["entities"]),
+        demand=demand,
+        span=span,
+        route=plan_connection,
+    )
+
+
+def _routes(game, builder, obs, board, line, owner, product, block=None, catalog=None):
+    found_by_port = [(port, resolve(board, product, port["item"], owner=owner)) for port in line["inputs"]]
+    for _, found in found_by_port:
         if not found["ok"]:
             return {"ok": False, **found}
-        route = plan_connection(game, builder, obs, found["source"], port, entities)
+    tapped = [port for port, found in found_by_port if found["kind"] == "planned_bus_tap"]
+    taps = _taps(game, builder, obs, board, line, owner, block, tapped, catalog)
+    if not taps["ok"]:
+        return taps
+    entities = taps["entities"]
+    routes = list(taps["routes"])
+    connections = [
+        {
+            "item": p["item"],
+            "source": taps["sources"][p["item"]]["position"],
+            "destination": p["position"],
+            "owner": owner,
+        }
+        for p in tapped
+    ]
+    sources = [{"item": p["item"], "kind": "planned_bus_tap", "block": "shared_main_bus"} for p in tapped]
+    extra = {"ignored_units": tuple(taps["ignored_units"])} if taps["ignored_units"] else {}
+    for port, found in found_by_port:
+        if found["kind"] == "planned_bus_tap":
+            continue
+        route = plan_connection(game, builder, obs, found["source"], port, entities, **extra)
         if not route.get("ok"):
             return {"ok": False, "reason": route.get("reason", "route_failed"), "item": port["item"]}
         routes.append(route)
@@ -75,7 +127,15 @@ def _routes(game, builder, obs, board, line, owner, product):
                 "owner": owner,
             }
         )
-    return {"ok": True, "entities": entities, "routes": routes, "connections": connections, "sources": sources}
+    return {
+        "ok": True,
+        "entities": entities,
+        "routes": routes,
+        "connections": connections,
+        "sources": sources,
+        "taps": taps["taps"],
+        "ignored_units": taps["ignored_units"],
+    }
 
 
 def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner: str, returns_to_bus: bool = False):
@@ -113,7 +173,7 @@ def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner:
             ):
                 failures.append({"allocation": block.name, "reason": "board_reservation_overlap"})
                 continue
-            routed = _routes(game, builder, obs, board, line, owner, product)
+            routed = _routes(game, builder, obs, board, line, owner, product, block, catalog)
             if not routed["ok"]:
                 failures.append({"allocation": block.name, **routed})
                 continue
@@ -123,7 +183,7 @@ def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner:
                 failures.append({"allocation": block.name, "reason": power.get("reason", "power_failed")})
                 continue
             entities = merge_entities(routed["entities"], power["entities"])
-            check = preflight(game, builder, obs, entities)
+            check = preflight(game, builder, obs, entities, ignored_units=routed["ignored_units"])
             if not check.get("ok"):
                 failures.append({"allocation": block.name, "reason": check.get("reason", "preflight_failed")})
                 continue
@@ -132,7 +192,8 @@ def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner:
                 entities,
                 line["inputs"] + [line["output"]],
                 reserved_area=line["reserved_area"],
-                underground_pairs=[pair for r in routed["routes"] for pair in r.get("underground_pairs", [])],
+                underground_pairs=[pair for r in routed["routes"] for pair in r.get("underground_pairs", [])]
+                + planned_tap.tap_pairs(routed["taps"]),
                 clear_obstacles=list(obstacles.values()),
                 clearance_world_id=obs["world_id"],
                 layout_policy=LAYOUT_POLICY,
@@ -149,6 +210,7 @@ def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner:
                 "plan": plan,
                 "connections": routed["connections"],
                 "sources": routed["sources"],
+                "taps": routed["taps"],
                 "route_metrics": [r.get("route_metrics") for r in routed["routes"]],
             }
     settle(site, obs["world_id"], owner, None)

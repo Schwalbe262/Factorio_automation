@@ -36,8 +36,11 @@ Publication: ``board["shared_main_bus"]`` with ``template`` ``planned_main_bus``
 the bus frame, the lane table (built / reserved / spare), trunks, per-material
 lane-band ``reservations`` (whole bus length; ``transport`` keeps other routes
 out of them), head/tail ``ports``, ``entities`` and ``underground_pairs``.
-Bus taps (``bus_tap.BusTap``) still only understand the old northbound
-development-map bus and refuse this template; see ``docs/v2/MAIN_BUS.md``.
+Taps (``planned_tap.py``) are planned by each consumer together with its
+block and recorded in the state's ``taps``; ``effective_plan`` is the bus
+plan with every tap applied (publication and proof use it). The old
+``bus_tap.BusTap`` only understands the development-map bus; see
+``docs/v2/MAIN_BUS.md``.
 """
 
 from __future__ import annotations
@@ -150,8 +153,46 @@ def spliced_district_plan(plan: dict, feeds: list[dict]) -> dict:
     return _plan(merge_entities(kept, [f["splitter"] for f in feeds]), plan["ports"], **extra)
 
 
+def trunk_ports(bus: Bus, trunks: list[dict]) -> list[dict]:
+    """Head (input) and tail (output) port of every built trunk."""
+    facing = FACING[bus.direction]
+    ports = []
+    for row in trunks:
+        for role, key in (("input", "head"), ("output", "tail")):
+            ports.append(
+                {
+                    "kind": "item",
+                    "item": row["item"],
+                    "position": row[key],
+                    "facing": facing,
+                    "direction": role,
+                    "lane": row["lane"],
+                    "role": key,
+                }
+            )
+    return ports
+
+
+def effective_plan(state: dict) -> dict:
+    """The bus plan with every recorded tap applied: replaced trunk belts out, tap hardware and ports in."""
+    plan = state["plan"]
+    taps = state.get("taps", [])
+    if not taps:
+        return plan
+    removed = {_at(p) for tap in taps for p in tap["remove"]}
+    kept = [e for e in plan["entities"] if not (e["name"] == "transport-belt" and xy(e) in removed)]
+    entities = merge_entities(kept, *(tap["entities"] for tap in taps))
+    pairs = plan.get("underground_pairs", []) + [p for tap in taps for p in tap["underground_pairs"]]
+    ports = trunk_ports(Bus.from_dict(state["bus"]), state["trunks"]) + [tap["port"] for tap in taps]
+    extra = {k: v for k, v in plan.items() if k not in ("ok", "reason", "entities", "ports", "required_items")}
+    extra["underground_pairs"] = pairs
+    return _plan(entities, ports, **extra)
+
+
 def publication(state: dict) -> dict:
     """``board["shared_main_bus"]`` for a prepared bus (see module doc)."""
+    from .planned_tap import station
+
     bus = Bus.from_dict(state["bus"])
     built = {row["item"]: row for row in state["trunks"]}
     lanes = []
@@ -173,7 +214,7 @@ def publication(state: dict) -> dict:
         }
         for item in materials
     ]
-    plan = state["plan"]
+    plan = effective_plan(state)
     return {
         "template": TEMPLATE,
         "version": 1,
@@ -190,7 +231,7 @@ def publication(state: dict) -> dict:
             {k: f[k] for k in ("item", "source", "district_port")} | {"splitter": f["splitter"]["position"]}
             for f in state["feeds"]
         ],
-        "stations": [],
+        "stations": [station(tap) for tap in state.get("taps", [])],
     }
 
 
@@ -291,21 +332,7 @@ class PlannedBus:
         whole = self.check(self.game, self.builder, obs, entities, ignored_units=anchors)
         if not whole.get("ok"):
             return {"ok": False, "reason": "planned_bus_whole_preflight_failed", "detail": whole}
-        facing = FACING[bus.direction]
-        ports_out = []
-        for row in trunks:
-            for role, key in (("input", "head"), ("output", "tail")):
-                ports_out.append(
-                    {
-                        "kind": "item",
-                        "item": row["item"],
-                        "position": row[key],
-                        "facing": facing,
-                        "direction": role,
-                        "lane": row["lane"],
-                        "role": key,
-                    }
-                )
+        ports_out = trunk_ports(bus, trunks)
         common = dict(
             layout_policy="pcb-planned-main-bus-v1",
             underground_pairs=pairs,
@@ -345,7 +372,8 @@ class PlannedBus:
         for order in (feeds, feeds[::-1]):
             es, pairs, metrics, good = list(entities), [], [], True
             for feed in order:
-                extra = {} if guide is None else {"guide": guide}
+                # The feed ends on the lane head inside the bus band: a bus route.
+                extra = {"bus_route": True} if guide is None else {"guide": guide, "bus_route": True}
                 route = self.route(self.game, self.builder, obs, feed["source"], heads[feed["item"]], es, **extra)
                 if not route.get("ok"):
                     failures.append({"item": feed["item"], "reason": route.get("reason")})
@@ -482,7 +510,7 @@ class PlannedBus:
             or state.get("phase") not in ("commission", "verified")
         ):
             return None
-        plan = state["plan"]
+        plan = effective_plan(state)
         if not underground_proof(obs, plan):
             return None
         live = {(e["name"], *xy(e)): e for e in obs["entities"]}

@@ -1,4 +1,4 @@
-"""Green science plans from the site plan on fresh maps in every orientation."""
+"""Red and green science plan from the site plan on fresh maps in every orientation, plates from bus taps."""
 
 import json
 import unittest
@@ -10,19 +10,20 @@ from unittest.mock import patch
 from site_transforms import transform_world
 from test_v2_site_service import FakeGame
 
+from factorio_agent import planned_bus as pb
+from factorio_agent import planned_tap as pt
 from factorio_agent.compact_green import _recipe_catalog
 from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.green_science import GREEN_BLOCK, LogisticScience, planned_green_cores
 from factorio_agent.manufacturing import GREEN_CORE_DEPTH, lab_green_entry_outside
-from factorio_agent.science import lab_row, planned_science_candidates
+from factorio_agent.science import AutomaticScience, lab_row
 from factorio_agent.site.fakeworld import make_world
-from factorio_agent.site.placement import settle
 from factorio_agent.site.planmodel import SiteConfig
 from factorio_agent.site.service import SiteService
 from factorio_agent.site.transform import Transform, apply, in_canonical, plan_transform, variants
 from factorio_agent.smelting import merge_entities
 from factorio_agent.smelting_site import plan_candidates
-from factorio_agent.transport import plan_connection, xy
+from factorio_agent.transport import xy
 
 WORLD = "w1"
 SEED = 3
@@ -31,6 +32,7 @@ KINDS = (None, "flip_x", "flip_y", "rotate")
 GEOMETRY = FactoryBuilder.__new__(FactoryBuilder)
 BUILDER = SimpleNamespace(_occupied_by_plan=GEOMETRY._occupied_by_plan, can_place=lambda entities: {"ok": True})
 CLEAR = {"ok": True, "blocked": [], "max_span": 5}
+OK = {"ok": True, "clear_obstacles": []}
 
 
 def catalog():
@@ -68,8 +70,14 @@ def overlaps(entities):
     return sum(len(GEOMETRY._occupied_by_plan([e])) for e in entities) - len(tiles(entities))
 
 
+def feed_route(game, builder, obs, source, destination, reserved, **kwargs):
+    """The bus feed route is not under test here: its two end belts only."""
+    ends = [dict(name="transport-belt", position=p["position"], direction=p["facing"]) for p in (source, destination)]
+    return {"ok": True, "entities": ends, "underground_pairs": [], "route_metrics": {}}
+
+
 class World:
-    """A fresh map once red science is planned: district, red row, labs and red routes on plan sites."""
+    """A fresh map once red science is planned: district, planned bus, red science on bus taps."""
 
     def __init__(self, root, kind, *, iron_ore=60, copper_ore=30, red_rate=30):
         self.root = root
@@ -79,36 +87,16 @@ class World:
         self.district = _plan(
             district["entities"], ports, reserved_area=district["area"], site_transform=district["site_transform"]
         )
-        block = planned_science_candidates(self.site, WORLD, 3)[0]
-        settle(self.site, WORLD, "automation_science", block["allocation"])
-        self.science_block, self.labs = block["science"], block["labs"]
         self.game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root), query=lambda _body: CLEAR)
         self.write_board({"smelting_district": self.district})
-        entities = merge_entities(self.district["entities"], self.science_block["entities"], self.labs["entities"])
+        entities = list(self.district["entities"])
+        recipes = ("logistic-science-pack", "fast-inserter", "automation-science-pack", "iron-gear-wheel")
         self.obs = {
             "world_id": WORLD,
             "tick": 100,
-            "enabled_recipes": {"logistic-science-pack": True, "fast-inserter": True},
+            "enabled_recipes": {name: True for name in recipes},
             "entities": self.built(entities),
         }
-        # Red science's own routes, planned like AutomaticScience.prepare does.
-        sources = {p["item"]: p for p in ports}
-        connections = [(sources[p["item"]], p) for p in self.science_block["ports"] if p["direction"] == "input"]
-        connections.append((self.science_block["ports"][-1], self.labs["ports"][0]))
-        self.red_routes = []
-        for source, destination in connections:
-            route = plan_connection(self.game, BUILDER, self.obs, source, destination, entities)
-            assert route["ok"], (kind, source["item"], route.get("reason"))
-            entities = merge_entities(entities, route["entities"])
-            self.red_routes += route["entities"]
-        self.obs["entities"] = self.built(entities)
-        self.write_board(
-            {
-                "smelting_district": self.district,
-                "automation_science": self.science_block,
-                "laboratories": self.labs,
-            }
-        )
         mining = {
             "world_id": WORLD,
             "banks": [
@@ -117,25 +105,68 @@ class World:
             ],
         }
         (root / "mining-outposts.json").write_text(json.dumps(mining), encoding="utf-8")
-        smelting = SimpleNamespace(state={"world_id": WORLD, "plan": self.district, "banks": district["banks"]})
-        science = SimpleNamespace(proof=lambda obs: True, state={"labs": self.labs, "nominal_machine_rate": red_rate})
+        smelting_state = {"world_id": WORLD, "plan": self.district, "banks": district["banks"]}
+        (root / "smelting-district.json").write_text(json.dumps(smelting_state), encoding="utf-8")
+        smelting = SimpleNamespace(state=smelting_state, path=root / "smelting-district.json")
+        # The planned bus, built: trunks and feed belts stand, the board publishes it.
+        bus = pb.PlannedBus(
+            self.game, BUILDER, catalog(), smelting, self.site, route=feed_route, check=lambda *a, **k: OK
+        )
+        state = bus.prepare(self.obs)
+        assert state["ok"], (kind, state)
+        state["phase"] = "verified"
+        (root / pb.STATE_FILE).write_text(json.dumps(state), encoding="utf-8")
+        self.bus_rect = self.site.plan(WORLD).bus.rect()
+        entities = merge_entities(entities, state["staged_plan"]["entities"])
+        self.obs["entities"] = self.built(entities)
+        board = self.board()
+        board["shared_main_bus"] = pb.publication(state)
+        self.write_board(board["blocks"], bus=board["shared_main_bus"])
+        # Red science on bus taps, then built (tap belts replace the trunk belts they tap).
+        red = AutomaticScience(self.game, BUILDER, catalog(), site=self.site)
+        with (
+            patch("factorio_agent.science.preflight", return_value=OK),
+            patch("factorio_agent.science.survey_slots", side_effect=self.legal),
+            patch("factorio_agent.science.power_connection", return_value={"ok": True, "entities": []}),
+        ):
+            self.red = red.prepare(self.obs, {"rate_per_minute": red_rate})
+        assert self.red["ok"], (kind, self.red.get("reason"), self.red.get("failures", [])[:2])
+        self.science_block, self.labs = self.red["science"], self.red["labs"]
+        removed = {xy({"position": p}) for tap in self.red["taps"] for p in tap["remove"]}
+        entities = [e for e in entities if not (e["name"] == "transport-belt" and xy(e) in removed)]
+        entities = merge_entities(entities, self.red["plan"]["entities"])
+        self.obs["entities"] = self.built(entities)
+        for tap in self.red["taps"]:
+            tap["built"] = True
+        assert pt.publish(root, WORLD, self.red["taps"]) is None
+        board = self.board()
+        board["blocks"].update(automation_science=self.science_block, laboratories=self.labs)
+        self.write_board(board["blocks"], bus=board["shared_main_bus"])
+        rate = self.red["nominal_machine_rate"]
+        science = SimpleNamespace(proof=lambda obs: True, state={"labs": self.labs, "nominal_machine_rate": rate})
         self.green = LogisticScience(self.game, BUILDER, catalog(), smelting, science, site=self.site)
+
+    @staticmethod
+    def legal(game, slots):
+        return {"ok": True, "legal": list(range(1, len(slots) + 1))}
 
     @staticmethod
     def built(entities):
         return [dict(e, unit_number=i + 1) for i, e in enumerate(entities)]
 
-    def write_board(self, blocks):
-        board = {"world_id": WORLD, "catalog_fingerprint": "cat", "blocks": blocks}
+    def board(self):
+        return json.loads((self.root / "pcb-board.json").read_text(encoding="utf-8"))
+
+    def write_board(self, blocks, bus=None):
+        board = {"world_id": WORLD, "catalog_fingerprint": "cat", "blocks": blocks, "connections": []}
+        if bus is not None:
+            board["shared_main_bus"] = bus
         (self.root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
 
     def prepare(self, rate=30):
-        def legal(game, slots):
-            return {"ok": True, "legal": list(range(1, len(slots) + 1))}
-
         with (
-            patch("factorio_agent.green_science.preflight", return_value={"ok": True, "clear_obstacles": []}),
-            patch("factorio_agent.green_science.survey_slots", side_effect=legal),
+            patch("factorio_agent.green_science.preflight", return_value=OK),
+            patch("factorio_agent.green_science.survey_slots", side_effect=self.legal),
             patch("factorio_agent.green_science.connect_power_groups", return_value={"ok": True, "entities": []}),
         ):
             return self.green.prepare(self.obs, {"rate_per_minute": rate})
@@ -163,28 +194,41 @@ class GreenSitePlanTests(unittest.TestCase):
                     facing = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}[port["facing"]]
                     self.assertEqual(facing, (-normal[0], -normal[1]), port)
 
-    def test_every_orientation_plans_branch_core_and_lab_delivery(self):
+    def assert_taps(self, world, prepared, owner):
+        """Two built-or-planned taps for ``owner``; nothing else of the plan stands in the bus band."""
+        taps = prepared["taps"]
+        self.assertEqual(sorted(t["item"] for t in taps), ["copper-plate", "iron-plate"])
+        self.assertTrue(all(t["owner"] == owner for t in taps))
+        allocation = world.site.allocation(prepared.get("allocation") or prepared["core"]["allocation"], WORLD)
+        tap_tiles = tiles([e for t in taps for e in t["entities"]])
+        rest = tiles(prepared["plan"]["entities"]) - tap_tiles
+        self.assertFalse(any(world.bus_rect.contains(int(x - 0.5), int(y - 0.5)) for x, y in rest), owner)
+        for tap in taps:
+            self.assertEqual(tap["side"], allocation.side)
+            p = tap["port"]["position"]
+            self.assertFalse(world.bus_rect.contains(int(p["x"] - 0.5), int(p["y"] - 0.5)))
+
+    def test_every_orientation_plans_red_and_green_from_bus_taps(self):
         seen = set()
         for kind in KINDS:
             with self.subTest(kind=kind), TemporaryDirectory() as directory:
                 world = World(Path(directory), kind)
+                self.assert_taps(world, world.red, "automation_science")
                 result = world.prepare()
                 self.assertTrue(result["ok"], (kind, result.get("reason"), result.get("failures", [])[:2]))
                 district = Transform.from_dict(world.district["site_transform"])
                 seen.add(("district", district.rotation, district.mirror))
                 labs = plan_transform(world.labs)
                 seen.add(("labs", labs.rotation, labs.mirror))
+                seen.add(("bus", world.site.plan(WORLD).bus.direction))
                 core = result["core"]
                 self.assertTrue(inside(core["reserved_area"], world.site.allocation(core["allocation"], WORLD).rect))
-                # One splitter per plate port replaces the belt just upstream of it.
-                self.assertEqual(len(result["remove"]), 2)
-                splitters = [e for e in result["source_plan"]["entities"] if e["name"] == "splitter"]
-                for removed in result["remove"]:
-                    self.assertEqual(removed["direction"], district.direction(4))
-                    self.assertTrue(any(xy(removed) in GEOMETRY._occupied_by_plan([s]) for s in splitters))
-                self.assertEqual(overlaps(result["source_plan"]["entities"]), 0)
-                # The new hardware never lands on existing hardware except the replaced belts.
-                existing = tiles(e for e in world.obs["entities"] if e not in result["remove"])
+                # No district splitter branch: the district plan is untouched, plates come from taps.
+                self.assertEqual(result["remove"], [])
+                self.assert_taps(world, result, "logistic_science")
+                # The new hardware never lands on existing hardware except the replaced trunk belts.
+                replaced = {xy({"position": p}) for t in result["taps"] for p in t["remove"]}
+                existing = tiles(e for e in world.obs["entities"] if xy(e) not in replaced)
                 fresh = [
                     e
                     for e in result["plan"]["entities"]
@@ -192,9 +236,13 @@ class GreenSitePlanTests(unittest.TestCase):
                 ]
                 self.assertEqual(overlaps(result["plan"]["entities"]), 0)
                 self.assertFalse(tiles(fresh) & existing, kind)
-        self.assertTrue(any(r or m for part, r, m in seen if part == "district"), seen)
-        self.assertTrue(any(m for part, r, m in seen if part == "district"), seen)
-        self.assertTrue(any(r for part, r, m in seen if part == "labs"), seen)
+                # Green plans with what red's declared tap demand leaves (or half the trunk).
+                bus = world.board()["shared_main_bus"]
+                self.assertEqual(pt.claimed(bus, "iron-plate", owner="logistic_science"), 60)
+        self.assertTrue(any(r or m for part, r, m in (s for s in seen if s[0] == "district")), seen)
+        self.assertTrue(any(m for part, r, m in (s for s in seen if s[0] == "district")), seen)
+        self.assertTrue(any(r for part, r, m in (s for s in seen if s[0] == "labs")), seen)
+        self.assertGreaterEqual(len({s[1] for s in seen if s[0] == "bus"}), 2, seen)
 
     def test_a_site_service_never_falls_back_to_development_anchors(self):
         with TemporaryDirectory() as directory:
@@ -235,7 +283,7 @@ class GreenLabEntryTests(unittest.TestCase):
 
 
 class GreenSupplySizingTests(unittest.TestCase):
-    def sized(self, iron_ore, copper_ore, red_rate, count=7):
+    def sized(self, iron_ore, copper_ore, red_rate, count=7, bus=None):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             mining = {
@@ -254,7 +302,7 @@ class GreenSupplySizingTests(unittest.TestCase):
             smelting = SimpleNamespace(state={"world_id": WORLD, "banks": banks})
             science = SimpleNamespace(state={"nominal_machine_rate": red_rate})
             green = LogisticScience(game, BUILDER, catalog(), smelting, science)
-            return green.supply_sized_count(count, 5)
+            return green.supply_sized_count(count, 5, bus=bus)
 
     def test_a_single_shared_iron_belt_still_feeds_one_machine_through_its_splitter_half(self):
         # Red's 5-machine row takes all 60 iron/min; the splitter still hands green half.
@@ -264,6 +312,16 @@ class GreenSupplySizingTests(unittest.TestCase):
         # 150 iron/min (8 furnaces) minus red's 60 leaves 90: 3 machines at 27.5/min.
         self.assertEqual(self.sized(400, 200, 30), {"ok": True, "count": 3})
         self.assertEqual(self.sized(400, 200, 0, count=2), {"ok": True, "count": 2})
+
+    def test_on_the_bus_every_other_taps_declared_demand_counts(self):
+        stations = [
+            {"item": "iron-plate", "owner": "automation_science", "demand_per_minute": 60},
+            {"item": "iron-plate", "owner": "production_row_iron-gear-wheel", "demand_per_minute": 35},
+            {"item": "copper-plate", "owner": "automation_science", "demand_per_minute": 30},
+        ]
+        bus = {"stations": stations}
+        # 150 - 95 = 55 iron: two machines at 27.5/min, whatever red's own rate says.
+        self.assertEqual(self.sized(400, 200, 0, bus=bus), {"ok": True, "count": 2})
 
     def test_too_little_plate_supply_blocks_with_the_short_item(self):
         result = self.sized(40, 30, 30)

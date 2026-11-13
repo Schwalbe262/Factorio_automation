@@ -474,6 +474,45 @@ def _production_keepouts(game, builder, obs, source, destination, reserved, boun
         return {"ok": False, "reason": "invalid_transport_production_reservation", "detail": str(exc)}
 
 
+SITE_PLAN_FILE = "site-plan.json"
+
+
+def bus_band(root, world_id):
+    """``(x0, y0, x1, y1)`` tile rect of the site plan's bus for this world, or None.
+
+    From the moment the master plan exists, the whole bus band belongs to the
+    bus: routes that are not the bus's own (trunk, feed, tap) never enter it.
+    The band is wider than any underground span, so no other route can cross
+    it either; a consumer on the far side must tap the bus from its own side.
+    """
+    if root is None:
+        return None
+    path = Path(root) / SITE_PLAN_FILE
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if payload.get("world_id") != world_id:
+            return None
+        from .site.busframe import Bus
+
+        rect = Bus.from_dict(payload["plan"]["bus"]).rect()
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return (rect.x0, rect.y0, rect.x1, rect.y1)
+
+
+def _band_cells(band, bounds):
+    """Tile centres of ``band`` inside the route search ``bounds``."""
+    x0, y0, x1, y1 = band
+    xs = range(max(x0, math.floor(bounds["min_x"])), min(x1, math.ceil(bounds["max_x"]) + 1))
+    ys = range(max(y0, math.floor(bounds["min_y"])), min(y1, math.ceil(bounds["max_y"]) + 1))
+    return {(x + 0.5, y + 0.5) for x in xs for y in ys}
+
+
+def _in_band(band, position) -> bool:
+    x0, y0, x1, y1 = band
+    return x0 <= position["x"] < x1 and y0 <= position["y"] < y1
+
+
 def _recipient(belt):
     """The tile a surface belt delivers onto."""
     vx, vy = VECTORS[belt["direction"]]
@@ -509,14 +548,20 @@ def plan_connection(
     ignored_units=(),
     released_unbuilt_receiver=None,
     guide=None,
+    bus_route=False,
 ):
     """Route one belt from ``source`` to ``destination`` port.
 
     ``guide`` is an optional reserved corridor bounding box (x0, y0, x1, y1)
     in tiles from the master plan; it only widens the search box.
+    ``bus_route`` marks the bus's own feed; every other route keeps out of
+    the site plan's bus band (``bus_band``) and may not end inside it.
     """
     if source.get("item") != destination.get("item"):
         return {"ok": False, "reason": "port_item_mismatch"}
+    band = None if bus_route else bus_band(getattr(getattr(game, "cfg", None), "runtime_dir", None), obs["world_id"])
+    if band is not None and (_in_band(band, source["position"]) or _in_band(band, destination["position"])):
+        return {"ok": False, "reason": "route_endpoint_inside_bus_band", "band": list(band)}
     mining_resource = source.get("mining_resource")
     if mining_resource is not None and (
         mining_resource not in RESOURCES or mining_resource != source.get("item") or source.get("facing") not in VECTORS
@@ -726,6 +771,8 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
     hard.update(feeders)
     hard.update(production["hard"])
     hard.update(builder._occupied_by_plan([e for e in reserved if e["name"] != "transport-belt"]))
+    if band is not None:
+        hard.update(_band_cells(band, bounds))
     hard -= ends
     surface = {xy(e) for e in foreign if e["name"] in ("transport-belt", "pipe")}
     rejected = 0

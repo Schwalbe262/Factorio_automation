@@ -13,6 +13,12 @@ port for an item and the file belongs to the same world and catalog.
 
 A port is *taken* when a ``board["connections"]`` row of another owner
 starts at its position; a taken port is never handed out twice.
+
+Resolver for consumers beside the bus (``plate_bus``): when a planned main
+bus carrying every requested plate is published for this world, plates come
+from bus taps (``planned_tap.connect_inputs``) and the district ports are
+not handed out; the district ports (and green science's district splitter
+branch) are only the fallback for a world without a planned bus.
 """
 
 from __future__ import annotations
@@ -103,3 +109,20 @@ def plate_sources(root, board: dict, world_id: str, catalog_fingerprint: str, *,
             reason = "plate_source_port_taken" if offered else "plate_source_port_missing"
             return {"ok": False, "reason": reason, "item": item}
     return {"ok": True, "ports": ports, "origin": origin}
+
+
+def plate_bus(board: dict, world_id: str, items=PLATES) -> dict | None:
+    """The published planned bus when it carries every item of ``items``; None selects the fallback."""
+    from .planned_tap import carries, published
+
+    bus = published(board, world_id)
+    if bus is None or not all(carries(bus, item) for item in items):
+        return None
+    return bus
+
+
+def bus_budget(bus: dict, nominal: dict, *, owner: str) -> dict:
+    """Plates/minute per item a new tap consumer may plan with (``planned_tap.tap_budget``)."""
+    from .planned_tap import claimed, tap_budget
+
+    return {item: tap_budget(rate, claimed(bus, item, owner=owner)) for item, rate in nominal.items()}

@@ -102,6 +102,7 @@ In this order, against the same entity list (`production_site.py:116-129`):
 | Step | Call |
 |---|---|
 | input belts | `transport.plan_connection(game, builder, obs, source_port, input_port, reserved_entities)`; sources from `production_sources.resolve(board, product, item, owner=...)` |
+| plates on the planned bus | `planned_tap.connect_inputs(...)` plans taps + routes with the block; in `step` call `planned_tap.publish` and `planned_tap.cutover` before `ensure_plan` (see `MAIN_BUS.md`, taps); no route may enter the bus band |
 | merge | `smelting.merge_entities(entities, route["entities"])` |
 | power | `manufacturing.connect_power_groups(game, builder, obs, groups, entities)` |
 | whole-block check | `planning.preflight(game, builder, obs, entities)` (overlap, ore keepout, owned-entity configuration, clearable trees/rocks) |

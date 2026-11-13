@@ -155,11 +155,28 @@ class AutopilotTests(unittest.TestCase):
         queue = [{"id": "x", "capability": "smelting_district", "parameters": {}}]
         self.assertNotIn("auto_automation_science", ids(self.propose(jobs, queue, limit=10)))
 
-    def test_red_science_follows_the_smelting_district_without_migrations(self):
+    def test_the_bus_follows_the_smelting_district_and_red_science_the_bus(self):
         # paired_smelting / paired_mining migrate the old development map only.
         self.assertFalse({"paired_smelting", "paired_mining"} & {s.capability for s in pg.ROADMAP})
         nodes = self.propose(done_through("smelting_district"), limit=10)
+        self.assertEqual(ids(nodes)[0], "auto_main_bus")
+        self.assertNotIn("auto_automation_science", ids(nodes))
+        nodes = self.propose(done_through("main_bus"), limit=10)
         self.assertEqual(ids(nodes)[0], "auto_automation_science")
+        order = [s.id for s in pg.ROADMAP]
+        start, stop = order.index("smelting_district"), order.index("logistic_science")
+        self.assertEqual(
+            order[start : stop + 1],
+            [
+                "smelting_district",
+                "main_bus",
+                "automation_science",
+                "research_logistic_science_pack",
+                "research_steel_processing",
+                "research_fast_inserter",
+                "logistic_science",
+            ],
+        )
 
     def test_research_step_waits_for_available_research_listing(self):
         jobs = done_through("automation_science")
@@ -347,7 +364,7 @@ class WantedRecipeTests(unittest.TestCase):
         self.assertEqual(recipes, ["electric-mining-drill", "underground-belt", "splitter"])
 
     def test_horizon_limits_the_lookahead(self):
-        jobs = done_through("smelting_district")
+        jobs = done_through("main_bus")
         self.assertEqual(
             pg.roadmap_wanted_recipes(jobs, CAPABILITIES, horizon=1),
             ["assembling-machine-1", "automation-science-pack", "lab"],

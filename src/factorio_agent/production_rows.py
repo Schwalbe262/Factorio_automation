@@ -10,8 +10,10 @@ Contract (``jobs.CAPABILITIES["produce"]``):
 * layout: ``production_layout`` (main row, optional one-level sub-row, stock
   tail), sized for ``min(rate, stock tail rate)`` with ``blocks.size_row``
   derating; placement, routing, power and preflight: ``production_site``;
-  input sources: ``production_sources`` (bus taps, free board ports; a
-  missing tap is installed through ``bus_tap.BusTap`` when the bus exists);
+  input sources: ``production_sources`` (bus taps, free board ports); on the
+  planned bus a plate tap is planned with the block (``planned_tap``) and
+  built first in ``step``; on the development-map bus a missing tap is
+  installed through ``bus_tap.BusTap``;
 * build: the normal builder (``ensure_plan``, real paid items); then the
   chest bar is set to ``bar_slots`` (2 stacks) with the game's ``bar`` action;
 * proof: every planned entity present, machines powered with the right
@@ -33,6 +35,7 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_state import _atomic_json
 
+from . import planned_tap
 from .blocks.params import DEFAULT_LIMITS, inserter_rate
 from .production_layout import audit_line, design_line, extend_line, input_demand, unsourced_raw
 from .production_site import place_line, turned
@@ -294,6 +297,14 @@ class ProductionRows:
         published = self._publish(obs, state)
         if published is not None:
             return published
+        taps = state.get("taps", [])
+        blocked = planned_tap.publish(self.root, obs["world_id"], taps)
+        if blocked:
+            return blocked
+        clear = state["plan"].get("clear_obstacles", [])
+        cut = planned_tap.cutover(self.root, self.builder, obs, taps, clear_obstacles=clear)
+        if cut is not None:
+            return cut
         result = self.builder.ensure_plan(obs, state["plan"])
         if result.get("status") != "succeeded":
             return result

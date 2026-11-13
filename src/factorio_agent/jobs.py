@@ -174,7 +174,7 @@ CAPABILITIES = {
     },
     "planned_main_bus": {
         "parameters": {},
-        "requires": ["smelting_district", "automation_science"],
+        "requires": ["smelting_district"],
         "effect": "normally build the site plan's iron/copper bus trunks fed by a splitter branch beside each district plate port; prove plates on every built lane tail; other lanes stay reserved",
     },
     "dedicated_materials": {

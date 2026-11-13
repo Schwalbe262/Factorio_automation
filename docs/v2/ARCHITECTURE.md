@@ -59,10 +59,11 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Space | `smelting_site.py`, `mining_site.py` | smelting district on the plan zone; mining bank exit side from the plan |
 | Space | `production_rows.py`, `production_layout.py`, `production_site.py`, `production_sources.py` | `produce` capability: design, place, route, power, preflight, stock chest |
 | Space | `planned_bus.py` | `planned_main_bus`: iron/copper trunks on the plan's bus lanes, fed by a splitter beside each district plate port; publishes `board["shared_main_bus"]` (template `planned_main_bus`) |
-| Space | `plate_supply.py` | plate source ports for red science: the district's registered output ports (old `smelter-lanes.json` only as a same-world fallback), never a port another owner took |
+| Space | `planned_tap.py` | taps on the planned bus (any direction, either side): splitter + branch to a port outside the band, built trunks dive, reserved lanes tunnelled, trunk extension; planned with the consumer's block (`connect_inputs`), built first (`cutover`), supply rule `tap_budget` |
+| Space | `plate_supply.py` | plate resolver for science: bus taps when a planned bus is published (`plate_bus`, `bus_budget`), else the district's registered output ports (old `smelter-lanes.json` only as a same-world fallback), never a port another owner took |
 | Space | `blocks/` | recipe rows: `sizing`, `row`, `derate`, `audit`, `stock_tail`, ASCII `render` |
 | Space | `planning.py` | `preflight` (whole-block native check), `survey_slots` |
-| Space | `transport.py`, `routing.py`, `power_grid.py`, `manufacturing.py` | belt corridors (`plan_connection`), trunks, pole plans, `connect_power_groups` |
+| Space | `transport.py`, `routing.py`, `power_grid.py`, `manufacturing.py` | belt corridors (`plan_connection`; the site plan's bus band is hard for every route but the bus feed), trunks, pole plans, `connect_power_groups` |
 | Space | `board.py` | `pcb-board.json` block registry; startup science cell |
 | Space | `resource_policy.py` | ore keepouts; only annotated mining entities may stand on ore |
 | Tools | `tools/check.ps1`, `tools/report_run.py`, `tools/luna_incident_replay.py` | lint + tests; run report; offline incident replay |
