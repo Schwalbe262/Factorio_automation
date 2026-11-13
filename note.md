@@ -252355,3 +252355,9 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: plastics research wait was a stale green proof, not iron (my earlier diagnosis was wrong). Iron growth still blocked: home patch full, ore routes cannot cross the bus band.
 - failure reason: none of the merged fixes is proven live yet (replays and what-ifs only).
 - next: remote plate block worker; read aud-1114-0703 (first round with payback iron cells) and the next round with 16879cd; long fleets at the oil stage.
+
+## 2026-11-14 10:00 Part 57: rounds aud-1114-0614/0703 analysed, correction
+- correction: Part 56 "district 8/12, bus 4/12" was a misread; the report's `reached` row is shifted one column. Real: 0614 district 12/12, bus 8/12; 0703 11/12, 8/12.
+- causes (game min lost): bus proof impure on diving tap branch (3 runs, ~49; fixed c2dad94), plate-bound bus (5 runs, ~62; open), water pipe through a steam-engine end (1 run, 38; fixed b7eef43), supply cell frame before a district port (1 run, 21; fixed 69d45ee), row splitter on an unbuilt trunk tile (16; open), row underground taken (12.5; open); stop traceback fixed 9f833da.
+- payback iron cells (511a385): 6 -> 12 cells, last cell median 19.5 min, district 27.2 -> 26.3: late cells compete with the district build.
+- next: worker on report alignment, payback horizon = district completion, broken-built-block remedy (clear rung).
