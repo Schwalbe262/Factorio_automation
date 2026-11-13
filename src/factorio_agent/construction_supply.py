@@ -225,6 +225,7 @@ def _produced_coal(observation, coal_cells):
 
 class V2Bootstrap(DeterministicBootstrap):
     def _unreserved_stock_observation(self, observation, item):
+        self._collection_points = {}
         root = getattr(getattr(getattr(self, "game", None), "cfg", None), "runtime_dir", None)
         if not isinstance(root, (str, Path)):
             return observation
@@ -247,6 +248,7 @@ class V2Bootstrap(DeterministicBootstrap):
             if board.get("shared_main_bus"):
                 groups.append(("shared_main_bus", board["shared_main_bus"]))
             ownership = {}
+            owners = {}
             for name, block in groups:
                 for entity in block.get("entities", []):
                     p = entity.get("position")
@@ -261,8 +263,21 @@ class V2Bootstrap(DeterministicBootstrap):
                         if name != "startup_science" and port.get("direction") == "output" and port.get("position") == p
                     }
                     ownership[key] = public if key not in ownership else ownership[key] & public
-            self._stock_ownership_cache = (version, ownership)
+                    owners.setdefault(key, set()).add(name)
+            # Surplus trunk tiles past the last tap (starter_retirement.collection_points)
+            # are the construction plate stock once the bus exists.
+            from .starter_retirement import collection_points
+
+            points = {
+                key: plate
+                for key, plate in collection_points(board.get("shared_main_bus")).items()
+                if owners.get(key) == {"shared_main_bus"}
+            }
+            for key, plate in points.items():
+                ownership[key] = ownership[key] | {plate}
+            self._stock_ownership_cache = (version, ownership, points)
         ownership = self._stock_ownership_cache[1]
+        self._collection_points = self._stock_ownership_cache[2]
 
         def available(entity):
             p = entity.get("position")
@@ -292,6 +307,13 @@ class V2Bootstrap(DeterministicBootstrap):
           primary job keeps working meanwhile.
         """
         skipped = None
+        retirement = getattr(self, "retirement", None)  # starter_retirement.StarterRetirement
+        retired = retirement.cell_keys(observation) if retirement is not None else set()
+        if retired:
+            # Cells of a resource with a permanent source are left to cool: no fuel, ever.
+            observation = dict(
+                observation, entities=[e for e in observation.get("entities", []) if _entity_key(e) not in retired]
+            )
 
         def urgent(entity):
             if entity.get("name") not in BURNERS:
@@ -325,7 +347,10 @@ class V2Bootstrap(DeterministicBootstrap):
         coal_cells = [
             c
             for c in survey.get("cells", [])
-            if not c.get("electric") and c.get("receiver") and c.get("remaining", 0) > 0
+            if not c.get("electric")
+            and c.get("receiver")
+            and c.get("remaining", 0) > 0
+            and _entity_key(c["drill"]) not in retired
         ]
         producers = {(c["drill"]["name"], c["drill"]["position"]["x"], c["drill"]["position"]["y"]) for c in coal_cells}
         carried = self._count(observation, "coal")
@@ -378,6 +403,9 @@ class V2Bootstrap(DeterministicBootstrap):
         return stocked
 
     def _ensure_cell(self, observation, resource, receiver_name):
+        retirement = getattr(self, "retirement", None)
+        if retirement is not None and resource in retirement.resources(observation):
+            return None  # a permanent source replaced these cells: never rebuild one
         result = super()._ensure_cell(observation, resource, receiver_name)
         cleanup = getattr(self, "cell_site_cleanup", None)
         if result and result.get("type") == "build" and cleanup is not None:
@@ -482,6 +510,7 @@ class V2Bootstrap(DeterministicBootstrap):
         if not isinstance(world, str) or not world:
             return None
         buffer = self.construction_buffers.get(item) or {}
+        points = {k for k, plate in (getattr(self, "_collection_points", None) or {}).items() if plate == item}
         candidates = []
         for e in observation.get("entities", []):
             name = e.get("name")
@@ -512,15 +541,16 @@ class V2Bootstrap(DeterministicBootstrap):
                 candidates.append(
                     (
                         not verified,
+                        (name, position["x"], position["y"]) not in points,  # the permanent supply first
                         -stock,
                         unit,
                         {"name": name, "position": dict(position), "unit_number": unit, "kind": kind},
                     )
                 )
-        candidates.sort(key=lambda row: row[:3])
+        candidates.sort(key=lambda row: row[:4])
         sources = []
         units, positions = set(), set()
-        for _, _, unit, source in candidates:
+        for _, _, _, unit, source in candidates:
             position = source["position"]["x"], source["position"]["y"]
             if unit in units or position in positions:
                 continue
@@ -534,12 +564,14 @@ class V2Bootstrap(DeterministicBootstrap):
         # Fetching each plate as it leaves the furnace costs one action per
         # plate. Let a batch pile up unless less than a batch is needed or a
         # registered buffer chest (whose snapshot may be stale) is involved.
-        on_hand = sum(-row[1] for row in candidates)
+        on_hand = sum(-row[2] for row in candidates)
         batch = COLLECT_BATCH
         if item in PLATES:
             batch = haul_batch(self.production_rate(observation, item), COLLECT_BATCH, PLATE_BATCH)
         if on_hand < min(count, batch) and all(row[0] for row in candidates):
             return None
+        if any(not row[1] for row in candidates):
+            count = max(count, batch)  # surplus on the permanent supply: one full trip, not just the shortfall
         return {
             "type": "take_many",
             "item": item,

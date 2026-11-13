@@ -316,6 +316,11 @@ CAPABILITIES = {
         "native_recipes": ["assembling-machine-1"],
         "effect": "temporary hand-fed assembler cell near the grid (not on the bus): plates fed in batches, products collected from bar-capped chests instead of hand crafting; retired by mining once demand ends or a produce row takes over",
     },
+    "starter_retirement": {
+        "parameters": {"resource": "iron-ore, copper-ore, stone or coal (a resource with a verified permanent source)"},
+        "requires": ["starter"],
+        "effect": "collect the remaining stock of a retired resource's burner starter cells in large trips, then mine the cold, empty, unlinked cells (paid, guarded) to free their tiles",
+    },
     "research": {
         "parameters": {"technology": "catalog technology name"},
         "requires": ["automation_science"],

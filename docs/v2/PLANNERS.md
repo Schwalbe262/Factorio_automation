@@ -109,6 +109,44 @@ Keep the estimate honest: `DemandTests.test_builds_constants_cover_the_offline_p
 compares `Step.builds` with offline plans (`smelting_site.district_candidate`,
 `board.startup_science_cell`) and the live plan range. Pinned by `tests/test_v2_supply_cell.py`.
 
+## Starter retirement (`starter_retirement.py`, capability `starter_retirement`)
+
+Hand-served burner cells stop being served once a permanent source exists, then
+are mined. Seed 2099054105: after outposts (21-23 min), district (31.9) and bus
+(35.5) the character still fuelled and emptied 16 starter cells (43% of 818
+actions were hauling).
+
+```
+permanent(r)   every group of PERMANENT_SOURCES[r] has a succeeded job (verified evidence):
+                 iron-ore, copper-ore: smelting_district AND planned_main_bus
+                 stone: mining_outpost{stone} OR dedicated_materials{stone}
+                 coal:  electric_coal AND (mining_outpost{coal} OR dedicated_materials{coal})
+retired(r)     permanent(r) and the board shows it (bus trunk carries the plate / a mining bank outputs r);
+               coal also needs succeeded starter_retirement of COAL_LAST_AFTER (iron-ore, copper-ore, stone):
+               coal cells fuel every other starter cell, so they go last
+cells(r)       recorded once (starter-retirement.json): burner drill -> stone-furnace / chest, not electric,
+               not dropping on a belt (the power coal drill), not board-registered, not builder-owned;
+               linked = an inserter picks from or drops into drill or receiver (LINK_RADIUS 4): kept and fuelled
+upkeep         retired(r): unlinked cells(r) get no fuel (V2Bootstrap.maintain_fuel), no new cell (_ensure_cell),
+               no starter_capacity node (progression.capacity_nodes)
+node           auto_starter_retirement_<r> once per retired r, priority RETIRE_PRIORITY (-1000), order RESOURCES
+job step       collect: plates take_many from the cells' furnaces (<= 16 sources, <= 50) when >= COLLECT_BATCH (50)
+                        are waiting or every drill stopped; chests: take <= 50 when >= 50 or the drill stopped
+               mine:    a drill with no fuel item and not working first, then a receiver that is not working
+                        and holds no output (furnace) / no r (chest); guarded mine (unit + world), contents and
+                        fuel return to the inventory; an inserter found just before mining keeps the cell
+               else waiting starter_retirement_waits_for_cells_to_cool
+proof          no unlinked recorded cell of r stands
+```
+
+Construction plates after the bus (`collection_points`): the trunk tiles of each built lane
+from the last tap window (`along + WINDOW_ROWS + SURPLUS_GAP`) to the tail hold only surplus
+plates (nothing is downstream). `V2Bootstrap._unreserved_stock_observation` makes them public
+for their plate, `_take_output` ranks them before every other plate source and takes a whole
+haul batch (`max(missing, haul_batch)`, <= 50) in one guarded `take_many`. No new hardware: a
+chest tap would need a site, power and an inserter (~50 plates/min) for what a backed-up trunk
+already holds (8 plates a tile; 33 tiles on the live iron lane). Pinned by `tests/test_v2_starter_retirement.py`.
+
 ## Research capacity (`research_capacity.py`, `ResearchCapacityConfig`)
 
 ```
