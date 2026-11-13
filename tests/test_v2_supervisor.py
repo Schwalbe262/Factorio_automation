@@ -855,6 +855,24 @@ class MultiJobTests(Fixture):
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
         self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "stuck"]])
 
+    def test_a_machine_only_item_block_is_retried_after_a_quiet_interval_without_a_success(self):
+        # eval-1575138435, 375 min: engine_production / oil_gathering blocked "required item needs a
+        # production machine" (steel 8 / 5) while two idle furnaces held 163 steel; every job was
+        # terminal, so no success could ever trigger the retry that now turns into a wait.
+        blocked_at = self.clock()
+        self.cli.jobs["engine"] = job(
+            "engine",
+            "c0",
+            status="blocked",
+            reason="required item needs a production machine",
+            blocked_at_time=blocked_at,
+            evidence={"have": 0, "item": "steel-plate", "need": 8, "recipe": "steel-plate"},
+        )
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(121)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "engine"]])
+
     def test_a_failed_site_search_is_retried_after_a_quiet_interval(self):
         # pace1 seed 2692229611: the district waited 5 minutes for the next unrelated success.
         blocked_at = self.clock()
