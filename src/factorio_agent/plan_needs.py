@@ -13,7 +13,8 @@ docs/v2/ARCHITECTURE.md "When a plan does not fit: the remedy ladder")::
 Kinds (``KINDS``): ``route`` (a belt corridor), ``tap`` (a bus tap row/branch),
 ``site`` (no block/allocation fits), ``bank`` (no mining bank candidate),
 ``preflight`` (the whole plan meets something), ``power`` (no pole chain),
-``plan`` (any other planning failure). ``change`` names the single change that
+``plan`` (any other planning failure), ``built`` (a built block whose proof fails although
+every planned entity stands: ``built_block_repair``, the ladder's ``clear`` rung). ``change`` names the single change that
 would unblock it (the retry condition when every remedy is spent).
 
 A planner may return the record itself as ``result["plan_needs"]`` (built with
@@ -36,7 +37,7 @@ import hashlib
 import json
 from typing import Any, Mapping
 
-KINDS = ("route", "tap", "site", "bank", "preflight", "power", "plan")
+KINDS = ("route", "tap", "site", "bank", "preflight", "power", "plan", "built")
 MAX_BLOCKERS = 5
 MAX_TEXT = 200
 # Reasons that are planning failures although they do not start with "no_".
@@ -152,6 +153,8 @@ def default_change(record: Mapping) -> str:
         return "the entities standing in the plan's footprint moved or removed"
     if kind == "power":
         return "a pole chain from the grid to the block"
+    if kind == "built":
+        return "the faulty part of the built block mined and rebuilt from a republished plan"
     return _text("a planner fact change: " + str(record.get("reason") or "unknown"))
 
 

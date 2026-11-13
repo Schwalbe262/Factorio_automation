@@ -885,7 +885,8 @@ class CoverageTests(unittest.TestCase):
     def test_every_capability_with_rungs_has_a_dry_run(self):
         from factorio_agent import postmortem
 
-        self.assertEqual(sorted(set(remedy.RELAXATIONS) - set(postmortem.DRY_RUN)), [])
+        # REPAIRABLE blocks repair a live fault (built_block_repair): no pure planner needed.
+        self.assertEqual(sorted(set(remedy.RELAXATIONS) - set(postmortem.DRY_RUN) - remedy.REPAIRABLE), [])
         for capability in ("steel_supply", "engine_production", "ammo_production"):
             self.assertIn(capability, postmortem.DRY_RUN)
 

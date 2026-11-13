@@ -262,11 +262,48 @@ class PaceTests(unittest.TestCase):
         ]
         line = fleet.pace_line(rows)
         self.assertEqual(
-            line, "pace vs target 20 min: smelt median 24.0 (+4.0), 1/3 under; bus median 24.0 (+4.0), 0/3 under"
+            line,
+            "pace vs target 20 min: smelt reached 3/3, median 24.0 (+4.0), 1/3 under;"
+            " bus reached 2/3, median 24.0 (+4.0), 0/3 under",
         )
-        self.assertIn("bus median - (never), 0/1 under", fleet.pace_line([dict(seed=4, milestones={})]))
+        self.assertIn("bus reached 0/1, median - (never), 0/1 under", fleet.pace_line([dict(seed=4, milestones={})]))
         lines = fleet.format_report(dict(name="f"), rows, fleet.aggregate(rows), window_text="0-30")
         self.assertIn(line, lines)
+
+    def test_reached_counts_sit_under_their_column_heads(self):
+        # aud-1114-0703: the bus count was read under the red head; every row shares the column edges.
+        rows = [
+            dict(
+                seed=2004949033,
+                alive=False,
+                client="none",
+                game_minutes=45.6,
+                furthest=None,
+                milestones={"power": 7.1, "smelting_district": 23.1, "main_bus": 24.7, "automation_science": 28.2},
+            ),
+            dict(seed=477133967, alive=False, client="none", game_minutes=45.1, furthest=None, milestones={}),
+            dict(
+                seed=7,
+                alive=True,
+                client="none",
+                game_minutes=45.0,
+                furthest=None,
+                milestones={"power": 8.0, "smelting_district": 26.0},
+            ),
+        ]
+        lines = fleet.format_report(dict(name="f"), rows, fleet.aggregate(rows), window_text="0-45")
+        header = lines[1]
+        median = next(line for line in lines if line.startswith("median"))
+        reached = next(line for line in lines if line.startswith("reached"))
+        run = lines[2]
+        for head, want in (("power", "2/3"), ("smelt", "2/3"), ("bus", "1/3"), ("red", "1/3"), ("launch", "0/3")):
+            end = header.index(" " + head + " ") + len(head) + 1
+            self.assertEqual(reached[:end].split()[-1], want, head)
+            self.assertNotEqual(median[end - 1], " ", head)
+        end = header.index(" bus ") + 4
+        self.assertEqual(run[:end].split()[-1], "24.7")
+        self.assertEqual(median[:end].split()[-1], "24.7")
+        self.assertIn(" silo launch", header)
 
     def test_pace_line_adds_the_plate_supply_bound(self):
         rows = [
@@ -283,8 +320,8 @@ class PaceTests(unittest.TestCase):
             dict(seed=3, milestones={}, plate_bound={}),
         ]
         line = fleet.pace_line(rows)
-        self.assertIn("smelt median 28.0 (+8.0), 0/3 under, plate bound 23.5 (actual +4.5)", line)
-        self.assertIn("bus median - (never), 0/3 under;", line + ";")
+        self.assertIn("smelt reached 2/3, median 28.0 (+8.0), 0/3 under, plate bound 23.5 (actual +4.5)", line)
+        self.assertIn("bus reached 0/3, median - (never), 0/3 under;", line + ";")
 
 
 if __name__ == "__main__":

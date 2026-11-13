@@ -353,10 +353,27 @@ class CapacityAutopilotTests(unittest.TestCase):
         six["retirement_demand"]["gate_seconds"] = 2000
         self.assertEqual(self.capacity(six), [])
 
-    def capacity(self, observation):
+    def test_demand_policy_proposes_no_plate_cell_once_the_district_builds(self):
+        """Critical path first: the district job's plates and actor time are not spent on burner cells."""
+        six = iron_short(shortfall=0)
+        six["resource_supply_options"]["iron-plate"]["evidence"].update(
+            produced_per_minute=90.0, productive_cells=6, installed_live_cells=6
+        )
+        six["retirement_demand"] = {"items": {"iron-plate": 1500}, "gate_seconds": 200}
+        before = done_through("mining_outpost_coal")
+        self.assertEqual(len(self.capacity(six, before)), 1)
+        for status in ("running", "waiting", "succeeded"):
+            self.assertEqual(self.capacity(six, before + [job("smelting_district", status=status)]), [], status)
+        # A blocked district (no site yet) does not stop the cells.
+        self.assertEqual(len(self.capacity(six, before + [job("smelting_district", status="blocked")])), 1)
+        # Before the district starts, its small remaining bill ends the payback: no cell.
+        six["retirement_demand"]["district"] = {"items": {"iron-plate": 40}, "gate_seconds": 0}
+        self.assertEqual(self.capacity(six, before), [])
+
+    def capacity(self, observation, jobs=None):
         return [
             n
-            for n in self.propose(done_through("power"), observation=observation)
+            for n in self.propose(jobs or done_through("power"), observation=observation)
             if n["capability"] == "starter_capacity"
         ]
 
@@ -465,6 +482,13 @@ class LookaheadDemandTests(unittest.TestCase):
         self.assertEqual(demand["items"]["iron-plate"], 10 + 20 + 40)
         in_flight = jobs + [job("starter_research_automation", status="running")]
         self.assertEqual(pg.retirement_demand(Catalog(), in_flight, observation)["items"]["iron-plate"], 10 + 40)
+        # The district part: the steps up to smelting_district, the payback horizon of a new plate cell.
+        district = demand["district"]
+        self.assertEqual(district["steps"][-1], "smelting_district")
+        self.assertLessEqual(district["items"]["iron-plate"], demand["items"]["iron-plate"])
+        self.assertLessEqual(district["gate_seconds"], demand["gate_seconds"])
+        built = done_through("smelting_district")
+        self.assertNotIn("district", pg.retirement_demand(Catalog(), built, observation))
 
     def test_steps_without_builds_add_nothing(self):
         # automation_science has builds (its labs and machines), so start after it

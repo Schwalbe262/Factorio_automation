@@ -190,6 +190,26 @@ class TimeComparisonTests(unittest.TestCase):
         ten = iron(installed_live_cells=10, productive_cells=10, produced_per_minute=150.0, net_per_minute=10.0)
         self.assertEqual(plan_capacity({"iron-plate": ten}, {"iron-plate": 1400}), [])
 
+    def test_demand_policy_payback_ends_at_the_district_not_the_bus(self):
+        """aud-1114-0703: cells paid against the bus bill came online around the district's completion."""
+        six = iron(installed_live_cells=6, productive_cells=6, produced_per_minute=90.0, net_per_minute=10.0)
+        self.assertEqual(plan_capacity({"iron-plate": six}, {"iron-plate": 1500})[0].target_cells, 8)
+        # The district needs only 40 more plates: it is done ~30 s after a new cell starts, which
+        # yields ~6 plates for its 9: no cell, although the bus bill (1500) would pay it.
+        self.assertEqual(plan_capacity({"iron-plate": six}, {"iron-plate": 1500}, retire_demand={"iron-plate": 40}), [])
+        # A research gate holds the district back long enough for the cell to pay.
+        late = plan_capacity(
+            {"iron-plate": six}, {"iron-plate": 1500}, retire_demand={"iron-plate": 40}, retire_gate_seconds=400
+        )
+        self.assertEqual(late[0].target_cells, 8)
+        pay = late[0].evidence["payback"]
+        self.assertEqual((pay["retire_seconds"], pay["retire_by"]), (400, "district"))
+        self.assertIn("before the district is done", late[0].reason)
+        # A large district bill keeps the old answer; its completion bounds the payback.
+        big = plan_capacity({"iron-plate": six}, {"iron-plate": 1500}, retire_demand={"iron-plate": 1000})
+        self.assertEqual(big[0].evidence["payback"]["retire_by"], "district")
+        self.assertLess(big[0].evidence["payback"]["retire_seconds"], big[0].evidence["expand_seconds"])
+
     def test_demand_policy_waits_when_the_research_gate_binds(self):
         """Rule a: the bill cannot finish before its research; plates by then need no cell."""
         six = iron(installed_live_cells=6, productive_cells=6, produced_per_minute=90.0, net_per_minute=10.0)

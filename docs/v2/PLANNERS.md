@@ -149,7 +149,12 @@ demand (default), iron and copper only:
                   packs (the running one by its remaining share); receipt retirement_demand
   gate          = lab-time lower bound of that research on the built labs (gate_seconds)
   T(0) = max(gate, T(0));  T(k) = max(gate, T(k))                                   rule a
-  payback       = cell_rate * (T(k) - fund - build) / 60 > own plate cost per cell     rule b
+  payback       = cell_rate * (min(T(k), T_district(k)) - fund - build) / 60 > own plate cost per cell  rule b
+  T_district(k) = max(district gate, T(k) on the bill through smelting_district)  (retirement_demand
+                  "district"; a new cell's plates stop mattering once the district smelts)
+  no new iron/copper cell once a smelting_district job is active or succeeded (district_started:
+                  critical path first; aud-1114-0703 built cells 8 -> 12 from 19-22 to 25-28 min
+                  while the district job ran from 15-17 min)
   expand k when T(0) - T(k) >= min_saving_seconds and payback (no max_ratio)
   coal          = fuel_cells_needed with the new cells <= max_cells, else the step shrinks   rule c
   no fixed count, no unlock closing (mining.closed_by_unlock is False), no "drill researching"

@@ -458,7 +458,7 @@ def pace_line(runs, target=PACE_TARGET_MINUTES):
             gap = f"{median} ({median - target:+.1f})"
         else:
             gap = "- (never)"
-        text = f"{head} median {gap}, {under}/{len(runs)} under"
+        text = f"{head} reached {len(reached)}/{len(runs)}, median {gap}, {under}/{len(runs)} under"
         rows = [((r.get("plate_bound") or {}).get(PACE_BOUND[head]) or {}) for r in runs]
         rows = [
             b for b in rows if isinstance(b.get("bound"), (int, float)) and isinstance(b.get("actual"), (int, float))
@@ -474,6 +474,11 @@ def pace_line(runs, target=PACE_TARGET_MINUTES):
 def _cell(value, width):
     text = "-" if value is None else (f"{value:.1f}" if isinstance(value, float) else str(value))
     return text.rjust(width)
+
+
+def _width(head):
+    """Milestone column width: 6, or wider so a long head keeps a space before it (``silo launch``)."""
+    return max(6, len(head) + 1)
 
 
 def format_report(fleet, runs, agg, *, window_text, top=8):
@@ -496,7 +501,7 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
         + " up "
         + " cli "
         + " gmin"
-        + "".join(h.rjust(6) for h in heads)
+        + "".join(h.rjust(_width(h)) for h in heads)
         + "  lab_idle crit/slack_s  furthest"
     )
     short = dict(live="on", none="none", detached="det", down="-")
@@ -508,7 +513,7 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
             + short.get(r.get("client"), "-").rjust(4)
             + " "
             + _cell(r.get("game_minutes"), 5)
-            + "".join(_cell(r["milestones"].get(step), 6) for _, step in COLUMNS)
+            + "".join(_cell(r["milestones"].get(step), _width(h)) for h, step in COLUMNS)
             + _cell(r.get("lab_idle_seconds"), 10)
             + f" {_cell(r.get('actor_critical_seconds'), 5).strip()}/{_cell(r.get('actor_slack_seconds'), 5).strip()}".ljust(
                 13
@@ -519,9 +524,12 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
         cells = [(agg["columns"][h] or {}).get(key) for h in heads]
         lab = (agg["lab_idle_seconds"] or {}).get(key)
         gmin = (agg["game_minutes"] or {}).get(key)
-        lines.append(key.ljust(20) + _cell(gmin, 5) + "".join(_cell(c, 6) for c in cells) + _cell(lab, 10))
-    reached = [(agg["columns"][h] or {}).get("n", 0) for h in heads]
-    lines.append("reached".ljust(25) + "".join(_cell(n, 6) for n in reached))
+        lines.append(
+            key.ljust(20) + _cell(gmin, 5) + "".join(_cell(c, _width(h)) for h, c in zip(heads, cells)) + _cell(lab, 10)
+        )
+    # Same 25-character lead as the header (seed, up, cli, gmin) so each count sits under its head.
+    reached = [f"{(agg['columns'][h] or {}).get('n', 0)}/{len(runs)}" for h in heads]
+    lines.append("reached".ljust(25) + "".join(_cell(n, _width(h)) for h, n in zip(heads, reached)))
     lines.append(pace_line(runs))
     load = agg.get("query_load") or {}
     if any(load.values()):

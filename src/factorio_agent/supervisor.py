@@ -2201,7 +2201,16 @@ class Supervisor:
         now = self.clock()
         for key in [k for k, job in context[1].get("jobs", {}).items() if job.get("status") == "succeeded"]:
             memory.pop(key, None)
-        rows = [j for j in jobs if remedy.eligible(j) and j.get("capability") in planners]
+        rows = [
+            j
+            for j in jobs
+            if remedy.eligible(j)
+            and (
+                j.get("capability") in planners
+                # A built block's fault (built_block_repair) needs no pure planner: its clear rung repairs.
+                or (j.get("capability") in remedy.REPAIRABLE and (remedy.needs_of(j) or {}).get("kind") == "built")
+            )
+        ]
         rows.sort(key=lambda j: -(j.get("priority") or 0))
         for job in rows:
             key, capability, needs = job["key"], job["capability"], remedy.needs_of(job)

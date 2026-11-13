@@ -614,6 +614,17 @@ def _capacity_taken(resource: str, cells: int, jobs, queue_nodes) -> bool:
     return False
 
 
+def district_started(jobs) -> bool:
+    """A smelting_district job is active (not blocked, failed or paused) or has succeeded."""
+    for job in jobs:
+        if job.get("capability") != DISTRICT_STEP_ID:
+            continue
+        status = job.get("status")
+        if status == "succeeded" or status not in TERMINAL_STATUSES | {"paused"}:
+            return True
+    return False
+
+
 def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
     """Queue nodes for need-driven starter capacity (see ``capacity_planning``).
 
@@ -653,24 +664,37 @@ def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
 
     demand = dict(observation.get("roadmap_material_demand") or {})
     gate = None
+    district_items = district_gate = None
     by_demand = demand_driven()
     if by_demand:
         # Plate cells serve the bill up to their retirement (district + bus), not the 8-step
         # lookahead; an outpost alone does not replace them (its ore waits for the district's
         # first bank), only the retirement does (capacity_planning.PLATE_CELL_POLICY).
         outposts = (outposts - BULK_RESOURCES) | retired_by_jobs(jobs)
+        if district_started(jobs):
+            # Critical path first: once the district job builds (or has built), its plates and the
+            # actor's time go to the district; a new burner cell would finish around the
+            # district's own completion and retire with it (aud-1114-0703: iron 8 -> 12 cells
+            # from 19-22 min to 25-28 min while the district job ran from 15-17 min).
+            outposts |= BULK_RESOURCES
         retire = observation.get("retirement_demand")
         items = retire.get("items") if isinstance(retire, Mapping) else None
         if isinstance(items, Mapping):
             for item in SMELTED_ITEMS:
                 demand[item] = items.get(item, 0.0)
             gate = retire.get("gate_seconds")
+            district = retire.get("district")
+            if isinstance(district, Mapping) and isinstance(district.get("items"), Mapping):
+                district_items = {item: district["items"].get(item, 0.0) for item in SMELTED_ITEMS}
+                district_gate = district.get("gate_seconds")
     try:
         decisions = plan_capacity(
             observation.get("resource_supply_options") or {},
             demand,
             hand_fed_coal_per_minute=hand_fed_coal_per_minute(jobs, observation),
             gate_seconds=gate,
+            retire_demand=district_items,
+            retire_gate_seconds=district_gate,
         )
     except (ValueError, TypeError, KeyError, AttributeError):
         return []
@@ -1096,6 +1120,11 @@ def lookahead_demand(catalog, jobs, observation, *, horizon=LOOKAHEAD_STEPS) -> 
 # The roadmap step whose success retires the starter plate cells: iron-ore and copper-ore
 # need smelting_district AND planned_main_bus (starter_retirement.PERMANENT_SOURCES).
 RETIREMENT_STEP_ID = "main_bus"
+# The step that ends a new starter plate cell's useful life: once the district smelts the
+# outposts' ore the burner cells' plates are no longer the bottleneck (aud-1114-0703: the
+# last iron cell finished at a median 19.5 min, in 5/12 runs after 25 min, around the
+# district's own completion). A new plate cell's payback horizon ends here.
+DISTRICT_STEP_ID = "smelting_district"
 
 
 def _technology_seconds(catalog, technology: str) -> float:
@@ -1123,6 +1152,9 @@ def retirement_demand(catalog, jobs, observation) -> dict:
     remaining share (``research_progress``).
     ``gate_seconds``: lab-time lower bound of that research on the built labs (at least
     one): the bill cannot complete before it however many plates there are.
+    ``district``: the same two numbers (``items``, ``gate_seconds``) for the steps up to
+    and including ``DISTRICT_STEP_ID``, the horizon of a new plate cell's payback
+    (``capacity_planning._payback``); absent once the district step is satisfied.
     """
     observation = observation or {}
     researched = _names(observation.get("technologies"))
@@ -1138,6 +1170,7 @@ def retirement_demand(catalog, jobs, observation) -> dict:
     items: dict[str, float] = {}
     lab_seconds = 0.0
     steps: list[str] = []
+    district = None
     for step in ROADMAP:
         if not progress.satisfied(step) and step.priority is None:
             technology = step.parameters.get("technology") or STEP_TECHNOLOGY.get(step.capability)
@@ -1155,14 +1188,23 @@ def retirement_demand(catalog, jobs, observation) -> dict:
                 for name, count in step_bill(catalog, step).items():
                     items[name] = items.get(name, 0.0) + count
             steps.append(step.id)
+            if step.id == DISTRICT_STEP_ID:
+                district = {
+                    "items": {name: round(amount, 3) for name, amount in raw_cost(catalog, items).items()},
+                    "gate_seconds": round(lab_seconds / max(1, labs), 1),
+                    "steps": list(steps),
+                }
         if step.id == RETIREMENT_STEP_ID:
             break
-    return {
+    result = {
         "items": {name: round(amount, 3) for name, amount in raw_cost(catalog, items).items()},
         "gate_seconds": round(lab_seconds / max(1, labs), 1),
         "labs": labs,
         "steps": steps,
     }
+    if district is not None:
+        result["district"] = district
+    return result
 
 
 def _green_cluster_bill(catalog) -> dict[str, float]:

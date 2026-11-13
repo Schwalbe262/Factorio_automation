@@ -54,7 +54,8 @@ def power_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "power")
     if early is not None:
         return early
-    result = ex.builder.ensure_power(obs)
+    # repair: only the power job diagnoses and repairs a built plant that never runs (built_block_repair).
+    result = ex.builder.ensure_power(obs, repair=True)
     from ..power_coal_feed import publish_planned_feed  # reserved, unbuilt coal feed on the board
 
     return publish_planned_feed(ex, obs) or _precraft_science(ex, obs, result)
