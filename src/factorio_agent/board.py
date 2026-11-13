@@ -416,13 +416,15 @@ def planned_unbuilt_hardware(builder, obs, blocks, *, exclude=()):
     entity of the same name stands on its exact position with a unit number.
     Blocks named in ``exclude`` (the caller's own) are skipped. Each value is
     ``{"block", "name", "position"}`` of the planned entity on that tile.
+    A block's ``growth_entities`` (reserved furnace slots of a smelting bank)
+    count as planned hardware too.
     """
     built = built_keys(obs)
     tiles = {}
     for name, block in blocks.items():
         if name in exclude or not isinstance(block, dict):
             continue
-        for e in block.get("entities", []):
+        for e in list(block.get("entities", [])) + list(block.get("growth_entities", [])):
             if not isinstance(e, dict) or not isinstance(e.get("position"), dict):
                 continue
             if (e["name"], e["position"]["x"], e["position"]["y"]) in built:

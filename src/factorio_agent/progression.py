@@ -110,14 +110,15 @@ MINING_OUTPOST_BUILDS = {
     "small-electric-pole": 8,  # 2 fixed + about 6 bridge poles (estimate)
     "transport-belt": 10,  # 4 collector + about 6 exit belts (estimate)
 }
-# smelting_district: 4 iron + 2 copper furnaces (smelting.py:341-349), 2 inserters,
-# 1 pole per furnace and 84 fixed belts (smelting.py:64-84), 1 splitter (smelting.py:366-372).
+# smelting_district: two paired banks (smelting.paired_furnace_bank), 2+2 iron and
+# 1+1 copper furnaces, 2 inserters and 1 pole per furnace, 165 fixed belts (full
+# output belts, feeds, coal branches) and 3 splitters (smelting_site.district_candidate).
 SMELTING_DISTRICT_BUILDS = {
     "stone-furnace": 6,
     "inserter": 12,
     "small-electric-pole": 10,  # 6 fixed + about 4 grid links (estimate)
-    "transport-belt": 234,  # 84 fixed + about 150 on five routes (estimate)
-    "splitter": 1,
+    "transport-belt": 315,  # 165 fixed + about 150 on three routes (estimate)
+    "splitter": 3,
     "underground-belt": 4,  # crossings only (estimate)
 }
 
@@ -448,6 +449,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     queued_ids = {node.get("id") for node in queue_nodes}
     proposed: list[dict] = capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit)]
     proposed += produce_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    proposed += smelting_capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     for index, step in enumerate(ROADMAP):
         if len(proposed) >= limit:
             break
@@ -607,6 +609,86 @@ def bulk_item_demand(catalog, jobs, observation, *, horizon=4) -> dict[str, dict
         raw = raw_cost(catalog, {name: 1})
         demand[name] = {"count": round(count, 3), "raw_per_item": {k: round(v, 4) for k, v in raw.items()}}
     return demand
+
+
+SMELTING_CAPACITY = "smelting_capacity"
+SMELTING_CAPACITY_PRIORITY = PRODUCE_PRIORITY - 1
+# Grow a district bank once bus taps claim this share of its nominal plates,
+# to the claims times SMELTING_HEADROOM (capped by the bank's reserved slots
+# and the connected ore).
+SMELTING_GROW_AT = 0.8
+SMELTING_HEADROOM = 1.25
+
+
+def smelting_capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
+    """``smelting_capacity`` nodes when bus taps claim most of a district bank's plates.
+
+    Reads the receipt's ``smelting_throughput_bounds`` rows (``diagnostics``):
+    ``nominal_capacity_per_minute``, ``full_bank_capacity_per_minute`` (all
+    reserved slots built), ``claimed_bus_demand_per_minute`` (declared tap
+    demand) and ``connected_nominal_ore_supply``. One open or stalled
+    ``smelting_capacity`` row per resource at a time; a full bank proposes
+    nothing (the next step is another bank, see ``smelting_site``).
+    """
+    if SMELTING_CAPACITY not in capabilities:
+        return []
+    succeeded = {job.get("capability") for job in jobs if job.get("status") == "succeeded"}
+    if not set(capabilities[SMELTING_CAPACITY].get("requires", [])) <= succeeded:
+        return []
+    bounds = observation.get("smelting_throughput_bounds")
+    rows = bounds.get("banks") if isinstance(bounds, Mapping) else None
+    nodes = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, Mapping):
+            continue
+        resource = row.get("resource")
+        values = [
+            row.get(k)
+            for k in (
+                "nominal_capacity_per_minute",
+                "full_bank_capacity_per_minute",
+                "claimed_bus_demand_per_minute",
+                "connected_nominal_ore_supply",
+            )
+        ]
+        if resource not in ("iron-ore", "copper-ore") or any(
+            isinstance(v, bool) or not isinstance(v, (int, float)) for v in values
+        ):
+            continue
+        nominal, full, claimed, ore = (float(v) for v in values)
+        if nominal <= 0 or claimed < nominal * SMELTING_GROW_AT or nominal >= full:
+            continue
+        target = round(min(full, ore, claimed * SMELTING_HEADROOM, 450.0), 1)
+        if target <= nominal:
+            continue
+
+        def covers(r):
+            parameters = r.get("parameters")
+            if r.get("capability") != SMELTING_CAPACITY or not isinstance(parameters, Mapping):
+                return False
+            if parameters.get("resource") != resource:
+                return False
+            rate = parameters.get("rate_per_minute")
+            done = isinstance(rate, (int, float)) and not isinstance(rate, bool) and rate >= target
+            return r.get("status") != "succeeded" or done
+
+        busy = any(covers(r) for r in list(jobs) + list(queue_nodes))
+        if busy:
+            continue
+        nodes.append(
+            {
+                "id": f"{NODE_PREFIX}smelting_capacity_{resource}_{int(target)}",
+                "capability": SMELTING_CAPACITY,
+                "parameters": {"resource": resource, "rate_per_minute": target},
+                "priority": SMELTING_CAPACITY_PRIORITY,
+                "depends_on": [],
+                "reason": (
+                    f"bus taps claim {claimed:g}/min of {row.get('product')}, bank nominal {nominal:g}/min; "
+                    f"grow in reserved slots to {target:g}/min (bank full at {full:g})"
+                )[:300],
+            }
+        )
+    return nodes
 
 
 def _net_rate(observation: Mapping, item: str) -> float | None:

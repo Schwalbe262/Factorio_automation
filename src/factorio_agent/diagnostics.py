@@ -67,14 +67,29 @@ def smelting_throughput_bounds(root, obs, catalog):
     mining = json.loads(mining_path.read_text(encoding="utf-8")) if mining_path.exists() else {}
     if state.get("world_id") != obs["world_id"] or mining.get("world_id") != obs["world_id"]:
         return {"status": "world_changed"}
+    board_path = Path(root) / "pcb-board.json"
+    try:
+        board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
+    except (OSError, ValueError):
+        board = {}
+    bus = board.get("shared_main_bus") if board.get("world_id") == obs["world_id"] else None
+    stations = bus.get("stations", []) if isinstance(bus, dict) else []
     rows = []
     for bank in state["banks"]:
         if not bank.get("producer_rows"):
             continue
+        claimed = sum(
+            float(s.get("demand_per_minute") or 0)
+            for s in stations
+            if isinstance(s, dict) and s.get("item") == bank["product"]
+        )
         capacities = {
             lane: bank_capacities(catalog, [dict(bank, entities=producers)])[bank["resource"]] if producers else 0
             for lane, producers in bank["producer_rows"].items()
         }
+        nominal = sum(capacities.values())
+        growth = [e for e in bank.get("growth_entities", []) if e["name"] in ("stone-furnace", "steel-furnace")]
+        full = nominal + (bank_capacities(catalog, [dict(bank, entities=growth)])[bank["resource"]] if growth else 0)
         sources = [b for b in mining["banks"] if b.get("ready") and b["plan"]["resource"] == bank["resource"]]
         installed_ore = sum(b["nominal_rate_per_minute"] for b in sources)
         actual = {
@@ -109,6 +124,11 @@ def smelting_throughput_bounds(root, obs, catalog):
         rows.append(
             {
                 "product": bank["product"],
+                "resource": bank["resource"],
+                "nominal_capacity_per_minute": nominal,
+                # Every reserved slot built (smelting_capacity's ceiling for this bank).
+                "full_bank_capacity_per_minute": full,
+                "claimed_bus_demand_per_minute": claimed,
                 "independent_producer_capacity_per_lane": capacities,
                 "unstacked_belt_capacity_per_lane": belt_per_lane,
                 "connected_nominal_ore_supply": ore,
