@@ -519,6 +519,10 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "wood_burner_feed": obs.get("wood_burner_feed"),
         "trunk_return_feeds": obs.get("trunk_return_feeds"),
         "feed_head_rework": obs.get("feed_head_rework"),
+        # Rule inputs the autopilot reads (mine_trunk_nodes, power_coal_tap_nodes, produce_nodes); they
+        # were computed in observe but dropped here, so those rules never fired in the supervisor.
+        "mine_trunks": obs.get("mine_trunks"),
+        "produce_plate_sources": obs.get("produce_plate_sources"),
         # Bottleneck auditor (bottleneck_audit.py): diagnosis, proposals, idle_with_work for the supervisor.
         "bottlenecks": obs.get("bottlenecks"),
         "bottlenecks_error": obs.get("bottlenecks_error"),

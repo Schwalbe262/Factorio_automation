@@ -453,10 +453,15 @@ class IdleWatchdogTests(unittest.TestCase):
         watch = receipt["idle_with_work"]
         self.assertGreaterEqual(watch["idle_seconds"], ba.IDLE_SECONDS)
         gates = {w["kind"]: w["gate"] for w in watch["work"]}
-        self.assertEqual(gates["bottleneck"], "queue_not_low")  # the autopilot runs only below two queued nodes
+        # The growth pass merges it this cycle; the queue (two pending nodes) no longer holds it.
+        self.assertEqual(gates["bottleneck"], "growth_pass_next_cycle")
+        self.assertFalse(watch["queue"]["queue_low"])
         self.assertEqual(gates["remedy"], "remedy_pending")
         fields = ba.event_fields(receipt)
-        self.assertEqual(fields["top_gate"], "queue_not_low")
+        self.assertEqual(fields["top_gate"], "growth_pass_next_cycle")
+        with mock.patch.object(ba, "GROWTH_PASS", False):  # without the pass: only the queue-gated autopilot
+            watch = ba.idle_with_work({"last_action": {"tick": 0}}, receipt["bottlenecks"], BASE_JOBS, queue, 100000)
+        self.assertEqual(watch["work"][0]["gate"], "queue_not_low")
 
     def test_supervisor_logs_one_event_per_episode_gate_and_minute(self):
         from types import SimpleNamespace
@@ -553,6 +558,121 @@ class ProviderTests(unittest.TestCase):
             {"jobs": jobs, "queue_nodes": [], "capabilities": CAPABILITIES},
         )
         self.assertEqual(proposal["gate"], "settling")
+
+
+PRODUCE_JOBS = BASE_JOBS + [
+    job("produce", parameters={"item": "transport-belt", "rate_per_minute": 10.0}, last_tick=1000),
+]
+
+
+class GenericProduceRowTests(unittest.TestCase):
+    def test_a_row_at_capacity_with_waiting_consumers_is_extended(self):
+        # A job waits for belts; the belt row works all window: the generic provider extends the row.
+        scene = Scene().add(
+            "production_row_transport-belt", "assembling-machine-1", 2, "working", recipe="transport-belt"
+        )
+        waiting = job(
+            "power_coal_feed", "waiting", reason="waiting for transport-belt", evidence={"item": "transport-belt"}
+        )
+        b = top(scene.run(PRODUCE_JOBS + [waiting]))
+        self.assertEqual((b["group"], b["kind"]), ("production_row_transport-belt|transport-belt", "at_capacity"))
+        proposal = b["proposal"]
+        self.assertEqual((proposal["provider"], proposal["status"]), ("produce_row", "propose"), proposal)
+        # The job starves the whole window: at most double the row per package.
+        self.assertEqual(proposal["option"]["parameters"], {"item": "transport-belt", "rate_per_minute": 20.0})
+        self.assertEqual(proposal["nodes"], ["auto_produce_transport-belt_20"])
+
+    def test_partial_starvation_sizes_one_over_one_minus_share(self):
+        b = {
+            "block": "production_row_inserter",
+            "item": "inserter",
+            "kind": "at_capacity",
+            "consumers": [{"block": "green", "n": 4, "lost_seconds_per_minute": 48.0}],
+            "lost_seconds_per_minute": 48.0,
+        }
+        jobs = BASE_JOBS + [job("produce", parameters={"item": "inserter", "rate_per_minute": 12.0})]
+        options = gp.produce_options(b, {}, {"jobs": jobs, "queue_nodes": [], "capabilities": CAPABILITIES})
+        self.assertEqual(options[0]["parameters"]["rate_per_minute"], 15.0)  # 12 / (1 - 0.2)
+
+    def test_an_open_produce_job_holds_the_lane(self):
+        b = {
+            "block": "production_row_inserter",
+            "item": "inserter",
+            "kind": "at_capacity",
+            "consumers": [{"block": "green", "n": 1, "lost_seconds_per_minute": 60.0}],
+            "lost_seconds_per_minute": 60.0,
+        }
+        jobs = BASE_JOBS + [
+            job("produce", parameters={"item": "inserter", "rate_per_minute": 12.0}),
+            job("produce", "running", key="belts", parameters={"item": "transport-belt", "rate_per_minute": 5.0}),
+        ]
+        proposal = gp.assess(b, {"tick": 50000}, {"jobs": jobs, "queue_nodes": [], "capabilities": CAPABILITIES})
+        self.assertEqual(proposal["gate"], "growth_in_flight")
+
+
+class GrowthPassTests(unittest.TestCase):
+    def rows(self):
+        scene = (
+            Scene()
+            .add("smelting_district", "stone-furnace", 6, "working", recipe="iron-plate", inventory={"iron-ore": 3})
+            .add("iron-ore_mining", "electric-mining-drill", 4, "working", resource="iron-ore")
+        )
+        waiting = job("planned_main_bus", "waiting", reason="waiting for iron-plate", evidence={"item": "iron-plate"})
+        self.jobs = BASE_JOBS + [waiting]
+        self.observation = {"tick": 242000, "throughput_growth": {"plates": [tg.decide(IRON)]}}
+        return scene.run(self.jobs, throughput_growth=self.observation["throughput_growth"])["bottlenecks"]
+
+    def test_growth_nodes_one_package_per_bottleneck_and_dedupe(self):
+        rows = self.rows()
+        nodes = gp.growth_nodes(rows, self.jobs, [], self.observation, CAPABILITIES)
+        self.assertEqual([n["capability"] for n in nodes], ["mining_outpost", "smelting_capacity"])
+        queued = [dict(n, status="pending") for n in nodes]
+        self.assertEqual(gp.growth_nodes(rows, self.jobs, queued, self.observation, CAPABILITIES), [])
+
+    def test_supervisor_merges_growth_whatever_the_queue_holds(self):
+        from types import SimpleNamespace
+
+        from factorio_agent.supervisor import Supervisor
+
+        rows = self.rows()
+        merged, events = [], []
+        work = SimpleNamespace(
+            data={"nodes": [{"id": f"auto_step_{i}", "capability": "research", "status": "ready"} for i in range(5)]},
+            refresh=lambda jobs, caps: None,
+        )
+        stub = SimpleNamespace(
+            work=work,
+            _merge=lambda nodes, caps, obs, source: merged.append((source, [n["id"] for n in nodes])),
+            _event=lambda kind, **data: events.append(kind),
+        )
+        observation = dict(self.observation, bottlenecks={"bottlenecks": rows})
+        status = {"jobs": {j["key"]: j for j in self.jobs}}
+        self.assertTrue(Supervisor._growth(stub, (observation, status, CAPABILITIES, None)))
+        self.assertEqual(merged[0][0], "bottleneck")
+        self.assertEqual(len(merged[0][1]), 2)
+        self.assertEqual(events, ["bottleneck_growth"])
+
+    def test_summary_carries_the_rule_inputs(self):
+        from factorio_agent.jobs import summary
+
+        ledger = SimpleLedger()
+        out = summary(
+            {
+                "world_id": WORLD,
+                "tick": 1,
+                "mine_trunks": {"trunks": []},
+                "produce_plate_sources": {"iron-plate": True},
+                "bottlenecks": {"bottlenecks": []},
+            },
+            ledger,
+        )
+        self.assertEqual(out["mine_trunks"], {"trunks": []})
+        self.assertEqual(out["produce_plate_sources"], {"iron-plate": True})
+        self.assertEqual(out["bottlenecks"], {"bottlenecks": []})
+
+
+class SimpleLedger:
+    data = {"jobs": {}}
 
 
 if __name__ == "__main__":

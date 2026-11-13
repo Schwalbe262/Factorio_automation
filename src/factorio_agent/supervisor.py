@@ -120,6 +120,7 @@ INTENT_TAIL_BYTES = 262_144
 LOW_QUEUE = 2
 AUTOPILOT_LIMIT = 3
 IDLE_WATCH_SECONDS = 60  # game seconds between idle_with_work events of one episode and gate
+GROWTH_LIMIT = 2  # bottleneck growth packages merged per cycle (Supervisor._growth)
 FORBIDDEN = {
     "x",
     "y",
@@ -1736,6 +1737,8 @@ class Supervisor:
             context = self._snapshot()
         if self._autopilot(context):
             context = self._snapshot()
+        if self._growth(context):
+            context = self._snapshot()
         if self._auto_retry(context):
             context = self._snapshot()
         if self._poll_decision():
@@ -1750,6 +1753,41 @@ class Supervisor:
             return True
         # Approved queue work runs while a model call is pending.
         return self._run_authorized(context)
+
+    def _growth(self, context):
+        """Merge the bottleneck auditor's growth packages every cycle, whatever the roadmap queue holds.
+
+        ``growth_providers.growth_nodes`` over the receipt's ranked ``bottlenecks``: one package per
+        bottleneck, at most ``GROWTH_LIMIT`` per cycle, none while one of its lane is in flight or
+        settling. Before, growth nodes came only from the autopilot, which runs only while fewer
+        than ``LOW_QUEUE`` nodes could dispatch: a full roadmap queue starved every growth.
+        """
+        observation, status, capabilities, _ = context
+        receipt = observation.get("bottlenecks")
+        rows = receipt.get("bottlenecks") if isinstance(receipt, dict) else None
+        if not rows:
+            return False
+        try:
+            from .growth_providers import growth_nodes
+
+            jobs = list(status.get("jobs", {}).values())
+            known = {q["id"] for q in self.work.data["nodes"]}
+            nodes = [
+                n
+                for n in growth_nodes(
+                    rows, jobs, deepcopy(self.work.data["nodes"]), observation, capabilities, limit=GROWTH_LIMIT
+                )
+                if str(n.get("id", "")).startswith("auto_") and n.get("id") not in known
+            ]
+            if not nodes:
+                return False
+            self._merge(nodes, capabilities, observation, "bottleneck")
+        except Exception as exc:
+            self._event("bottleneck_growth_rejected", reason=str(exc)[:600])
+            return False
+        self.work.refresh(jobs, capabilities)
+        self._event("bottleneck_growth", task_ids=[n["id"] for n in nodes])
+        return True
 
     def _idle_watch(self, context):
         """Log the observe receipt's ``bottlenecks.idle_with_work`` (bottleneck_audit): the actor is idle while

@@ -907,13 +907,30 @@ diagnose  consumer group starved on item i for >= STARVED_SHARE (0.25) of the wi
 proposal  growth_providers.assess (below): provider, chosen option or gate, seconds saved, node ids
 watchdog  idle_with_work when the jobs' action total has not moved for IDLE_SECONDS (60) and work exists:
             bottleneck with lost > 0     gate = its proposal gate; a "propose" not merged yet ->
-                                         queue_not_low (autopilot gated) | autopilot_limit
+                                         growth_pass_next_cycle (without the pass: queue_not_low |
+                                         autopilot_limit)
             blocked job with next_remedy gate remedy_pending; blocked without needs: no_remedy_rule
             ready node not dispatched    gate lane_busy:<lane> | job_slots_full | dispatch_pending
           Supervisor._idle_watch logs event idle_with_work (top item, top gate, gates) per episode start,
           gate change or IDLE_WATCH_SECONDS (60) more; waste_report type idle_with_work and the fleet
           report line "idle with work: seconds in runs; top gates" sum the episodes (idle_episodes)
 ```
+
+Growth pass (`Supervisor._growth`, every cycle after the autopilot, not gated by `LOW_QUEUE`):
+`growth_providers.growth_nodes` over the ranked bottlenecks merges at most `GROWTH_LIMIT` (2) packages
+per cycle (source `bottleneck`, event `bottleneck_growth`), one per bottleneck, the provider's own
+nodes and priorities. The autopilot still calls the same node functions for forecast growth (build
+ahead without starvation); both dedupe on open nodes/jobs of the lane, so a package is proposed once.
+`jobs.summary` now carries `mine_trunks` and `produce_plate_sources`: both were computed in observe
+and dropped before the supervisor, so `mine_trunk_nodes`, `power_coal_tap_nodes` and the plate-source
+check of `produce_nodes` never fired live.
+
+Providers (`growth_providers.PROVIDERS`, first match wins; interface in ADDING_A_CAPABILITY.md 6b):
+`power` (follow-up only), `produce_row` (generic: a `production_row_*` block at capacity -> `produce
+{item, rate}` at `current / (1 - starved share)`, at most 2x, needs >= `MIN_LOST_SECONDS` 10 s/min;
+an item without producer -> `produce_nodes`' row), `science` (`science_growth.growth_options` hook,
+else the red receipt), `steel` (steel_capacity; furnace-block transport -> rework, not a capability),
+`plates` (throughput_growth; district transport -> head_rework), `mine` (mine_trunk).
 
 Gates of `assess` (in order): `transitional_block` (the limit is the startup science cell, the supply
 cell or an unregistered starter cell: its replacement grows, never it), `consumer_transitional`

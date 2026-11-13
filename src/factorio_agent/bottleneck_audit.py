@@ -73,7 +73,7 @@ LANE_ITEMS_PER_TILE = 4.0  # a belt tile lane holds four items
 FUEL_ITEM = "coal"
 SHORTFALL = ("capacity_shortfall", "single_lane_feed", "lane_starvation")  # bandwidth_audit.SHORTFALL
 LOW_QUEUE = 2  # supervisor.LOW_QUEUE: below it the roadmap autopilot runs
-GROWTH_PASS = False  # Supervisor._growth merges proposals every cycle (else only the queue-gated autopilot)
+GROWTH_PASS = True  # Supervisor._growth merges proposals every cycle (else only the queue-gated autopilot)
 
 WORKING = frozenset({"working", "normal", "low_power", "low_input_fluid", "preparing_rocket_launch"})
 STARVED = frozenset(
