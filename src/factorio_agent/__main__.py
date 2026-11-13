@@ -264,6 +264,22 @@ def execute(argv=None, services=None):
             except Exception as exc:  # a demand estimate must never break observe
                 obs["bulk_item_demand"] = {}
                 obs["bulk_item_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .production_sources import plate_sources
+
+            try:  # where a new produce row's plates would come from (progression.produce_nodes)
+                plates = sorted(
+                    {
+                        p
+                        for row in obs["bulk_item_demand"].values()
+                        if isinstance(row, dict)
+                        for p in row.get("raw_per_item") or {}
+                    }
+                )
+                board_path = root / "pcb-board.json"
+                board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
+                obs["produce_plate_sources"] = plate_sources(board, plates, world_id=obs.get("world_id"))
+            except Exception as exc:  # a source check must never break observe
+                obs["produce_plate_sources_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .supply_cell import candidates as supply_cell_candidates
 
             try:

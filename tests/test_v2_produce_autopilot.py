@@ -78,6 +78,24 @@ class ProduceNodeTests(unittest.TestCase):
             with self.subTest(case=name):
                 self.assertEqual(produce_nodes(jobs, queue, obs, CAPABILITIES), [])
 
+    def test_a_row_waits_for_a_plate_source_on_the_board(self):
+        # all-1113-2107 (1834967787, 2818581980, 3272954496): belt and inserter rows proposed
+        # before the bus published its lanes blocked production_row_input_source_missing.
+        from factorio_agent.production_sources import plate_sources
+
+        district_only = {"world_id": "w", "blocks": {"smelting_district": {"ports": [
+            {"direction": "output", "item": "iron-plate", "facing": 4, "position": {"x": 1, "y": 2}}]}}}  # fmt: skip
+        sources = plate_sources(district_only, ["iron-plate"], world_id="w")
+        self.assertEqual(sources, {"iron-plate": False})  # district ports go to red science first
+        self.assertEqual(produce_nodes(DONE, [], observation(BELTS, produce_plate_sources=sources), CAPABILITIES), [])
+        spare = dict(district_only, blocks=dict(district_only["blocks"], automation_science={"ports": []}))
+        sources = plate_sources(spare, ["iron-plate"], world_id="w")
+        self.assertEqual(sources, {"iron-plate": True})
+        self.assertEqual(
+            len(produce_nodes(DONE, [], observation(BELTS, produce_plate_sources=sources), CAPABILITIES)), 1
+        )
+        self.assertEqual(plate_sources(spare, ["iron-plate"], world_id="other"), {"iron-plate": False})
+
     def test_autopilot_keeps_its_signature_and_limit(self):
         rows = autopilot_nodes(DONE, [], observation(BELTS), CAPABILITIES, limit=3)
         self.assertIn("auto_produce_transport-belt", [q["id"] for q in rows])
