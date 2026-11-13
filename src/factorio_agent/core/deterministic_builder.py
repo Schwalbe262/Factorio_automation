@@ -70,6 +70,22 @@ COAL_FEED_PREFLIGHT_TAKEN = (
     "block_terrain_or_immovable_obstruction",
     "owned_block_entity_configuration_changed",
 )
+# Tiles (relative to a north-facing entity, before its rotation) where a pipe joins a steam
+# box: a water pipe there mixes water into steam and the plant never runs (fleet aud-1114-0703
+# seed 477133967: the pump's pipe passed the free end of the second engine, power never came).
+STEAM_PORT_TILES = {"steam-engine": ((0, -3), (0, 3)), "boiler": ((0, -1.5),)}
+
+
+def steam_port_tiles(entities: list[dict]) -> set[tuple[float, float]]:
+    """Tile centres where a pipe would join a steam engine's or boiler's steam box."""
+    found = set()
+    for e in entities:
+        for dx, dy in STEAM_PORT_TILES.get(e.get("name"), ()):
+            direction = e.get("direction", 0) % 16
+            for _ in range(direction // 4):
+                dx, dy = -dy, dx
+            found.add((e["position"]["x"] + dx, e["position"]["y"] + dy))
+    return found
 
 
 def coal_feed_mode(state: dict[str, Any]) -> str:
@@ -1105,6 +1121,8 @@ return success{blocked=blocked,clearable=clearable}
                 occupied.add((p["x"] + dx, p["y"] + dy))
             elif name == "pipe" and entity["name"] in {"pipe", "pipe-to-ground"}:
                 occupied.update((p["x"] + dx, p["y"] + dy) for dx, dy in DIRECTIONS.values())
+        if name == "pipe":
+            occupied.update(steam_port_tiles(reserved))
         occupied.update((p["x"], p["y"]) for p in survey.get("blocked", []))
         occupied.discard((source["x"], source["y"]))
         occupied.discard((destination["x"], destination["y"]))
