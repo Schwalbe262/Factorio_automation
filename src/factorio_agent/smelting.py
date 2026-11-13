@@ -14,7 +14,14 @@ from .power_grid import plan_connection as power_connection
 from .transport import plan_connection as belt_connection, underground_proof, xy
 from .planning import preflight
 from .site.transform import apply as apply_transform
-from .smelting_site import DISTRICT_SIZE, canonical_bank, corridor_guide, district_candidate, plan_candidates
+from .smelting_site import (
+    DISTRICT_SIZE,
+    canonical_bank,
+    corridor_guide,
+    district_candidate,
+    district_head_choice,
+    plan_candidates,
+)
 
 FURNACE_NAMES = frozenset({"stone-furnace", "steel-furnace", "electric-furnace"})
 
@@ -954,6 +961,7 @@ return {ok=true,legal=legal}
                 failures.append({"stage": "whole_preflight", "area": site["area"], "reason": whole.get("reason")})
                 continue
             pairs = [pair for route in routes for pair in route.get("underground_pairs", [])]
+            pairs += [pair for bank in site["banks"] for pair in bank.get("underground_pairs", [])]  # split heads
             es = producer_first_order(es, site, connections, routes, powers)
             plan = _plan(
                 es,
@@ -976,6 +984,10 @@ return {ok=true,legal=legal}
                 "routes": [{"metrics": r["route_metrics"], "pairs": r["underground_pairs"]} for r in routes],
                 "nominal_input_rates": {"iron-ore": 60, "copper-ore": 30},
                 "coal_splitter_policy": "ordinary balanced outputs; existing power feed remains separate",
+                "bandwidth": {
+                    **district_head_choice(),
+                    "scope": "canonical district bank at full reserved growth through belt_flow",
+                },
                 # The bank ports this plan was routed from (re-plan or block when one changes).
                 "source_ports": dict(sources),
             }

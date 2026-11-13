@@ -90,6 +90,77 @@ class FurnaceHeadTests(unittest.TestCase):
             self.assertEqual(bank["required_items"]["splitter"], 2)
 
 
+class DistrictHeadTests(unittest.TestCase):
+    """The smelting district's banks take the split feed head (smelting_site.district_head_choice)."""
+
+    def test_the_flow_model_chooses_the_split_head_and_doubles_the_ore_per_row(self):
+        from factorio_agent.smelting_site import district_bank_audit, district_head_choice
+
+        choice = district_head_choice()
+        self.assertEqual(choice["head"], "split")
+        rows = {c["head"]: c for c in choice["candidates"]}
+        self.assertEqual(rows["shared"]["counts"], {"single_lane_feed": 2, "side_load_before_splitter": 2})
+        self.assertEqual(rows["split"]["counts"], {})
+        # Per row delivered ore (a 4x over-demand shows the head's ceiling): the shared head
+        # gives each row a quarter yellow belt (225/min, 12 stone furnaces), the split head a
+        # full lane (450/min, 24 stone furnaces: one yellow ore belt feeds 48).
+        from factorio_agent import bandwidth_audit as audit
+        from factorio_agent.smelting_site import _bank
+
+        for head, ceiling in (("shared", 225.0), ("split", 450.0)):
+            bank = _bank(0, 0, 24, "iron-ore", head)
+            ore = 60 / audit.PLATE_SECONDS
+            result = audit.furnace_bank(
+                bank["entities"], bank["ports"], raw="iron-ore", raw_per_furnace=4 * ore, coal_per_furnace=1.35
+            )
+            delivered = {
+                f["delivered_per_minute"]
+                for f in result["findings"]
+                if f.get("item") == "iron-ore" and "delivered_per_minute" in f
+            }
+            self.assertEqual(delivered, {ceiling}, head)
+        self.assertEqual(district_bank_audit("split", "copper-ore")["findings"], [])
+
+    def test_every_new_district_candidate_has_no_audit_finding(self):
+        from factorio_agent.site.fakeworld import make_world
+        from factorio_agent.site.masterplan import plan_site
+        from factorio_agent.site.transform import apply, variants
+        from factorio_agent.smelting_site import district_candidate, oriented, plan_candidates
+
+        counts = {"iron-ore": 4, "copper-ore": 2}
+        candidates = [oriented(apply(t, district_candidate(8, 8, counts)), t) for t in variants((24, 16))]
+        for seed in (1, 4):
+            candidates += plan_candidates(plan_site(make_world(seed, size=512)), counts)
+        with TemporaryDirectory() as root:
+            for candidate in candidates:
+                self.write_state(root, candidate)
+                rows = ba.district_rows(Path(root))
+                self.assertEqual([r["head"] for r in rows], ["split", "split"])
+                self.assertEqual([r["counts"] for r in rows], [{}, {}], candidate.get("site_transform"))
+                # The coal network reaches both coal ports: the whole district plan's coal input
+                # feeds every furnace of both banks at full growth.
+                self.assertEqual(sum(e["name"] == "underground-belt" for e in candidate["entities"]), 4)
+
+    def write_state(self, root, candidate):
+        (Path(root) / "smelting-district.json").write_text(json.dumps({"banks": candidate["banks"]}), encoding="utf-8")
+
+    def test_the_district_coal_input_feeds_both_split_banks(self):
+        from factorio_agent import belt_flow as bf
+        from factorio_agent.smelting_site import district_candidate
+
+        site = district_candidate(8, 8, {"iron-ore": 24, "copper-ore": 24})
+        coal = site["coal_input"]
+        ore = [b["ports"][0] for b in site["banks"]]
+        sources, _sinks, _ports = ba.port_sources([coal, *ore])
+        rows = {(8, 1): "iron-ore", (8, 11): "iron-ore", (8, 20): "copper-ore", (8, 30): "copper-ore"}
+        flow = bf.solve(site["entities"], sources, sinks=list(rows))
+        for tile, ore_item in rows.items():
+            lanes = flow.at(tile)
+            # One lane full of ore, the other carries coal (a quarter of the coal input belt).
+            got = sorted((lanes[lane] for lane in ("left", "right")), key=str)
+            self.assertEqual(got, sorted([{ore_item: 450.0}, {"coal": 225.0}], key=str), tile)
+
+
 class GrowthGuardTests(unittest.TestCase):
     def state(self, head, per_row):
         bank = furnace_block(KINDS["brick"], 0, 0, per_row, head)

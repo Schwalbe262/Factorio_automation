@@ -578,7 +578,7 @@ def rework_proposals(rows) -> list:
                 "block": row["block"],
                 "status": "proposed",
                 "action": "rework_feed_head",
-                "replacement": "split_feed_head (planned_furnaces.split_feed_head: split first, side-load each row)",
+                "replacement": "split_feed_head (feed_head.split_feed_head: split first, side-load each row)",
                 "cause": "side_load_before_splitter" if waste else short[0]["kind"],
                 "shortfalls": [
                     {k: f.get(k) for k in ("kind", "item", "tile", "delivered_per_minute", "demand_per_minute")}

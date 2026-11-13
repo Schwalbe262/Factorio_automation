@@ -198,6 +198,11 @@ class DistrictReservationTests(unittest.TestCase):
             self.assertTrue(growth)
             self.assertFalse(occupied(result["plan"]["entities"]) & growth, seed)
             self.assertEqual(len(result["plan"]["growth_entities"]), 2 * 2 * BANK_SLOTS * 7 - 6 * 7, seed)
+            # Split feed heads (flow-model choice): their undergrounds are plan pairs (underground_proof).
+            self.assertEqual(result["bandwidth"]["head"], "split", seed)
+            head_pairs = [p for b in result["banks"] for p in b["underground_pairs"]]
+            self.assertEqual(len(head_pairs), 2, seed)
+            self.assertTrue(all(p in result["plan"]["underground_pairs"] for p in head_pairs), seed)
             for reserved in calls["belt"] + calls["power"]:
                 self.assertTrue(growth <= {xy(e) for e in reserved} | occupied(reserved), seed)
 

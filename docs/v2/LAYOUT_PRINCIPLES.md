@@ -65,20 +65,22 @@ plan record `bandwidth` (head choice, candidates, findings), the observe receipt
 `belt_bandwidth` (per block counts and findings, `counts_by_type`, `rework`) and the fleet
 report section "belt bandwidth findings" (count per block type).
 
-Generator (`planned_furnaces.head_choice`): the furnace block has two feed heads, the shared
-head of `smelting.paired_furnace_bank` and `split_feed_head` (raw split head-on first, each half
-side-loaded onto its row; coal likewise from the other side, one underground). Each is run
-through the flow model at full reserved growth and ranked by (shortfalls, wasted capacity,
-entities): the split head wins for steel (waste) and bricks (a row's six furnaces need the
-whole quarter belt, below the margin). Per row it delivers a full lane of raw and of coal.
+Generator (`feed_head.rank_heads`; `planned_furnaces.head_choice` for steel/brick blocks,
+`smelting_site.district_head_choice` for the smelting district banks): a paired furnace bank
+has two feed heads, the shared head of `smelting.paired_furnace_bank` and
+`feed_head.split_feed_head` (raw split head-on first, each half side-loaded onto its row; coal
+likewise from the other side, one underground; the community layout: one yellow ore belt feeds
+two rows of 24 stone furnaces). Each is run through the flow model at full reserved growth and
+ranked by (shortfalls, wasted capacity, entities): the split head wins for steel (waste), bricks
+(a row's six furnaces need the whole quarter belt, below the margin) and the district banks (12
+slots per row need 225 ore/min, the shared head delivers exactly 225 per row, the split head
+450). Per row it delivers a full lane of raw and of coal. The district's coal branches then run
+along column X0+5.5 into each bank's inner coal port (`smelting_site._coal_network`); the
+district keeps its 48 x 32 frame and ports.
 
 Existing blocks keep their head. Growth is guarded (`growth_evidence` ->
 `feed_head_bandwidth_below_next_slot_demand` when the flow model says the next slot would
 starve), and the receipt's `rework` lists built blocks below their demand (status `proposed`).
-Not built yet: the rework itself (republish the plan with the split head, build it beside the
-old head, move the feed, mine the old head while the rows keep their raw) and the smelting
-district banks, which use the same shared head (`smelting.paired_furnace_bank`; their
-iron/copper banks show the same finding at full growth).
 
 ## Rebuilding is allowed
 

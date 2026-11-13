@@ -134,15 +134,16 @@ MINING_OUTPOST_BUILDS = {
     "transport-belt": 10,  # 4 collector + about 6 exit belts (estimate; plans: 6..13)
 }
 # smelting_district: two paired banks (smelting.paired_furnace_bank), 2+2 iron and
-# 1+1 copper furnaces, 2 inserters and 1 pole per furnace, 165 fixed belts (full
-# output belts, feeds, coal branches) and 3 splitters (smelting_site.district_candidate).
+# 1+1 copper furnaces, 2 inserters and 1 pole per furnace, 175 fixed belts (full
+# output belts, split feed heads, coal branches), 5 splitters and 4 head undergrounds
+# (smelting_site.district_candidate with the split feed head, feed_head.split_feed_head).
 SMELTING_DISTRICT_BUILDS = {
     "stone-furnace": 6,
     "inserter": 12,
     "small-electric-pole": 22,  # 6 fixed + grid links; saved plans on two maps: 19 and 24
-    "transport-belt": 345,  # 165 fixed + routes; saved plans: 368 and 319
-    "splitter": 3,
-    "underground-belt": 8,  # crossings; saved plans: 8 and 6
+    "transport-belt": 355,  # 175 fixed + routes; saved plans (shared head): 368 and 319
+    "splitter": 5,
+    "underground-belt": 12,  # 4 in the heads + crossings; saved plans: 8 and 6 crossings
 }
 # automation_science: science machines plus the lab block and their routes
 # (saved plans automation-science.json on two maps: 6 machines, 21 inserters,
