@@ -252201,3 +252201,10 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: offline only; nothing proven live.
 - open: no site when a tap already sits at trunk row 1-2 beside bank poles/drills (blocks with no_return_feed_site_at_the_trunk_head); TRIP_SECONDS/BUILD_SECONDS are estimates; stone excluded (no carry allowance).
 - next: fleet: check trunk-return-feeds.json phase done, chest stock falls, coal carried near allowance, recent trips drop.
+## 2026-11-13 mine frame follows the patch (neighbouring ores)
+- part: mining_layout_policy / mining_border / outposts; goal: owner screenshot eval-4177156614 (stone touching iron).
+- found: bank reserved_area = box of footprint+exit+apron (iron 7x27, 7x12 drills); stone exit faced east into iron; drills already clean.
+- actions: grid cells also refuse pole/collector on other ore; patch_grid frame_rects, mixed_ore_zone, border_lane decision (filter splitter device, payback rule, logistics-gated); bank reserved_rects + patch_frame; mining checks compare rects; ports facing another patch rank last and outposts try other sides; configure_splitter takes a filter (paid, read back); observation carries splitter_filter.
+- result: tests/test_v2_mining_border.py 14 pass; mining/outpost lupa set 176 pass.
+- not yet: building border lanes (native ore rule + resource_survey must accept a declared mixed area), whole mixed-zone sorter, site-plan zones still bbox.
+- next: live check of reserved_rects publish and the edge turn on a map with touching patches.

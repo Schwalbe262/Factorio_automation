@@ -230,7 +230,9 @@ return success{status=moved>0 and "succeeded" or "waiting",moved=moved,unit_numb
             "expected_splitter_unit",
             "expected_splitter_world_id",
             "reason",
+            "filter",
         }
+        flt = action.get("filter")
         p = action.get("position")
         unit = action.get("expected_splitter_unit")
         world = action.get("expected_splitter_world_id")
@@ -245,6 +247,8 @@ return success{status=moved>0 and "succeeded" or "waiting",moved=moved,unit_numb
             or set(p) != {"x", "y"}
             or any(type(p[a]) not in (int, float) or not math.isfinite(p[a]) for a in ("x", "y"))
             or any(action.get(k) not in ("none", "left", "right") for k in ("input_priority", "output_priority"))
+            # A filter (one item name) needs an output side to send it to.
+            or (flt is not None and (not isinstance(flt, str) or not flt or action["output_priority"] == "none"))
         ):
             raise ValueError(
                 "splitter configuration requires finite position, priorities and exact world/unit identity"
@@ -265,7 +269,15 @@ if not e or e.unit_number~=x.expected_splitter_unit or e.force~=f then return fa
             body += 'if not a.can_reach_entity(e) then return failure("out_of_reach") end; '
         body += """
 e.splitter_input_priority=x.input_priority;e.splitter_output_priority=x.output_priority
-return success{status="succeeded",unit_number=e.unit_number,input_priority=e.splitter_input_priority,output_priority=e.splitter_output_priority}
+local filter=nil
+if x.filter then
+ if not prototypes.item[x.filter] then return failure("unknown_filter_item") end
+ e.splitter_filter={name=x.filter}
+ local now=e.splitter_filter
+ filter=now and (type(now.name)=="string" and now.name or now.name.name) or nil
+ if filter~=x.filter then return failure("splitter_filter_not_set") end
+end
+return success{status="succeeded",unit_number=e.unit_number,input_priority=e.splitter_input_priority,output_priority=e.splitter_output_priority,filter=filter}
 """
         return self._record_action(action, self.query(body))
 

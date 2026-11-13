@@ -15,6 +15,7 @@ from .transport import VECTORS, xy, plan_connection as belt_connection, undergro
 from .planning import overlap, preflight
 from .resource_policy import mark_mining_core, mining_reservations
 from .mining_site import alternative_exits, guide_tuple, other_patches, plan_zone_areas, site_exit
+from .mining_border import block_rects, neighbour_reservations
 
 
 RESOURCES = {"iron-ore", "copper-ore", "coal", "stone"}
@@ -143,8 +144,13 @@ class MiningOutposts:
             counts[owner] = index + 1
             name = owner + "_mining" + ("_" + str(index) if index else "")
             area = declared["reserved_area"]
+            mine = block_rects(declared)
             met = next(
-                (key for key, b in board["blocks"].items() if key != name and overlap(area, b["reserved_area"])),
+                (
+                    key
+                    for key, b in board["blocks"].items()
+                    if key != name and any(overlap(r, o) for r in mine for o in block_rects(b))
+                ),
                 None,
             )
             if met is not None:
@@ -157,7 +163,7 @@ class MiningOutposts:
                     }
                 continue
             extra = {}
-            for field in ("mining_reserved_area", "layout_contract"):
+            for field in ("mining_reserved_area", "layout_contract", "reserved_rects", "patch_frame"):
                 if declared.get(field) is not None:
                     extra[field] = declared[field]
             board["blocks"][name] = dict(declared["plan"], reserved_area=area, **extra)
@@ -213,14 +219,13 @@ class MiningOutposts:
         from .board import _Footprints, pending_starter_cells, planned_unbuilt_hardware
 
         blocks = {k: v for k, v in (board.get("blocks") or {}).items() if isinstance(v, dict)}
-        registered = [(k, v["reserved_area"]) for k, v in sorted(blocks.items()) if v.get("reserved_area")]
+        registered = [(k, r) for k, v in sorted(blocks.items()) for r in block_rects(v)]
         for index, bank in enumerate(self.state.get("banks", [])):
             name = "mining_outposts:%s:%d" % (bank["plan"].get("resource"), index)
             entities = list(bank["plan"].get("entities", []))
             entities += list((bank.get("pending_extension") or {}).get("plan", {}).get("entities", []))
             blocks[name] = {"entities": entities}
-            if bank.get("reserved_area"):
-                registered.append((name, bank["reserved_area"]))
+            registered += [(name, r) for r in block_rects(bank)]
         blocks.update(pending_starter_cells(self.path.parent, obs))
         planned = planned_unbuilt_hardware(_Footprints(), obs, blocks)
         known = (obs.get("resources", {}).get(resource) or {}).get("position")
@@ -241,9 +246,10 @@ class MiningOutposts:
         board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
         if board and board.get("world_id") != obs["world_id"]:
             return {"ok": False, "reason": "mining_planning_board_world_changed"}
-        reservations = [b["reserved_area"] for b in board.get("blocks", {}).values()]
+        # Reservation rects (not bounding boxes) of every block and bank, plus other resources' patch frames.
+        reservations = neighbour_reservations(board.get("blocks", {}).values(), (), resource)
         reservations += [r["area"] for r in board.get("shared_main_bus", {}).get("reservations", []) if r.get("area")]
-        reservations += [b["reserved_area"] for b in self.state.get("banks", []) if b.get("reserved_area")]
+        reservations += neighbour_reservations((), self.state.get("banks", []), resource)
         reservations += list(extra_reservations)
         shared = self.planned_keepouts(obs, board, resource)
         reservations += shared["tile_areas"]
@@ -264,6 +270,16 @@ class MiningOutposts:
         result = prepare_new_bank(
             self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record, **options
         )
+        if result.get("ok") and (result.get("patch_diagnostic") or {}).get("faces_neighbour") and exit_record:
+            # The planned edge faces another resource's patch: take another side whose port does not.
+            for alternative in alternative_exits(exit_record):
+                other = prepare_new_bank(
+                    self.game, self.builder, obs, resource, count, reservations, site_exit=alternative, **options
+                )
+                if other.get("ok") and not other["patch_diagnostic"].get("faces_neighbour"):
+                    other["patch_diagnostic"]["edge_turned_from_neighbour"] = exit_record["side"]
+                    return other
+            return result
         if result.get("ok") or not exit_record:
             return result
         # The planned side had no usable site; try the zone's other sides

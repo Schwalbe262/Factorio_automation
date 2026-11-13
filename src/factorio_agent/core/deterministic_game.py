@@ -525,6 +525,8 @@ for _,e in pairs(s.find_entities_filtered{force=f}) do
   elseif e.type=="splitter" then
    r.splitter_input_priority=e.splitter_input_priority
    r.splitter_output_priority=e.splitter_output_priority
+   local has_filter,flt=pcall(function() return e.splitter_filter end)
+   if has_filter and flt then r.splitter_filter=flt.name and (type(flt.name)=="string" and flt.name or flt.name.name) or nil end
   end
   local has_fluid,fluids=pcall(function() return e.get_fluid_contents() end)
   if has_fluid and fluids then r.fluids=fluids end
