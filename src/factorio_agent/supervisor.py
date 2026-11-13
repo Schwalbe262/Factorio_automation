@@ -37,6 +37,15 @@ TERMINAL = {"succeeded", "blocked", "failed"}
 OPERATIONS = incident_rules.OPERATIONS
 AUTO_RETRY_LIMIT = 3
 AUTO_RETRY_STALL_SECONDS = 120
+# Blocked reasons whose cause only a success of these capabilities removes: such a job is
+# retried after one of them succeeds, so unrelated successes do not use up its retries
+# (fleets auto-1113-1708/1758: produce rows proposed before the bus burned their retries
+# and stayed blocked after the bus was built).
+RETRY_CLEARED_BY = {
+    "production_row_input_source_missing": frozenset(
+        {"planned_main_bus", "main_bus", "automation_science", "smelting_capacity", "produce"}
+    ),
+}
 QUEUED = ("pending", "ready")
 # Existing nodes in these states absorb a new node with the same capability and parameters.
 DEDUPE_STATUSES = {"pending", "ready", "running", "completed"}
@@ -1633,7 +1642,7 @@ class Supervisor:
         job. Unknown action outcomes, rollbacks and deadlines are never retried.
         """
         jobs = list(context[1].get("jobs", {}).values())
-        succeeded = sum(job["status"] == "succeeded" for job in jobs)
+        done = [job.get("capability") for job in jobs if job["status"] == "succeeded"]
         memory = self.__dict__.setdefault("_auto_retries", {})
         retried = False
         for job in jobs:
@@ -1647,7 +1656,13 @@ class Supervisor:
             reason = str(job.get("reason", ""))
             if _unknown(job) or "rollback" in reason or "deadline" in reason:
                 continue
+            cleared_by = RETRY_CLEARED_BY.get(reason)
+            succeeded = len(done) if cleared_by is None else sum(c in cleared_by for c in done)
             seen = memory.setdefault(key, {"successes": succeeded, "count": 0, "first_seen": self.clock()})
+            if (seen.get("cleared_by") is None) != (cleared_by is None):
+                # The baseline counts other successes for the new reason: start it afresh.
+                seen["successes"] = succeeded
+            seen["cleared_by"] = cleared_by and sorted(cleared_by)
             if seen["count"] >= AUTO_RETRY_LIMIT:
                 continue
             # A stalled job waited on something (fuel, plates) that upkeep may
@@ -1670,10 +1685,11 @@ class Supervisor:
                 seen.update(successes=succeeded, count=seen["count"] + 1, first_seen=self.clock())
                 self._event("auto_retry", key=key, capability=job.get("capability"), blocked_reason=reason[:200])
                 retried = True
-            else:
-                # A retry deferred for a job slot is not an attempt (fixpace1 seed 2692229611: two
-                # slot refusals used up the district's retries; it never ran again).
-                seen.update(successes=succeeded, first_seen=self.clock())
+            # A retry deferred for a job slot is not an attempt (fixpace1 seed 2692229611: two
+            # slot refusals used up the district's retries; it never ran again), and its trigger
+            # stays pending: it is tried again on the next cycle, not after the next success
+            # (fleet auto-1113-1708 seed 1054430559: the belt row's retry after the bus was
+            # deferred for a slot and never came back).
         return retried
 
     def _idle(self, seconds):
