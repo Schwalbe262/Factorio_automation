@@ -103,6 +103,10 @@ class DecisionTests(unittest.TestCase):
         ore, furnaces = (s["parameters"]["rate_per_minute"] for s in row["stages"])
         self.assertLessEqual(furnaces, ore)  # smelting_capacity never runs above the connected ore
         self.assertGreater(row["times"]["saving_seconds"], tg.MIN_SAVING_SECONDS)
+        # 180/min (+2 pairs +3 slots per row, the full reserved frame): the known 177.8/min already
+        # exceeds the quickest 150/min package, so that one would mean a second trip (revisit 51 s).
+        self.assertEqual((row["package"]["pairs"], row["package"]["furnace_slots"]), (2, 3))
+        self.assertEqual(row["build_ahead"]["quickest"], "+2 drill pairs +4 furnaces -> 150/min")
 
     def test_furnace_limited_copper_adds_one_slot_per_row_within_the_ore(self):
         row = tg.decide(COPPER)
@@ -250,6 +254,144 @@ class PackageTests(unittest.TestCase):
                 self.assertLess(tg._after(LIVE, k - 1, f)[2], package["capacity_after"])
             if f:
                 self.assertLess(tg._after(LIVE, k, f - 1)[2], package["capacity_after"])
+
+
+# The live shape with the roadmap's next block quantified: steel_production taps 37.5 iron/min (what
+# eval-4177156614 added ten minutes after the ~67 min receipt).
+RISING = replace(LIVE, expected_growth=37.5, growth_sources=(("roadmap steel_production", 37.5),))
+
+
+class BuildAheadTests(unittest.TestCase):
+    def test_rising_lookahead_demand_builds_the_larger_package_in_one_go(self):
+        row = tg.decide(RISING)
+        self.assertTrue(row["grow"], row["reason"])
+        # Expected 117.8 + 37.5 = 155.3/min x 1.1 = 170.8: +1 drill pair +2 slots per row -> 180/min
+        # (T1 496 s, no revisit) beats the quickest +1 pair +1 slot -> 150/min (T1 533 s + revisit 34 s).
+        self.assertEqual((row["package"]["pairs"], row["package"]["furnace_slots"]), (1, 2))
+        self.assertEqual(row["package"]["capacity_after"], 180.0)
+        self.assertEqual(row["stages"][1]["parameters"], {"resource": "iron-ore", "rate_per_minute": 180.0})
+        ahead = row["build_ahead"]
+        self.assertEqual(ahead["expected_demand_per_minute"], 155.27)
+        self.assertEqual(ahead["margin_per_minute"], 37.5)
+        self.assertEqual(ahead["quickest"], "+1 drill pair +2 furnaces -> 150/min")
+        self.assertGreater(ahead["quickest_revisit_seconds"], 0)
+        self.assertEqual(ahead["chosen_revisit_seconds"], 0)
+        self.assertIn("build ahead", row["reason"])
+        self.assertEqual(row["expected"]["sources"], [["roadmap steel_production", 37.5]])
+        json.dumps(row, allow_nan=False)
+
+    def test_flat_demand_keeps_the_minimal_package(self):
+        row = tg.decide(LIVE)
+        # Nothing expected beyond the known 117.8/min: 150/min already reaches 117.8 x 1.1.
+        self.assertEqual((row["package"]["pairs"], row["package"]["furnace_slots"]), (1, 1))
+        self.assertEqual(row["build_ahead"]["margin_per_minute"], 0.0)
+        self.assertIn("already reaches", row["build_ahead"]["why"])
+        self.assertNotIn("build ahead", row["reason"])
+
+    def test_small_shortfall_grows_ahead_only_when_demand_rises(self):
+        flat = tg.decide(replace(COPPER, bill=420.0))
+        # 42/min known demand: one furnace slot per row -> 60/min covers it and nothing more comes.
+        self.assertEqual((flat["package"]["pairs"], flat["package"]["furnace_slots"]), (0, 1))
+        small = tg.decide(replace(COPPER, bill=420.0, expected_growth=10.0))
+        # 52/min expected x 1.1 = 57.2: the same slot still covers it, no drill pair ahead.
+        self.assertEqual((small["package"]["pairs"], small["package"]["furnace_slots"]), (0, 1))
+        rising = tg.decide(replace(COPPER, bill=420.0, expected_growth=30.0))
+        # 72/min expected x 1.1 = 79.2: +1 drill pair +2 slots per row -> 112.5/min in one go
+        # (T1 374 s) beats the slot (T1 458 s + revisit 91 s).
+        self.assertTrue(rising["grow"], rising["reason"])
+        self.assertEqual((rising["package"]["pairs"], rising["package"]["furnace_slots"]), (1, 2))
+
+    def test_unquantified_upcoming_step_adds_the_default_allowance(self):
+        row = tg.decide(replace(LIVE, growth_unquantified=("new_block",)))
+        expected = row["expected"]
+        self.assertAlmostEqual(expected["allowance_per_minute"], 117.77 * tg.DEFAULT_GROWTH_SHARE, places=1)
+        self.assertEqual(expected["unquantified_steps"], ["new_block"])
+        # 147.2/min x 1.1 = 161.9 is above 150: the 180/min package is built in one go.
+        self.assertEqual(row["package"]["capacity_after"], 180.0)
+
+    def test_margin_is_bounded_by_the_reserved_frame(self):
+        row = tg.decide(replace(LIVE, expected_growth=400.0))
+        # 517.8/min expected, but only one reserved drill pair is free: 180/min is the frame,
+        # no connected module is built ahead (the quickest needs none).
+        self.assertTrue(row["grow"], row["reason"])
+        self.assertEqual(row["package"]["capacity_after"], 180.0)
+        self.assertFalse(any("connected module" in s["unit"] for s in row["stages"]))
+        self.assertEqual(row["build_ahead"]["full_package"], "+1 drill pair +4 furnaces -> 180/min")
+
+    def test_critical_claims_make_the_oversized_package_lose(self):
+        stocks = {**LIVE.stocks, "iron-plate": (0.0, 112.5)}
+        self.assertEqual(tg.decide(replace(RISING, stocks=stocks))["package"]["capacity_after"], 180.0)
+        row = tg.decide(replace(RISING, stocks=stocks, claimed=50.0))
+        # A critical job claims 50 plates: the quickest still pays, the larger package's extra
+        # plates would wait behind the claim, so it loses.
+        self.assertTrue(row["grow"], row["reason"])
+        self.assertEqual((row["package"]["pairs"], row["package"]["furnace_slots"]), (1, 1))
+        self.assertIn("critical claim", row["build_ahead"]["why"])
+
+    def test_covered_demand_never_grows_for_expected_growth_alone(self):
+        row = tg.decide(replace(LIVE, bill=200.0, expected_growth=300.0))
+        # 44/min known demand is covered by 112.5 / 1.1: build ahead only sizes a justified growth.
+        self.assertFalse(row["grow"])
+        self.assertIn("covered", row["reason"])
+
+    def test_revisit_cost(self):
+        self.assertEqual(tg.revisit_seconds(180.0, 180.0, 155.0, 1, 14), 0.0)
+        # One trip again, plus the 3.4 % of 155/min unserved while settle + trip + 14 entities pass.
+        short = 1 - 150.0 / 155.0
+        self.assertAlmostEqual(tg.revisit_seconds(150.0, 180.0, 155.0, 1, 14), 30.0 + short * (60.0 + 30.0 + 42.0))
+
+
+class ExpectedGrowthTests(unittest.TestCase):
+    def catalog(self):
+        from test_v2_research_capacity import catalog, item, recipe
+
+        cat = catalog()
+        green = "logistic-science-pack"
+        cat.recipes[green] = recipe(green, 6, [item("inserter", 1), item("transport-belt", 1)])
+        return cat
+
+    def test_upcoming_blocks_unbuilt_taps_and_science_growth(self):
+        cat = self.catalog()
+        jobs, researched = [], {}
+        for step in pg.ROADMAP:
+            if step.id == "research_logistic_science_pack":
+                break
+            jobs.append({"capability": step.capability, "parameters": dict(step.parameters), "status": "succeeded"})
+        stations = [
+            {"name": "automation_science:iron-plate", "owner": "automation_science", "item": "iron-plate",
+             "demand_per_minute": 24.0, "built": True},
+            {"name": "chem:iron-plate", "owner": "chem", "item": "iron-plate", "demand_per_minute": 10.0, "built": False},
+            {"name": "production_row_gear:iron-plate", "owner": "production_row_gear", "item": "iron-plate",
+             "demand_per_minute": 99.0, "built": False},
+        ]  # fmt: skip
+        # No staged science block: research_capacity's decided extra machine is expected growth.
+        decision = {"expand": True, "pack": "automation-science-pack", "current_assemblers": 2, "target_assemblers": 3}
+        obs = {"technologies": researched, "research_capacity": {"decision": decision}}
+        rows = tg.expected_growth(cat, jobs, obs, stations)
+        iron, sources, unknown = rows["iron-plate"]
+        # logistic_science at 30/min: (inserter 4 + belt 1.5) iron x 30 = 165; the unbuilt chem tap 10;
+        # +1 red machine 6 packs/min x 2 iron = 12. Built taps and stock rows are not growth.
+        self.assertEqual(
+            dict(sources),
+            {"roadmap logistic_science": 165.0, "unbuilt tap chem:iron-plate": 10.0,
+             "research_capacity: +1 automation-science-pack machines": 12.0},
+        )  # fmt: skip
+        self.assertAlmostEqual(iron, 187.0)
+        self.assertEqual(unknown, ())
+        copper = dict(rows["copper-plate"][1])
+        self.assertEqual(
+            copper, {"roadmap logistic_science": 45.0, "research_capacity: +1 automation-science-pack machines": 6.0}
+        )
+        # A staged block's growth target is already tap rate (growth_taps): never counted twice.
+        staged = dict(obs, science_growth={"grow": True, "machines": 2, "target_machines": 3})
+        iron, sources, _ = tg.expected_growth(cat, jobs, staged, stations)["iron-plate"]
+        self.assertAlmostEqual(iron, 175.0)
+        self.assertNotIn("science", " ".join(name for name, _ in sources if not name.startswith("roadmap")))
+
+    def test_unknown_block_is_unquantified_and_neutral_blocks_add_nothing(self):
+        cat = self.catalog()
+        self.assertIsNone(tg.upcoming_rates(cat, SimpleNamespace(capability="new_block", parameters={})))
+        self.assertEqual(tg.upcoming_rates(cat, SimpleNamespace(capability="steam_expansion", parameters={})), {})
 
 
 class MeasuredSplitTests(unittest.TestCase):

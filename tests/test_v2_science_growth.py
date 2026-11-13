@@ -221,6 +221,88 @@ class GrowthRuleTests(unittest.TestCase):
         self.assertEqual(decision["target_labs"], 2)
         self.assertEqual(decision["permitted"], {"labs": False, "machines": True})
 
+    def test_build_ahead_follows_the_longer_horizon_science_rate(self):
+        row = state(machines=2)
+        obs = self.live(row, ["missing_science_packs", "working"], [0, 2], 2)
+
+        def decide(expected):
+            return sg.growth_decision(catalog(), row, obs, FAST_QUEUE, deepcopy(AMPLE), expected=expected)
+
+        # Flat (no longer-horizon rate) and 18/min expected: +1 machine (3 x 6 = 18/min) already covers it.
+        self.assertEqual(decide(None)["target_machines"], 3)
+        self.assertEqual(decide({"rate_per_minute": 18, "labs": 2})["target_machines"], 3)
+        # 24/min expected: +2 machines (1120 s, no revisit) beat +1 (1100 s + revisit 56 s) in one go;
+        # labs are not permitted (a lab idles for packs), so their gap does not count.
+        rising = decide({"rate_per_minute": 24, "labs": 3})
+        self.assertTrue(rising["grow"], rising["reason"])
+        self.assertEqual((rising["target_machines"], rising["target_labs"]), (4, 2))
+        self.assertEqual(rising["build_ahead"]["quickest"], "+1 machines +0 labs")
+        self.assertGreater(rising["build_ahead"]["quickest_revisit_seconds"], 0)
+        self.assertIn("build ahead", rising["reason"])
+        # Bounded by the live limit (frame and plates): a 3-slot frame leaves one free slot whatever is expected.
+        from unittest.mock import patch
+
+        with patch.object(sg, "frame_capacity", return_value=3):
+            capped = decide({"rate_per_minute": 30, "labs": 4})
+        self.assertEqual(capped["frame"]["machine_limit"], 3)
+        self.assertEqual(capped["target_machines"], 3)
+        json.dumps(rising, allow_nan=False)
+
+    def test_a_technology_without_a_pack_producer_does_not_block_lab_growth(self):
+        # eval-4177156614 at 126.7 min: both labs working with 2 packs each, 128 red packs on the belt,
+        # both machines working; advanced-material-processing also needs logistic packs nobody makes,
+        # which made the whole queue "wait inf" and the decision "keep 2 labs".
+        green = rc.GREEN_PACK
+        batch = [
+            rc.ResearchTarget("weapon-shooting-speed-1", 10, 30, {RED: 1}),
+            rc.ResearchTarget("lamp", 10, 10, {RED: 1}),
+            rc.ResearchTarget("heavy-armor", 30, 30, {RED: 1}),
+            rc.ResearchTarget("advanced-material-processing", 75, 30, {RED: 1, green: 1}),
+        ]
+        row = state(machines=2)
+        obs = self.live(row, ["working", "working"], [2, 2], 128)
+        obs["research"] = "weapon-shooting-speed-1"
+        decision = sg.growth_decision(catalog(), row, obs, batch, deepcopy(AMPLE))
+        self.assertEqual(
+            decision["blocked_by_missing_pack"], [{"technology": "advanced-material-processing", "pack": green}]
+        )
+        self.assertTrue(decision["grow"], decision["reason"])
+        self.assertEqual(decision["chain"], "labs")
+        # Packs pile up and every lab works: labs grow by one step (max_step 2), 2 -> 4.
+        self.assertEqual((decision["target_labs"], decision["target_machines"]), (4, 2))
+        self.assertNotIn("inf", decision["reason"])
+        # The planner's own receipt reports the same technology instead of sizing on it.
+        ok, blocked = rc.split_producible(batch, {RED})
+        self.assertEqual([t.technology for t in ok], ["weapon-shooting-speed-1", "lamp", "heavy-armor"])
+        self.assertEqual(blocked, [{"technology": "advanced-material-processing", "pack": green}])
+
+    def test_full_output_furnaces_lift_the_plate_limit(self):
+        # Measured net = produced - consumed stays ~0 while district furnaces hold full output: the
+        # unclaimed district capacity is the headroom, not the counter.
+        per = {"iron-plate": 12.0, "copper-plate": 6.0}
+        flat = {item: {"available": 0, "produced_per_minute": 100, "net_per_minute": 0} for item in per}
+        self.assertEqual(sg.plate_machine_limit(2, per, flat, 600), 2)
+        self.assertEqual(sg.plate_machine_limit(2, per, flat, 600, spare={"iron-plate": 60, "copper-plate": 30}), 7)
+        furnace = {"name": "stone-furnace", "position": {"x": 1, "y": 1}}
+        district = {"world_id": "w", "banks": [{"product": "iron-plate", "entities": [furnace]}]}
+        bounds = {
+            "banks": [
+                {
+                    "product": "iron-plate",
+                    "partial_upper_bound_per_minute": 180.0,
+                    "claimed_bus_demand_per_minute": 61.5,
+                }
+            ]
+        }
+        obs = {
+            "world_id": "w",
+            "smelting_throughput_bounds": bounds,
+            "entities": [dict(furnace, status_name="working")],
+        }
+        self.assertEqual(sg.district_spare(district, obs), {})  # working furnaces: the measured net stands
+        obs["entities"] = [dict(furnace, status_name="full_output")]
+        self.assertEqual(sg.district_spare(district, obs), {"iron-plate": 118.5})
+
     def test_labs_follow_once_packs_are_no_longer_the_limit(self):
         row = state(machines=3)
         decision = self.decide(row, self.live(row, ["working", "working"], [3, 3], 12))
