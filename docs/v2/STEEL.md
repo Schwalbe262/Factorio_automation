@@ -24,9 +24,17 @@ every built furnace finished steel with pure raw/coal/fuel (idle furnaces get
 the native witness), steel on the product port, one item per feed lane
 (`smelting.native_feed_lanes`); `steel_coal_supply` = proof that the registered
 coal outlet (same unit) feeds the block's coal port, no shared header. The
-steel port is a free board output port, so `produce` rows can take it.
-`grown`/`growth_evidence` add reserved slots in place (not wired to a planner
-yet). The sections below are the development-map path (no planned bus).
+steel port is a free board output port, so `produce` rows can take it
+(the engine row does, `planned_products.py`); their route connection declares
+`demand_per_minute`. Growth: the observe receipt `furnace_block_claims`
+(`planned_furnaces.furnace_block_claims`: built and full nameplate, declared
+port demand) feeds `progression.steel_capacity_nodes` (the rule of
+`smelting_capacity_nodes`: claims >= 0.8 x built -> target claims x 1.25,
+capped by the reserved slots); `steel_capacity` on a planned world
+(`SteelCapacity.step` -> `PlannedFurnaces.capacity_step`) fills reserved slots
+in place with `grown`, republishes the plan, builds and proves every furnace
+(`capacity_proof`). `growth_evidence` (busy furnaces) is not used by a planner.
+The sections below are the development-map path (no planned bus).
 
 `steel_production.py` provides `steel_rates(catalog)`, `steel_core(catalog,x,y)`,
 `audit_steel_core(plan,catalog)` and `SteelProduction(game,builder,catalog,

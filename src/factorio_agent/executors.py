@@ -215,6 +215,7 @@ class StarterExecutors:
             bus_factory=self.bus_factory,
             science=self.science,
             green=self.green,
+            rows=self.production_rows,
         )
         self.perimeter.ammo_source = self.ammo
         from .engine_production import EngineProduction
@@ -228,6 +229,7 @@ class StarterExecutors:
             science=self.science,
             green=self.green,
             steel=self.industrial_operations.steel,
+            rows=self.production_rows,
         )
         from .defense_relocation import DefenseRelocation
 

@@ -72,10 +72,15 @@ Steel and bricks plan from the site plan on this bus
 `steel-plate` lane is not built yet (it needs an injection: a branch from
 outside the band onto a reserved lane plus a trunk starting there, crossing
 the built trunks between, the reverse of a tap).
-Not yet: `bus_tap.BusTap`, `industrial.free_tap_parameters` and the
-consumers that require `planned_main_bus` (engines, ammo,
-advanced circuits, construction mall) only read the development-map
-template below; on this bus they block with `planned_main_bus taps go
+Engines and magazines are generic `produce` rows on this bus
+(`planned_products.py`): `engine_production`/`ammo_production` hand over to
+`ProductionRows` on a planned world; the engine row takes steel from the
+steel block's board port by an ordinary route (no steel lane is needed) and
+makes gears and pipes in-line from one iron tap (twin sub-rows,
+`production_layout.py`). Not yet: `bus_tap.BusTap`,
+`industrial.free_tap_parameters` and the consumers that still require the
+development-map template below (advanced circuits, construction mall,
+engine capacity, chemical science); on this bus they block with `planned_main_bus taps go
 through planned_tap.connect_inputs` until they plan sites from `SiteService`
 and call `connect_inputs`. Building a reserved lane later must pass under
 existing taps' splitter/branch tiles (`planned_bus.trunk_plan` crosses only

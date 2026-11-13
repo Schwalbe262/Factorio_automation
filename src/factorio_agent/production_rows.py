@@ -37,7 +37,7 @@ from factorio_agent.core.deterministic_state import _atomic_json
 
 from . import planned_tap
 from .blocks.params import DEFAULT_LIMITS, inserter_rate
-from .production_layout import audit_line, design_line, extend_line, input_demand, unsourced_raw
+from .production_layout import audit_line, design_line, extend_line, input_demand, rows, unsourced_raw
 from .production_site import place_line, turned
 from .production_sources import resolve, sourced_items, tap_parameters
 from .transport import underground_proof, xy
@@ -366,13 +366,7 @@ class ProductionRows:
                 self.last_proof_failure = {"reason": "machine_recipe_changed", "position": wanted["position"]}
                 return None
         line = state["line"]
-        machines = [
-            actual[(e["name"], *xy(e))]
-            for row in (line["main"], line["sub"])
-            if row
-            for e in row["entities"]
-            if e.get("recipe")
-        ]
+        machines = [actual[(e["name"], *xy(e))] for row in rows(line) for e in row["entities"] if e.get("recipe")]
         if any(not m.get("electric_network_connected") or m.get("energy", 0) <= 0 for m in machines):
             self.last_proof_failure = {"reason": "machine_unpowered"}
             return None

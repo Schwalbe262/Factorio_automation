@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
+from . import planned_products
 from .board import entity
 from .bus_tap import BusTap, reconstruct_bus
 from .industrial import free_tap_parameters, industrial_site_anchors, PlanningBudget
@@ -88,8 +89,12 @@ def _key(e):
 
 
 class AmmoProduction:
-    def __init__(self, game, builder, catalog, perimeter, *, bus_factory=None, science=None, green=None, tap=None):
+    def __init__(
+        self, game, builder, catalog, perimeter, *, bus_factory=None, science=None, green=None, tap=None, rows=None
+    ):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
+        # Planned world: a generic produce row (planned_products.py); the rest is the development map.
+        self.rows = rows
         self.tap = (
             tap
             if tap is not None
@@ -100,7 +105,15 @@ class AmmoProduction:
 
     @property
     def commissioned(self):
+        if not self.state and self.rows is not None:
+            return planned_products.commissioned(self.rows, planned_products.AMMO_ROW["item"])
         return self.state.get("phase") == "verified"
+
+    def planned(self, obs):
+        """The produce rows on a planned world without a development-map ammo state, else None."""
+        if self.state or not planned_products.active(self.rows, obs, planned_products.AMMO_ROW["item"]):
+            return None
+        return self.rows
 
     def _identity(self, obs, value):
         return (
@@ -314,9 +327,19 @@ class AmmoProduction:
             _atomic_json(path, board)
         return None
 
+    def _chest(self, obs):
+        """``(chest spec, unit)``: the stock chest of the planned row, else the bound core chest."""
+        rows = self.planned(obs)
+        if rows is None:
+            chest = self.state["core"]["chest"]
+            return chest, self.state["bindings"].get(_key(chest))
+        spec = rows.state(planned_products.AMMO_ROW["item"])["line"]["tail"]["chest"]
+        chest = {"name": spec["name"], "position": dict(spec["position"])}
+        live = next((e for e in obs.get("entities", []) if e["name"] == chest["name"] and xy(e) == xy(chest)), None)
+        return chest, (live or {}).get("unit_number")
+
     def _buffer(self, obs):
-        chest = self.state["core"]["chest"]
-        unit = self.state["bindings"].get(_key(chest))
+        chest, unit = self._chest(obs)
         if not unit:
             return {"ok": False, "reason": "ammo_buffer_not_built"}
         payload = json.dumps(json.dumps(dict(chest, unit_number=unit), separators=(",", ":")))
@@ -341,6 +364,9 @@ return {ok=true,tick=game.tick,unit_number=e.unit_number,actor_unit=a.unit_numbe
         )
 
     def step(self, obs):
+        rows = self.planned(obs)
+        if rows is not None:
+            return planned_products.step(rows, obs, planned_products.AMMO_ROW)
         if not self.state:
             ready = self.prepare(obs)
             if not ready.get("ok"):
@@ -413,6 +439,9 @@ return {ok=true,tick=game.tick,unit_number=e.unit_number,actor_unit=a.unit_numbe
         }
 
     def proof(self, obs):
+        rows = self.planned(obs)
+        if rows is not None:
+            return rows.proof(obs, dict(planned_products.AMMO_ROW))
         if not self.state or not self._identity(obs, self.state) or self.state.get("phase") == "tap":
             return None
         defense = self.perimeter.coverage_proof(obs, SCOPE_ID)
@@ -494,12 +523,17 @@ return {ok=true,tick=game.tick,assembler_unit=machine.unit_number,products_finis
             )
         if not self.commissioned:
             return None
-        if not self._identity(obs, self.state):
+        planned = self.planned(obs) is not None
+        if planned:
+            if self.rows.state(planned_products.AMMO_ROW["item"]).get("world_id") != obs.get("world_id"):
+                return {"status": "blocked", "reason": "ammo_world_or_catalog_changed"}
+        elif not self._identity(obs, self.state):
             return {"status": "blocked", "reason": "ammo_world_or_catalog_changed"}
         buffer = self._buffer(obs)
         if not buffer.get("ok"):
             return {"status": "blocked", "reason": buffer["reason"]}
-        if buffer["bar_slots"] != 1:
+        # The planned row's chest bar is the produce stock bound (2 stacks), not one slot.
+        if not planned and buffer["bar_slots"] != 1:
             return {"status": "blocked", "reason": "ammo_buffer_bar_changed"}
         needed = count - buffer["actor_full_magazines"]
         if needed <= 0:
@@ -508,7 +542,7 @@ return {ok=true,tick=game.tick,assembler_unit=machine.unit_number,products_finis
             return {"status": "waiting", "reason": "waiting for normally assembled factory magazines"}
         if buffer["insertable"] <= 0:
             return {"status": "blocked", "reason": "actor_inventory_has_no_ammo_capacity"}
-        chest = self.state["core"]["chest"]
+        chest, _ = self._chest(obs)
         action = {k: chest[k] for k in ("name", "position")}
         return dict(
             action,

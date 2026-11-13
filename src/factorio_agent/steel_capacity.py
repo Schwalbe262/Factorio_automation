@@ -565,8 +565,16 @@ class SteelCapacity:
         self._save()
         return None
 
+    def _planned(self, obs):
+        """The site-planned steel block on a planned world (``industrial.planned``), else None."""
+        return self.industrial.planned("steel", obs) if self.industrial is not None else None
+
     def step(self, obs, parameters):
         validate_parameters(parameters)
+        planned = self._planned(obs)
+        if planned is not None:
+            # Planned world: fill the block's reserved slots in place (planned_furnaces.grown).
+            return planned.capacity_step(obs, parameters["rate_per_minute"])
         if self.state and self.state.get("parameters") != parameters:
             if self.state.get("phase") != "verified":
                 return {"status": "blocked", "reason": "another_steel_capacity_change_unfinished"}
@@ -660,6 +668,9 @@ class SteelCapacity:
 
     def proof(self, obs):
         self.last_failure = None
+        planned = self._planned(obs)
+        if planned is not None:
+            return planned.capacity_proof(obs)
         if not self.state or self._check(obs):
             return None
         s = self.state

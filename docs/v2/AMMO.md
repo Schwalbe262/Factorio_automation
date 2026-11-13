@@ -1,5 +1,15 @@
 # Automatic magazine supply
 
+Planned world (site service + planned bus, no `ammo-production.json`):
+`AmmoProduction(..., rows=ProductionRows)` hands over to a generic `produce`
+row `{"item": "firearm-magazine", "rate_per_minute": 10}` (`planned_products.py`):
+site from a `SiteService` allocation, iron from a planned-bus tap planned with
+the block, whole plan on the board before building, reserved main-row slots,
+proof = the produce proof (every machine powered and produced, stock in the
+chest). `commissioned` and `ensure_full_magazines` then use that row's stock
+chest (its bar is the produce bound of 2 stacks, not one slot). No defense
+coverage is placed by this path. The rest of this file is the development-map path.
+
 `AmmoProduction(game, builder, catalog, perimeter, *, bus_factory=None,
 science=None, green=None, tap=None)` exposes read-only `prepare(obs)`, ordinary
 paid `step(obs)`, current `proof(obs)` and `ensure_full_magazines(obs, count)`.

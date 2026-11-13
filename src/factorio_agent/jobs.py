@@ -323,7 +323,8 @@ CAPABILITIES = {
     },
     "produce": {
         "parameters": {
-            "item": "product of an unlocked solid assembler recipe with at most two solid ingredients",
+            "item": "product of an unlocked solid assembler recipe with at most two solid ingredients "
+            "(three when two are in-line intermediates of one shared input)",
             "rate_per_minute": "finite number (0,600], absolute nominal target",
         },
         "requires": ["smelting_district", "power"],
@@ -451,6 +452,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "known_project_construction_budget": obs.get("known_project_construction_budget"),
         "belt_lane_observation": obs.get("belt_lane_observation"),
         "smelting_throughput_bounds": obs.get("smelting_throughput_bounds"),
+        "furnace_block_claims": obs.get("furnace_block_claims"),
         "factory_constraints": obs.get("factory_constraints"),
         "available_research": obs.get("available_research"),
         "native_capability_gates": obs.get("native_capability_gates"),

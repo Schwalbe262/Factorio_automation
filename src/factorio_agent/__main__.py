@@ -203,6 +203,12 @@ def execute(argv=None, services=None):
         if (root / "catalog.json").exists():
             obs["known_project_construction_budget"] = construction_budget(root, obs, services.catalog(root, game))
             obs["smelting_throughput_bounds"] = smelting_throughput_bounds(root, obs, services.catalog(root, game))
+            from .planned_furnaces import furnace_block_claims
+
+            try:
+                obs["furnace_block_claims"] = furnace_block_claims(root, obs)
+            except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
+                obs["furnace_block_claims"] = {"blocks": [], "error": f"{type(exc).__name__}: {exc}"[:200]}
             obs["factory_constraints"] = factory_constraints(root, obs, services.catalog(root, game))
             from .normal_research import ready_options
 

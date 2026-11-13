@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -208,6 +209,66 @@ def growth_evidence(state: dict, obs: dict) -> dict:
         "reason": "busy_furnaces_backed_up_raw_and_taken_product",
         "per_row": bank["per_side_count"] + 1,
     }
+
+
+def furnace_rate(state: dict) -> float:
+    """Nameplate product/min of one built furnace of the saved block."""
+    rated = state["rated"]
+    return float(rated["product_per_minute"]) / int(rated["furnace_count"])
+
+
+def built_rate(state: dict) -> float:
+    return 2 * state["bank"]["per_side_count"] * furnace_rate(state)
+
+
+def per_row_for(state: dict, rate: float) -> int:
+    """Furnaces per row (both rows build alike) whose nameplate covers ``rate``."""
+    return max(1, math.ceil(rate / (2 * furnace_rate(state)) - 1e-9))
+
+
+def furnace_block_claims(root, obs) -> dict:
+    """Observe receipt ``furnace_block_claims``: per verified furnace block, nameplate built and
+    full (every reserved slot) rate and the demand consumers declared on its product port
+    (board ``connections`` rows with ``demand_per_minute``, written by ``produce`` routes)."""
+    root = Path(root)
+    path = root / "pcb-board.json"
+    if not path.exists():
+        return {"blocks": []}
+    board = json.loads(path.read_text(encoding="utf-8"))
+    if board.get("world_id") != obs.get("world_id"):
+        return {"status": "world_changed", "blocks": []}
+    rows = []
+    for kind in KINDS.values():
+        state_path = root / kind.state_file
+        if not state_path.exists():
+            continue
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if state.get("world_id") != obs.get("world_id") or state.get("phase") not in ("verified", "growing"):
+            continue
+        bank, per = state["bank"], furnace_rate(state)
+        out = bank["ports"][2]["position"]
+        claimed = sum(
+            float(row.get("demand_per_minute") or 0)
+            for row in board.get("connections", [])
+            if isinstance(row, dict)
+            and row.get("item") == kind.product
+            and isinstance(row.get("source"), dict)
+            and (row["source"].get("x"), row["source"].get("y")) == (out["x"], out["y"])
+        )
+        rows.append(
+            {
+                "kind": kind.name,
+                "product": kind.product,
+                "phase": state["phase"],
+                "per_furnace_per_minute": per,
+                "built_per_row": bank["per_side_count"],
+                "reserved_per_row": bank["capacity_slots"],
+                "nominal_capacity_per_minute": 2 * bank["per_side_count"] * per,
+                "full_block_capacity_per_minute": 2 * bank["capacity_slots"] * per,
+                "claimed_port_demand_per_minute": round(claimed, 3),
+            }
+        )
+    return {"blocks": rows, "scope": "nameplate furnace rates and declared consumer demand; not measured"}
 
 
 class PlannedFurnaces:
@@ -579,6 +640,40 @@ class PlannedFurnaces:
             "reason": f"belt-fed paired furnaces make {self.kind.product} onto a published port",
             "evidence": evidence,
         }
+
+    def capacity_step(self, obs, rate: float) -> dict:
+        """``steel_capacity`` on a planned world: fill reserved slots in place (``grown``) up to
+        ``rate`` (absolute product/min), then the production step builds and proves them."""
+        if not self._current(obs) or not (self.state.get("phase") == "verified" or self.state.get("capacity_target")):
+            return {"status": "blocked", "reason": "planned_furnace_production_not_verified", "kind": self.kind.name}
+        per_row = per_row_for(self.state, rate)
+        bank = self.state["bank"]
+        if per_row > bank["capacity_slots"]:
+            return {
+                "status": "blocked",
+                "reason": "furnace_capacity_exceeds_reserved_slots",
+                "per_row": per_row,
+                "reserved_per_row": bank["capacity_slots"],
+            }
+        if per_row > bank["per_side_count"]:
+            self.state = dict(grown(self.state, per_row), phase="growing", capacity_target=rate)
+            self._save()
+        elif self.state.get("capacity_target", 0) < rate:
+            self.state["capacity_target"] = rate
+            self._save()
+        return self.production_step(obs)
+
+    def capacity_proof(self, obs) -> dict | None:
+        """The production proof with every furnace for the saved capacity target built and producing."""
+        evidence = self.proof(obs)
+        target = self.state.get("capacity_target") if self.state else None
+        if evidence is None or target is None:
+            return None
+        built = built_rate(self.state)
+        if built + 1e-9 < target:
+            self.last_proof_failure = {"reason": "built_furnaces_below_capacity_target", "built": built}
+            return None
+        return dict(evidence, capacity_target_per_minute=target, built_rate_per_minute=built)
 
     def coal_supply_step(self, obs) -> dict:
         """``steel_coal_supply``: the block's coal comes straight from the registered coal outlet."""

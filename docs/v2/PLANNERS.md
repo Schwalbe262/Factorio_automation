@@ -138,6 +138,27 @@ skip when any plate net is unmeasured or <= 0, or rate < PRODUCE_MIN_RATE (1.0)
 
 `bulk_item_demand`: `Step.builds` of the next 4 steps. Pinned by `tests/test_v2_produce_autopilot.py`.
 
+Line design (`production_layout.plan_sources`): at most two routed solid
+inputs; an unsourced one-level intermediate gets a sub-row; two unsourced
+intermediates made from the same single sourced input get twin sub-rows on
+one mixed belt (engines: steel + gears + pipes). Declared input demand
+(`input_demand`, the tap's and a board-port connection's `demand_per_minute`)
+counts sub-rows only at the main row's draw and scales to the requested rate
+when the built nameplate is higher (a stock row stops when its chest is full).
+
+## Steel block growth (`progression.steel_capacity_nodes`)
+
+```
+receipt furnace_block_claims (planned_furnaces.furnace_block_claims), kind steel:
+  nominal = built furnaces x nameplate, full = every reserved slot, claimed = sum demand_per_minute of
+  board connections whose source is the block's product port
+propose steel_capacity {rate_per_minute: round(min(full, claimed x SMELTING_HEADROOM 1.25), 1)}
+  when steel_production succeeded, claimed >= SMELTING_GROW_AT (0.8) x nominal, nominal < full,
+  no open/stalled steel_capacity row and no succeeded one at >= target; priority SMELTING_CAPACITY_PRIORITY
+```
+
+Pinned by `tests/test_v2_planned_products.py`.
+
 ## Supply cell (`supply_cell.py`, temporary hand-fed factory)
 
 A small chest-fed assembler cell, like the startup science cell: not on the
