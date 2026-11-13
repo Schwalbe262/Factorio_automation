@@ -252,6 +252,10 @@ class RocketBillTests(unittest.TestCase):
         copper = item(result, "copper-plate")
         self.assertEqual(copper["belts"], -(-copper["rate_per_minute"] // 900))
         self.assertEqual(copper["bus_lanes_reserved"], 2)
+        bus = {row["item"]: row for row in result["bus"]}
+        for row in bus.values():
+            self.assertEqual(row["lanes_short"], max(0, row["lanes_needed"] - row["reserved"]))
+            self.assertGreaterEqual(row["taps"], 2)
 
     def test_rejects_a_bad_window(self):
         with self.assertRaises(ValueError):

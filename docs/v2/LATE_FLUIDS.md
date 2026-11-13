@@ -60,6 +60,17 @@ risers in place. `rocket_plan` gives the row a `fluid_source` key and a `FluidSu
 first-neighbour gap, as `chemical_production` does). Electric engines remain a bill gap
 (`produce_unfit`): engine units leave the engine row only through its stock chest.
 
+## Growth and bus lanes as data
+
+`block_growth.growth_options(root, world_id)` lists every built block's growth option for the
+science-growth / bottleneck machinery (a `growth_options` provider): each `produce` row
+(including fluid and lane-merge rows) offers `in_place` growth while reserved slots remain (one
+machine more: `step_rate`, `cost.items`, and the `produce` request at the higher rate as
+`action`), else `rebuild`; `advanced_circuit_production` and `chemical_science` are `fixed`
+(`limit: no_rate_parameter`) until their controllers take a rate. The rocket bill's `bus` rows
+declare lanes by demand (`lanes_needed`, `lanes_short` against the site plan's `lane_order`,
+`taps` per consuming recipe); the site plan's lane order itself is unchanged.
+
 ## Known limits
 
 * `fluid_product` sulfuric acid takes iron from the development-map bus tap (`bus-factory.json`,

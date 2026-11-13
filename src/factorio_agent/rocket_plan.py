@@ -744,6 +744,11 @@ def rocket_bill(
             "rate_per_minute": r["rate_per_minute"],
             "belts": r["belts"],
             "reserved": r["bus_lanes_reserved"],
+            # Bus lane declaration by demand: one site-plan lane per belt of the item's rate,
+            # one tap per consuming recipe (the planned bus taps each consumer, planned_tap).
+            "lanes_needed": r["belts"],
+            "lanes_short": max(0, r["belts"] - r["bus_lanes_reserved"]),
+            "taps": len(r["consumers"]),
         }
         for r in items
         if r["type"] == "item" and len(r["consumers"]) >= 2 and producers[("item", r["item"])].get("belt")

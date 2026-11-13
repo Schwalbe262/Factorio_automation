@@ -91,6 +91,7 @@ def main(argv=None) -> int:
     for row in bill["bus"]:
         print(
             f"  {row['item']:<24} {row['rate_per_minute']:>8g}/min  belts {row['belts']}  reserved lanes {row['reserved']}"
+            f"  short {row['lanes_short']}  taps {row['taps']}"
         )
     print("\ngaps (capability: status: items):")
     for gap in bill["gaps"]:
