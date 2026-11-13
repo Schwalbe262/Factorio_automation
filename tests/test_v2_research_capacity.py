@@ -640,3 +640,15 @@ class ReceiptAndRoadmapTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HandGatheredFundingTests(unittest.TestCase):
+    def test_wood_without_stock_or_producer_is_gathered_not_unfundable(self):
+        from factorio_agent import research_capacity as rc
+
+        evidence = {"iron-plate": {"available": 100.0, "produced_per_minute": 60.0}}
+        # 0.5 wood for a pole, none carried, nothing produces wood: one second of gathering, not infinity.
+        self.assertEqual(rc._fund({"wood": 0.5, "iron-plate": 30.0}, evidence), 1.0)
+        held = dict(evidence, wood={"available": 4.0, "produced_per_minute": 0.0})
+        self.assertEqual(rc._fund({"wood": 0.5}, held), 0.0)
+        self.assertEqual(rc._fund({"plastic-bar": 1.0}, evidence), float("inf"))  # other unknown items stay unfundable
