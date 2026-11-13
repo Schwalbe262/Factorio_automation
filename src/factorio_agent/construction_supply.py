@@ -492,6 +492,10 @@ class V2Bootstrap(DeterministicBootstrap):
             return None
         observation = self._unreserved_stock_observation(observation, item)
         if item not in CONSTRUCTION_ITEMS:
+            depot = getattr(self, "fuel_depot", None)  # carried_surplus.CarriedSurplus.depot_take
+            stored = depot(observation, item, count) if depot is not None and item in FUELS else None
+            if stored is not None:
+                return stored  # surplus parked in a depot is used before any other chest
             action = super()._take_output(observation, item, count)
             if (
                 item in FUELS

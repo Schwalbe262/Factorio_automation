@@ -252128,3 +252128,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: the 20-minute target is still missed; cause measured (capacity and supply cell took the critical path's plates; batches funded all-or-nothing; outposts planned only after research). All three are changed but unmeasured on a fresh seed.
 - failure reason: slack jobs outranked critical ones; proofs and receipts with gaps (bus proof, summary dropping a receipt).
 - next action: fleet pace1 (8 seeds x 45 min) report; fix the commonest blockers; then later stages.
+
+## 2026-11-13 Part 47 - carried surplus rule (coal flood from starter retirement, eval-2874201674)
+- goal: surplus carried fuel/ore is used where it is consumed, not held; retirement never floods the inventory.
+- hypothesis: retirement emptied every retiring coal chest into the actor (2643 coal / 56 takes vs ~1800 inserted as fuel); "collect produced coal" is already bounded by the requested count.
+- actions: carried_surplus.py (allowance = boiler fill + FUEL_FETCH for fuel, PLATE_BATCH for ore; dispose at >= 1 stack: consumers then InventoryStorage depot; depot-first fuel fetch); starter retirement coal trips bounded by trip_room; tests/test_v2_carried_surplus.py; PLANNERS.md section.
+- result: gate run; unmeasured on a fleet (no runs started: 12 parallel runs on the machine).
+- failure reason: none yet; no new depot chest on a SiteService spot (existing storage chest is the depot).
+- next action: fleet run, check job-events for "put carried surplus" / "put retiring coal" and inventory coal over time.
