@@ -140,7 +140,7 @@ class AdmissionTests(unittest.TestCase):
             self.submit("science", "automation_science", {"rate_per_minute": 30})
 
     def test_an_early_job_never_takes_the_last_free_slot(self):
-        for index, capability in enumerate(("bootstrap_logistics", "electric_coal", "regularize_power_layout")):
+        for index, capability in enumerate(("bootstrap_logistics", "power_coal_feed", "regularize_power_layout")):
             self.submit(f"j{index}", capability)
         self.assertEqual(MAX_ACTIVE_JOBS - es.EARLY_FREE_SLOTS, 3)
         with self.assertRaisesRegex(ValueError, "jobs may be active"):
