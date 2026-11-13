@@ -125,12 +125,20 @@ class TimeComparisonTests(unittest.TestCase):
         self.assertEqual(len(plan_capacity({"iron-plate": short}, {"iron-plate": 400})), 1)
 
     def test_max_cells_cap(self):
-        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=3)}, {})
-        self.assertEqual(decisions[0].target_cells, 4)
-        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=4)}, {}), [])
-        roomy = CapacityConfig(max_plate_cells=8)
-        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7)}, {}, config=roomy)
+        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=7)}, {})
         self.assertEqual(decisions[0].target_cells, 8)
+        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=8)}, {}), [])
+        tight = CapacityConfig(max_plate_cells=4)
+        decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=3)}, {}, config=tight)
+        self.assertEqual(decisions[0].target_cells, 4)
+
+    def test_plate_cells_follow_lookahead_demand_past_four(self):
+        """Seed 283895142: 4 iron cells at 60/min against 1000+ iron of upcoming steps."""
+        four = iron(
+            shortfall=0, installed_live_cells=4, productive_cells=4, produced_per_minute=60.0, net_per_minute=20.0
+        )
+        decisions = plan_capacity({"iron-plate": four}, {"iron-plate": 1200})
+        self.assertEqual((decisions[0].current_cells, decisions[0].target_cells), (4, 6))
 
     def test_build_seconds_from_evidence(self):
         decision = plan_capacity({"iron-plate": iron(shortfall=100, build_seconds=60)}, {})[0]
@@ -195,6 +203,50 @@ class OrderingTests(unittest.TestCase):
         self.assertAlmostEqual(coal["extra_fuel_burn_per_minute"], 7.2)
         self.assertTrue(coal["fuel_deficit"])
         self.assertAlmostEqual(coal["net_per_minute"], 2.8)
+
+
+class CoalCellWoodCostTests(unittest.TestCase):
+    """Seed 283895142: a coal cell's wooden chest costs wood, which has no supply row."""
+
+    def supply(self):
+        cell = {"coal": 8, "iron-plate": 9, "stone": 5}
+        return {
+            "iron-plate": iron(
+                produced_per_minute=60.0,
+                consumed_per_minute=55.0,
+                net_per_minute=5.0,
+                productive_cells=4,
+                installed_live_cells=4,
+                raw_cost_per_cell=cell,
+                available=20,
+            ),
+            "coal": option(
+                shortfall=0,
+                produced_per_minute=15.0,
+                consumed_per_minute=15.0,
+                net_per_minute=0.0,
+                productive_cells=1,
+                installed_live_cells=1,
+                raw_cost_per_cell=dict(cell, wood=2),
+                available=3,
+            ),
+            "stone": option(available=30, raw_cost_per_cell=dict(cell, wood=2)),
+        }
+
+    def test_coal_deficit_expands_although_the_chest_needs_wood(self):
+        decisions = plan_capacity(self.supply(), {})
+        self.assertEqual([(d.item, d.current_cells, d.target_cells) for d in decisions], [("coal", 1, 2)])
+        self.assertTrue(decisions[0].evidence["fuel_deficit"])
+        # 2 wood at 2 s each is part of the fund time.
+        self.assertGreaterEqual(decisions[0].evidence["options"][0]["fund_seconds"], 4.0)
+
+    def test_without_the_hand_gather_rule_coal_never_expanded(self):
+        self.assertEqual(plan_capacity(self.supply(), {}, config=CapacityConfig(hand_gathered_seconds={})), [])
+
+    def test_unknown_raw_input_still_makes_the_option_impossible(self):
+        supply = self.supply()
+        supply["coal"]["evidence"]["raw_cost_per_cell"] = {"coal": 8, "unobtainium": 1}
+        self.assertEqual(plan_capacity(supply, {}), [])
 
 
 if __name__ == "__main__":

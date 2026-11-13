@@ -15,8 +15,9 @@ Decision rule per raw item (all times in seconds, rates in items/minute):
   newly produced items first: the item's own share is funded from current
   stock (``available`` or ``collectable``) and then from the gross
   ``produced_per_minute``. Every other raw item in the cell cost must be in
-  stock or being produced (otherwise the option is impossible); the longest
-  of their fund times is added. Then ``k * build_seconds`` to build, after
+  stock or being produced, or be hand-gathered (wood:
+  ``hand_gathered_seconds`` per item); otherwise the option is impossible.
+  The longest of their fund times is added. Then ``k * build_seconds`` to build, after
   which the item's net rate is ``net + k * cell_rate`` (coal: minus a new
   coal drill's own fuel, and minus the fuel new cells of other items burn).
   ``T(k) = fund + build + 60 * (required + own_cell_cost) / new_net``.
@@ -57,14 +58,15 @@ class CapacityConfig:
 
     # Most cells added by one decision, and the capability's absolute limit.
     max_step: int = 2
-    # Every burner cell is hand-fuelled by the one actor, a cost the time
-    # comparison does not see. On a live run the planner grew iron 1 -> 8
-    # cells in four steps, then fuelling them slowed everything else. The
-    # capability allows 8 (max_cells, still the cap for coal, which must fuel
-    # the rest); plate and stone cells stop at max_plate_cells because
-    # electric mining replaces them soon after.
+    # The capability allows 8 cells per resource (max_cells; also the coal cap).
     max_cells: int = 8
-    max_plate_cells: int = 4
+    # Plate and stone cells: at most max_plate_cells; how many below that is
+    # the time comparison against the lookahead demand. A fixed cap of 4
+    # starved the early game (seed 283895142: smelting finished at 48.8 min,
+    # the next steps needed 1000+ iron while 4 iron cells made 60/min). The
+    # fuel new cells burn is covered by the coal rule (extra_fuel_burn) and
+    # hand-fuelling by FUEL_BATCH; an earlier 1 -> 8 iron build-up predates both.
+    max_plate_cells: int = 8
     # Items/minute of one starter cell when the receipt has no measurement:
     # a burner mining drill mines 0.25 ore/s = 15/min.
     default_cell_rate: float = 15.0
@@ -81,6 +83,12 @@ class CapacityConfig:
     # Expansion must save at least this many seconds and be this much faster.
     min_saving_seconds: float = 60.0
     max_ratio: float = 0.85
+    # Seconds per item of a raw input no starter cell produces but the actor
+    # gathers by hand (a tree gives 4 wood). The wooden chest of every coal
+    # and stone cell costs 2 wood, and ``resource_supply_options`` has no wood
+    # row, so without this every coal option was infinite and coal never
+    # expanded (live, seed 283895142: one coal cell, power waited 6 min).
+    hand_gathered_seconds: Mapping[str, float] = field(default_factory=lambda: {"wood": 2.0})
 
 
 @dataclass(frozen=True)
@@ -212,8 +220,12 @@ def _option_seconds(facts: _Facts, k: int, supply: Mapping, net: float, config: 
             continue
         other = _evidence(supply, name)
         if other is None:
-            cross = math.inf
-            break
+            gather = finite_number(config.hand_gathered_seconds.get(name))
+            if gather is None or gather < 0:
+                cross = math.inf
+                break
+            cross = max(cross, k * per_cell * gather)
+            continue
         cross = max(
             cross, fund_seconds(k * per_cell, stock_on_hand(other), finite_number(other.get("produced_per_minute")))
         )

@@ -155,6 +155,11 @@ def _plan(entities: list[dict], ports: list[dict], **extra: Any) -> dict:
 # this order. An unchecked fringe site ran dry in twenty minutes on a live
 # map; a single high floor left no fringe site at all on another.
 COAL_RICHNESS_TIERS = (4000, 2000, 1000, 400, 0)
+# Build ahead (``FactoryBuilder.ensure_plan``): while the next plan entity waits
+# for its item, a later entity whose item is carried is placed instead. These
+# entity types keep plan order; at most this many placement checks per call.
+BUILD_AHEAD_KEEP_ORDER = frozenset({"mining-drill", "inserter"})
+BUILD_AHEAD_CHECKS = 4
 
 
 class FactoryBuilder:
@@ -280,7 +285,13 @@ class FactoryBuilder:
                         missing.add((wanted["name"], p["x"], p["y"]))
                 result = self.bootstrap.ensure_item(observation, item, min(cap, len(missing)))
                 if self.construction_materials is not None:
-                    return self.construction_materials.ensure(observation, result)
+                    result = self.construction_materials.ensure(observation, result)
+                if isinstance(result, dict) and not result.get("type") and result.get("status") == "waiting":
+                    # Waiting for this item must not hold back entities whose
+                    # items are already carried: place one of those instead.
+                    ahead = self._build_ahead(observation, plan, entities[index + 1 :], find)
+                    if ahead is not None:
+                        return ahead
                 return result
             placement = self.can_place([entity])
             if not placement.get("ok"):
@@ -423,6 +434,39 @@ return {ok=true,world_id=d and d.world_id,emitter=emitter,ground=ground}
             "count": min(50, row["count"]),
             "reason": "collect spilled ore before constructing the reserved resource receiver",
         }
+
+    def _build_ahead(self, observation: dict, plan: dict, later: list[dict], find) -> dict | None:
+        """One later plan entity whose item is carried and whose footprint is free, or None.
+
+        Used only while the in-order entity waits for its item. Mining drills
+        (they would mine into an unfinished receiver) and inserters (they drop
+        items on the ground without a target) keep their plan order. At most
+        BUILD_AHEAD_CHECKS placement queries per call.
+        """
+        inventory = observation.get("inventory", {})
+        checks = 0
+        for entity in later:
+            entity_type = self.catalog.entities.get(entity["name"], {}).get("type", entity["name"])
+            if entity_type in BUILD_AHEAD_KEEP_ORDER or find(entity) is not None:
+                continue
+            item = entity.get("item") or self._placement_item(entity["name"])
+            if int(inventory.get(item, 0)) < 1:
+                continue
+            if checks >= BUILD_AHEAD_CHECKS:
+                return None
+            checks += 1
+            if not self.can_place([entity]).get("ok"):
+                continue
+            return {
+                "type": "build",
+                "name": entity["name"],
+                "item": item,
+                "position": entity["position"],
+                "direction": entity.get("direction", 0),
+                **underground_fields(entity),
+                "reason": "build a carried plan entity while an earlier one waits for its item",
+            }
+        return None
 
     def _affordable_builds(self, observation: dict, entities: list[dict]) -> list[dict]:
         """Take a bounded infrastructure prefix without skipping required work."""
