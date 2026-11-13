@@ -432,6 +432,20 @@ def _capability_products(catalog) -> dict[str, dict]:
     return table
 
 
+def producer_for(catalog, item: str) -> dict | None:
+    """The block that makes ``item`` (``{"capability", "parameters"}``): the declared capability of its
+    recipe, else the generic producer (a ``produce`` row, or the missing capability it names)."""
+    try:
+        recipe = catalog.recipe_for_product(item, product_type="item")
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if not recipe:
+        return None
+    declared = _capability_products(catalog).get(recipe["name"])
+    row = declared or _generic_producer(catalog, recipe, ("item", item), set())
+    return {"capability": row["capability"], "parameters": dict(row.get("parameters") or {}), "recipe": recipe["name"]}
+
+
 # Research a block needs beyond its recipes' unlocks (advanced_petroleum: the crackers' circuit control).
 EXTRA_RESEARCH = {"advanced_petroleum": ("advanced-oil-processing", "circuit-network")}
 

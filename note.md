@@ -252314,3 +252314,8 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - fixes: ensure_item waits when a built powered machine has the recipe; scout stands are land (Lua find_non_colliding_position), unreachable target abandoned after 2 moves without progress; power_grid keeps the coarse no-connection reason, A* closed set + 7-tile buckets; repeated_executor_failure -> plan_needs.from_executor_failure (preflight with action/position), _replannable, ladder checks replan first; postmortem row dry run answers saved_row_plan.
 - result: read-only what-if oil_gathering fits (55-hop bridge), water_gathering fits, engine fits; gate OK (3270 tests).
 - next: merge, restart supervisor; watch basic_petroleum (crude pipe ~470 tiles, pipeline extent 320 limit) and chemical stages.
+
+## 2026-11-14 eval-1575138435 after restart on 1ff10d3 (worker agent-a951cbaf78dc76a93)
+- live: engine_production (steel 8) and oil_gathering (steel 5, past scouting) blocked "required item needs a production machine"; the steel furnaces were idle no_ingredients (no recipe observed) holding 85/78 steel, and the slack view hid claimed output.
+- fixes: idle furnace holding the item counts as producer; no producer at all -> evidence producer (rocket_plan.producer_for) and Supervisor._missing_producers queues it (produce rows at MISSING_PRODUCER_RATE); basic_petroleum DryRun + plan_needs (_petroleum_needs) + rungs incl. relax:waypoint_route (two crude pipe legs).
+- gate OK (3277). open: pump segments, clear rung, refinery site rung (6 fixed anchors around refinery_origin).

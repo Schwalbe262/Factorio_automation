@@ -300,6 +300,7 @@ DRY_RUN = {
     "rocket_parts": DryRun(
         lambda ex, obs, p: ex._rocket_parts().prepare_feed(obs, p), lambda ex, obs, p: ex._rocket_parts().step(obs, p)
     ),
+    "basic_petroleum": DryRun(lambda ex, obs, p: ex.petroleum.prepare(obs)),
     "water_gathering": DryRun(lambda ex, obs, p: ex._water_source(p.get("source_key")).prepare(obs)),
     # Late fluids (rocket tail): every prepare is read-only (advanced_petroleum, fluid_products, fluid_distribution).
     "advanced_petroleum": DryRun(lambda ex, obs, p: ex._advanced_petroleum().prepare(obs)),

@@ -423,7 +423,7 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
         if not enabled.get(recipe["name"]):
             return _report("blocked", "required recipe is locked", item=item, recipe=recipe["name"])
         if not recipe.get("handcraftable"):
-            producers = self._live_producers(observation, recipe["name"])
+            producers = self._live_producers(observation, recipe["name"], item)
             if producers:
                 # A machine-only item (steel-plate) that a built machine on the map makes is
                 # a wait for its output, not a dead end (eval-1575138435, 320 min: the engine
@@ -438,6 +438,13 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
                     have=have,
                     need=count,
                 )
+            # No machine makes it anywhere: name the block that would (rocket_plan.producer_for);
+            # the supervisor proposes it (Supervisor._missing_producers) instead of a dead end.
+            producer = None
+            if self.catalog is not None:
+                from ..rocket_plan import producer_for
+
+                producer = producer_for(self.catalog, item)
             return _report(
                 "blocked",
                 "required item needs a production machine",
@@ -445,6 +452,7 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
                 recipe=recipe["name"],
                 have=have,
                 need=count,
+                **({"producer": producer} if producer else {}),
             )
         output = sum(
             float(p.get("amount") or 0)
@@ -491,14 +499,24 @@ return {ok=true,name=r.name,enabled=r.enabled,handcraftable=hand,ingredients=ing
         }
 
     @staticmethod
-    def _live_producers(observation: dict[str, Any], recipe: str) -> int:
-        """Built machines whose set recipe is ``recipe`` (a furnace reports its last recipe), not unpowered."""
+    def _live_producers(observation: dict[str, Any], recipe: str, item: str | None = None) -> int:
+        """Built machines that make ``recipe``, not unpowered: the recipe is set, or (an idle furnace
+        reports no recipe) the machine holds ``item`` (eval-1575138435, 330 min: both steel furnaces
+        ``no_ingredients`` with 85 and 78 steel inside, no recipe in the observation; the slack view of
+        a job hides output the critical path claims, ``critical_path.slack_view``)."""
         return sum(
             1
             for e in observation.get("entities", [])
-            if e.get("recipe") == recipe
-            and e.get("type") in {"furnace", "assembling-machine"}
+            if e.get("type") in {"furnace", "assembling-machine"}
             and e.get("status_name") not in {"no_power", "disabled", "marked_for_deconstruction"}
+            and (
+                e.get("recipe") == recipe
+                or (
+                    item is not None
+                    and e.get("type") == "furnace"
+                    and int((e.get("inventory") or {}).get(item, 0) or 0) > 0
+                )
+            )
         )
 
     def _take_output(self, observation: dict[str, Any], item: str, count: int) -> dict[str, Any] | None:

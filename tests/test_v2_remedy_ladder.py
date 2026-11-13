@@ -467,6 +467,29 @@ class SupervisorLadderTests(LadderFixture):
         self.assertEqual(ladder.what_ifs, ["replan"])
         self.assertEqual(json.loads(self.retries()[-1][-1])["rung"], "replan")
 
+    def test_a_machine_only_item_no_machine_makes_gets_its_producer_proposed(self):
+        import test_v2_supervisor
+
+        caps = dict(test_v2_supervisor.CAPS, produce=dict(test_v2_supervisor.CAPS["power"]))
+        patcher = patch.object(test_v2_supervisor, "CAPS", caps)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        producer = {"capability": "produce", "parameters": {"item": "iron-gear-wheel"}, "recipe": "iron-gear-wheel"}
+        self.blocked(
+            "eng",
+            "engine_production",
+            "required item needs a production machine",
+            evidence={"item": "iron-gear-wheel", "producer": producer},
+        )
+        self.assertTrue(self.s._missing_producers(self.s._snapshot()))
+        node = next(n for n in self.s.work.data["nodes"] if n["id"].startswith("auto_producer_"))
+        self.assertEqual(
+            (node["capability"], node["parameters"]), ("produce", {"item": "iron-gear-wheel", "rate_per_minute": 6})
+        )
+        self.assertFalse(self.s._missing_producers(self.s._snapshot()))  # proposed once
+        self.cli.jobs["eng"]["evidence"]["producer"] = {"capability": "furnace_block", "parameters": {"item": "x"}}
+        self.assertFalse(self.s._missing_producers(self.s._snapshot()))  # unregistered: logged, not queued
+
     def test_a_spent_ladder_waits_for_new_facts_or_the_recheck_period(self):
         self.s.max_seconds = None
         ladder = LadderCLI(self.cli, lambda rung, options: {"fits": False, "reason": "no"})

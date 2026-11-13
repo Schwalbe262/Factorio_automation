@@ -62,6 +62,7 @@ REPLAN_REASONS = frozenset(
     {"new_entity_over_resource_or_mining_reservation", "new_underground_tunnel_over_resource_or_mining_reservation"}
 )  # Extra quiet-interval retries of such a blocker while no job at all is active.
 IDLE_RETRY_LIMIT = 10
+MISSING_PRODUCER_RATE = 6  # items/min of a produce row proposed for a machine-only item (_missing_producers)
 # Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan) are
 # re-planning blockers too. Past AUTO_RETRY_LIMIT every re-planning blocker is still retried,
 # with no limit, when the published facts change (board plans and connections, material
@@ -1946,6 +1947,8 @@ class Supervisor:
             context = self._snapshot()
         if self._growth(context):
             context = self._snapshot()
+        if self._missing_producers(context):
+            context = self._snapshot()
         if self._auto_retry(context):
             context = self._snapshot()
         if self._poll_decision():
@@ -2000,6 +2003,63 @@ class Supervisor:
             return False
         self.work.refresh(jobs, capabilities)
         self._event("bottleneck_growth", task_ids=[n["id"] for n in nodes])
+        return True
+
+    def _missing_producers(self, context) -> bool:
+        """A job blocked because no machine anywhere makes a machine-only item gets that item's producer.
+
+        ``ensure_item`` names the block (evidence ``producer``: the recipe's declared capability or a
+        generic ``produce`` row, ``rocket_plan.producer_for``); the node is merged like a growth node
+        (duplicates by capability and parameters are skipped by ``work.merge``) and the blocked job is
+        retried by ``_auto_retry`` once the producer succeeds. A producer capability that is not
+        registered (``fluid_assembly``, ``furnace_block``) is logged, not queued.
+        """
+        observation, status, capabilities, _ = context
+        nodes, missing = [], []
+        known = {q["id"] for q in self.work.data["nodes"]}
+        for job in status.get("jobs", {}).values():
+            if job.get("status") != "blocked" or job.get("reason") != "required item needs a production machine":
+                continue
+            evidence = job.get("evidence") if isinstance(job.get("evidence"), dict) else {}
+            producer = evidence.get("producer")
+            if not isinstance(producer, dict) or not isinstance(producer.get("capability"), str):
+                continue
+            capability, parameters = producer["capability"], dict(producer.get("parameters") or {})
+            if capability == "produce":
+                # A one-off construction need: the smallest row; bottleneck growth widens it later.
+                parameters.setdefault("rate_per_minute", MISSING_PRODUCER_RATE)
+            if capability not in capabilities:
+                missing.append(capability)
+                continue
+            node_id = "auto_producer_" + "_".join(
+                [capability] + [str(v) for _, v in sorted(parameters.items()) if isinstance(v, (str, int))]
+            )
+            if node_id in known:
+                continue
+            known.add(node_id)
+            nodes.append(
+                {
+                    "id": node_id[:120],
+                    "capability": capability,
+                    "parameters": parameters,
+                    "priority": int(job.get("priority") or 0) + 1,
+                    "depends_on": [],
+                    "reason": f"{job.get('capability')} needs {evidence.get('item')}: no machine makes it"[:300],
+                }
+            )
+        missing = sorted(set(missing))[:8]
+        if missing and missing != getattr(self, "_missing_logged", None):
+            self._missing_logged = missing
+            self._event("missing_producer_unregistered", capabilities=missing)
+        if not nodes:
+            return False
+        try:
+            self._merge(nodes, capabilities, observation, "missing_producer")
+        except Exception as exc:
+            self._event("missing_producer_rejected", reason=str(exc)[:600])
+            return False
+        self.work.refresh(list(status.get("jobs", {}).values()), capabilities)
+        self._event("missing_producer", task_ids=[n["id"] for n in nodes])
         return True
 
     def _idle_watch(self, context):
