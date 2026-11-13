@@ -31,17 +31,27 @@ def closed_by_unlock(resource: str, cells: int, technologies) -> bool:
 
     Plate supply then grows by outposts and the district (``throughput_growth``);
     the planner does not propose such a target and an open job closes on it.
+    Only under the ``cap`` plate policy (``capacity_planning.PLATE_CELL_POLICY``): with
+    ``demand`` the outposts' ore waits on belts until the district's first bank smelts it
+    (aud-1114-0436: outposts 16.8, producer 21.1), so the cells stay the plate source until
+    they retire and the payback rule, not the unlock, ends their growth.
     """
+    from .capacity_planning import demand_driven
+
+    if demand_driven():
+        return False
     return resource in BULK_RESOURCES and cells > CELLS_AFTER_UNLOCK and _researched(technologies, UNLOCK_TECHNOLOGY)
 
 
 def validate_parameters(parameters: dict) -> None:
+    from .capacity_planning import MAX_STARTER_CELLS
+
     if not isinstance(parameters, dict) or set(parameters) != {"resource", "cells"}:
         raise ValueError("starter_capacity requires resource and cells")
     if parameters["resource"] not in {"iron-ore", "copper-ore", "coal", "stone"}:
         raise ValueError("unsupported starter resource")
-    if type(parameters["cells"]) is not int or not 1 <= parameters["cells"] <= 8:
-        raise ValueError("starter cell target must be an integer between 1 and 8")
+    if type(parameters["cells"]) is not int or not 1 <= parameters["cells"] <= MAX_STARTER_CELLS:
+        raise ValueError(f"starter cell target must be an integer between 1 and {MAX_STARTER_CELLS}")
 
 
 class StarterCapacity:

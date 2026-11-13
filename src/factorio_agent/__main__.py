@@ -310,6 +310,14 @@ def execute(argv=None, services=None):
             except Exception as exc:  # a demand estimate must never break observe
                 obs["roadmap_material_demand"] = {}
                 obs["roadmap_material_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .progression import retirement_demand
+
+            try:  # the bill the starter plate cells serve until they retire (capacity_planning demand policy)
+                jobs_list = list(Ledger(root).data["jobs"].values())
+                obs["retirement_demand"] = retirement_demand(services.catalog(root, game), jobs_list, obs)
+            except Exception as exc:  # a demand estimate must never break observe
+                obs["retirement_demand"] = {}
+                obs["retirement_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .progression import bulk_item_demand
 
             try:

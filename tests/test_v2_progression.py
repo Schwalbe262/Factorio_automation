@@ -4,6 +4,7 @@ import json
 import re
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from factorio_agent import progression as pg
 from factorio_agent.jobs import CAPABILITIES, Request
@@ -324,10 +325,33 @@ class CapacityAutopilotTests(unittest.TestCase):
         nodes = self.propose(jobs + [dict(failed, status="failed")], observation=iron_short())
         self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
 
+    @patch("factorio_agent.capacity_planning.PLATE_CELL_POLICY", "cap")
     def test_succeeded_mining_outpost_ends_starter_capacity_for_that_resource(self):
         jobs = done_through("power") + [job("mining_outpost_iron")]
         nodes = self.propose(jobs, observation=iron_short())
         self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
+
+    def test_demand_policy_plate_cells_end_at_retirement_not_at_the_outpost(self):
+        """Default demand policy: the outpost's ore waits for the district; district + bus retire the cells."""
+        jobs = done_through("power") + [job("mining_outpost_iron")]
+        observation = dict(iron_short(), technologies={"electric-mining-drill": True}, research="logistics")
+        nodes = self.propose(jobs, observation=observation)
+        self.assertIn("auto_capacity_iron-ore_3", ids(nodes))
+        retired = jobs + [job("smelting_district"), job("main_bus")]
+        nodes = self.propose(retired, observation=observation)
+        self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
+
+    def test_demand_policy_reads_the_retirement_bill_and_its_gate(self):
+        six = iron_short(shortfall=0)
+        six["resource_supply_options"]["iron-plate"]["evidence"].update(
+            produced_per_minute=90.0, productive_cells=6, installed_live_cells=6
+        )
+        six["roadmap_material_demand"] = {"iron-plate": 300}  # the 8-step lookahead misses the bus
+        self.assertEqual(self.capacity(six), [])
+        six["retirement_demand"] = {"items": {"iron-plate": 1500}, "gate_seconds": 200}
+        self.assertEqual([n["parameters"] for n in self.capacity(six)], [{"resource": "iron-ore", "cells": 8}])
+        six["retirement_demand"]["gate_seconds"] = 2000
+        self.assertEqual(self.capacity(six), [])
 
     def capacity(self, observation):
         return [
@@ -336,6 +360,7 @@ class CapacityAutopilotTests(unittest.TestCase):
             if n["capability"] == "starter_capacity"
         ]
 
+    @patch("factorio_agent.capacity_planning.PLATE_CELL_POLICY", "cap")
     def test_after_the_drill_unlock_plate_cells_stop_at_what_the_capability_accepts(self):
         # pace1: 9 nodes for 3-6 plate cells were proposed around the unlock and blocked
         # (bulk_starter_capacity_requires_electric_mining_after_unlock).
@@ -344,6 +369,7 @@ class CapacityAutopilotTests(unittest.TestCase):
         unlocked["resource_supply_options"]["iron-plate"]["evidence"].update(productive_cells=2, installed_live_cells=2)
         self.assertEqual(self.capacity(unlocked), [])
 
+    @patch("factorio_agent.capacity_planning.PLATE_CELL_POLICY", "cap")
     def test_no_plate_cell_while_the_drill_research_runs(self):
         self.assertEqual(self.capacity(dict(iron_short(), research="electric-mining-drill")), [])
         self.assertEqual(len(self.capacity(dict(iron_short(), research="automation"))), 1)
@@ -410,6 +436,35 @@ class LookaheadDemandTests(unittest.TestCase):
         self.assertEqual(pg.lookahead_demand(FakeCatalog(), jobs, {}, horizon=0), {})
         demand = pg.lookahead_demand(FakeCatalog(), jobs, {"technologies": ["automation"]}, horizon=1)
         self.assertNotIn("copper-plate", demand)
+
+    def test_retirement_demand_runs_to_the_bus_and_skips_in_flight_and_off_path_steps(self):
+        class Catalog(FakeCatalog):
+            technologies = {
+                "automation": {
+                    "unit_count": 10,
+                    "unit_energy": 600,
+                    "ingredients": FakeCatalog.technologies["automation"]["ingredients"],
+                },
+                "logistics": {
+                    "unit_count": 20,
+                    "unit_energy": 900,
+                    "ingredients": FakeCatalog.technologies["automation"]["ingredients"],
+                },
+            }
+
+        jobs = done_through("power")
+        observation = {"research": "automation", "research_progress": 0.5, "entities": {"lab": 2}}
+        demand = pg.retirement_demand(Catalog(), jobs, observation)
+        self.assertEqual(demand["steps"][-1], "main_bus")  # beyond LOOKAHEAD_STEPS, up to the retirement step
+        self.assertNotIn("power_coal_feed", demand["steps"])  # fixed priority: off the path
+        self.assertNotIn("automation_science", demand["steps"])
+        # Lab gate: half of automation (50 s) + logistics (300 s) on 2 labs.
+        self.assertEqual(demand["gate_seconds"], 175.0)
+        # Half the automation packs (5 x (1 copper + 2 iron)), one lab (20 iron), logistics packs (20 x 3).
+        self.assertEqual(demand["items"]["copper-plate"], 5 + 20)
+        self.assertEqual(demand["items"]["iron-plate"], 10 + 20 + 40)
+        in_flight = jobs + [job("starter_research_automation", status="running")]
+        self.assertEqual(pg.retirement_demand(Catalog(), in_flight, observation)["items"]["iron-plate"], 10 + 40)
 
     def test_steps_without_builds_add_nothing(self):
         # automation_science has builds (its labs and machines), so start after it

@@ -3,7 +3,7 @@
 import math
 import unittest
 
-from factorio_agent.capacity_planning import CapacityConfig, plan_capacity
+from factorio_agent.capacity_planning import PLATE_CELLS_CAP, CapacityConfig, plan_capacity
 
 CELL_COST = {"coal": 8, "iron-plate": 9, "stone": 10}
 
@@ -154,13 +154,77 @@ class TimeComparisonTests(unittest.TestCase):
         self.assertEqual(len(plan_capacity({"iron-plate": iron(shortfall=70, **busy)}, {"iron-plate": 1500})), 1)
 
     def test_max_cells_cap(self):
+        """The old rule, still selectable: plate_cell_policy "cap" (PLATE_CELL_POLICY = PLATE_CELLS_CAP)."""
+        cap = CapacityConfig(plate_cell_policy=PLATE_CELLS_CAP)
         full = dict(productive_cells=4, produced_per_minute=60.0, net_per_minute=5.0)
-        decisions = plan_capacity({"iron-plate": iron(shortfall=3000, installed_live_cells=4, **full)}, {})
+        decisions = plan_capacity({"iron-plate": iron(shortfall=3000, installed_live_cells=4, **full)}, {}, config=cap)
         self.assertEqual(decisions[0].target_cells, 6)
-        self.assertEqual(plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=6)}, {}), [])
-        tight = CapacityConfig(max_plate_cells=4)
+        self.assertEqual(
+            plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=6)}, {}, config=cap), []
+        )
+        tight = CapacityConfig(max_plate_cells=4, plate_cell_policy=PLATE_CELLS_CAP)
         decisions = plan_capacity({"iron-plate": iron(shortfall=1000, installed_live_cells=3)}, {}, config=tight)
         self.assertEqual(decisions[0].target_cells, 4)
+        # Stone keeps the max_plate_cells cap under either policy.
+        stone = dict(iron(shortfall=3000, installed_live_cells=6)["evidence"], raw_cost_per_cell={"stone": 5})
+        self.assertEqual(plan_capacity({"stone": option(**stone)}, {}), [])
+
+    def test_demand_policy_grows_plate_cells_past_six_while_they_pay_back(self):
+        """aud-1114-0436 at ~12 min: 6 iron cells at 90/min, ~1500 iron left to the bus."""
+        six = iron(
+            shortfall=0, installed_live_cells=6, productive_cells=6, produced_per_minute=90.0, net_per_minute=10.0
+        )
+        decisions = plan_capacity({"iron-plate": six}, {"iron-plate": 1500})
+        self.assertEqual(decisions[0].target_cells, 8)
+        evidence = decisions[0].evidence
+        self.assertEqual(evidence["plate_cell_policy"], "demand")
+        self.assertTrue(evidence["payback"]["pays"])
+        self.assertGreater(evidence["payback"]["yield_per_cell"], 9)
+        self.assertIn("demand policy", decisions[0].reason)
+        # At 8 cells +2 still saves > 60 s (ratio 0.87, refused by the cap rule's max_ratio).
+        eight = iron(installed_live_cells=8, productive_cells=8, produced_per_minute=120.0, net_per_minute=10.0)
+        self.assertEqual(plan_capacity({"iron-plate": eight}, {"iron-plate": 1500})[0].target_cells, 10)
+        cap = CapacityConfig(plate_cell_policy=PLATE_CELLS_CAP)
+        self.assertEqual(plan_capacity({"iron-plate": six}, {"iron-plate": 1500}, config=cap), [])
+        # At 10 cells the next pair saves < 60 s: growth stops by itself, no fixed count.
+        ten = iron(installed_live_cells=10, productive_cells=10, produced_per_minute=150.0, net_per_minute=10.0)
+        self.assertEqual(plan_capacity({"iron-plate": ten}, {"iron-plate": 1400}), [])
+
+    def test_demand_policy_waits_when_the_research_gate_binds(self):
+        """Rule a: the bill cannot finish before its research; plates by then need no cell."""
+        six = iron(installed_live_cells=6, productive_cells=6, produced_per_minute=90.0, net_per_minute=10.0)
+        self.assertEqual(len(plan_capacity({"iron-plate": six}, {"iron-plate": 900})), 1)
+        # 900 plates: 600 s at 90/min, 459 s with +2 cells, but the research gate is 800 s away.
+        self.assertEqual(plan_capacity({"iron-plate": six}, {"iron-plate": 900}, gate_seconds=800), [])
+        late = plan_capacity({"iron-plate": six}, {"iron-plate": 900}, gate_seconds=520)
+        self.assertEqual(late[0].evidence["expand_seconds"], 520)  # +2 cells: 501 s, bounded by the gate
+        self.assertEqual(late[0].evidence["wait_seconds"], 600)
+
+    def test_demand_policy_trims_to_what_coal_cells_can_fuel(self):
+        """Rule c: coal cells (at most max_cells) must fuel the new plate cells."""
+        six = iron(installed_live_cells=6, productive_cells=6, produced_per_minute=90.0, net_per_minute=10.0)
+        coal = option(
+            shortfall=0,
+            produced_per_minute=60.0,
+            consumed_per_minute=30.0,
+            net_per_minute=30.0,
+            productive_cells=4,
+            installed_live_cells=4,
+            raw_cost_per_cell={"iron-plate": 9, "stone": 5},
+            available=40,
+        )
+        supply = {"iron-plate": six, "coal": coal}
+        roomy = plan_capacity(supply, {"iron-plate": 1500})
+        self.assertEqual([d.target_cells for d in roomy if d.item == "iron-plate"], [8])
+        # One coal cell nets 12.75/min; max_cells 8 covers 8 * 12.75 / 1.2 = 85 coal/min of burners:
+        # boiler 58 + 8 iron cells x 3.6 = 86.8 is too much, 7 cells (83.2) fit; boiler 62 fits neither.
+        tight = CapacityConfig(max_cells=8)
+        decisions = plan_capacity(supply, {"iron-plate": 1500}, config=tight, hand_fed_coal_per_minute=58.0)
+        plates = [d for d in decisions if d.item == "iron-plate"]
+        self.assertEqual([d.target_cells for d in plates], [7])
+        self.assertTrue(plates[0].evidence.get("fuel_trimmed"))
+        trimmed = plan_capacity(supply, {"iron-plate": 1500}, config=tight, hand_fed_coal_per_minute=62.0)
+        self.assertEqual([d.item for d in trimmed if d.item == "iron-plate"], [])
 
     def test_plate_cells_follow_lookahead_demand_past_four(self):
         """Seed 283895142: 4 iron cells at 60/min against 1000+ iron of upcoming steps."""

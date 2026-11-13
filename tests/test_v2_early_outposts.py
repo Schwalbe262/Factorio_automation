@@ -184,6 +184,21 @@ class LaneAndSlotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "jobs may be active|early start"):
             self.submit("district", "smelting_district")
 
+    def test_an_early_job_takes_the_last_slot_once_every_missing_requirement_is_active(self):
+        """aud-1114-0436: supply cell, logistics and outposts active; the district waited until logistics ended."""
+        self.submit("cell", "supply_cell", {"products": ["transport-belt"]})
+        self.submit("iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60})
+        self.submit("research", "bootstrap_research", {"technology": EMD})
+        # Logistics, which the district runs ahead of, is not admitted yet: the slot stays free for it.
+        with self.assertRaisesRegex(ValueError, "early start keeps a job slot free"):
+            self.submit("district", "smelting_district")
+        run_slice(self.root, self.game, Executor({"status": "succeeded"}), "research")
+        self.submit("logistics", "bootstrap_logistics")
+        # Both missing requirements (bootstrap_logistics, mining_outpost) are active: the 4th slot is the district's.
+        self.submit("district", "smelting_district")
+        with self.assertRaisesRegex(ValueError, "at most 4 jobs may be active"):
+            self.submit("coal", "starter_capacity", {"resource": "coal", "cells": 3})
+
     def test_a_parked_job_does_not_run_its_deadline_while_its_research_is_missing(self):
         self.submit("iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60})
         run_slice(self.root, self.game, Executor(PARKED), "iron", seconds=1)

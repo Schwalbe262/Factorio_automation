@@ -30,6 +30,20 @@ Decision rule per raw item (all times in seconds, rates in items/minute):
 - Decisions are ordered by ``T(0)`` descending (worst bottleneck first). A
   later decision is dropped when its cell cost uses an item an earlier
   decision is expanding, so scarce items go to the worst bottleneck first.
+
+Plate cells (iron, copper) follow ``PLATE_CELL_POLICY`` (one switch, below):
+
+- ``"demand"`` (default since 2026-11-14): no fixed count. The demand is the bill the
+  cells serve until they retire (``progression.retirement_demand``: every on-path step
+  through the main bus); waiting and expanding both end no earlier than the research
+  gate (``gate_seconds``: the bill cannot finish before it, however many plates there
+  are); an expansion is taken when it saves ``min_saving_seconds`` and each new cell
+  pays back (its plates before the bill is done exceed its own plate cost); coal cells
+  must be able to fuel it (``fuel_cells_needed <= max_cells``, else the step shrinks).
+  The capability's absolute limit (``max_cells``) still holds.
+- ``"cap"``: the earlier rule, at most ``max_plate_cells`` (6) and the
+  ``max_ratio`` test, the electric-mining unlock closing plate cells
+  (``mining.closed_by_unlock``).
 """
 
 from __future__ import annotations
@@ -51,6 +65,28 @@ RESOURCE_FOR_ITEM = {
 SMELTED_ITEMS = frozenset({"iron-plate", "copper-plate"})
 FUEL_ITEM = "coal"
 
+# THE SWITCH for plate starter cells (orchestrator decision 2026-11-14, owner guidance "when
+# plate supply is short the plant must grow by itself instead of waiting"; it reverses the
+# earlier explicit "6 cells" cap). "demand": grow by payback against the retirement bill (module
+# docstring). "cap": the old fixed cap of max_plate_cells (6) and the unlock closing.
+# Turning it back is this one line: PLATE_CELL_POLICY = PLATE_CELLS_CAP. Read by
+# mining.closed_by_unlock and progression.capacity_nodes too. docs/v2/PLANNERS.md "Starter capacity".
+PLATE_CELLS_DEMAND = "demand"
+PLATE_CELLS_CAP = "cap"
+PLATE_CELL_POLICY = PLATE_CELLS_DEMAND
+# The starter_capacity capability's absolute target limit (mining.validate_parameters).
+MAX_STARTER_CELLS = 12
+
+
+def plate_policy(config: "CapacityConfig | None" = None) -> str:
+    """The plate cell policy: ``config.plate_cell_policy`` when set, else ``PLATE_CELL_POLICY``."""
+    chosen = getattr(config, "plate_cell_policy", None) if config is not None else None
+    return chosen if chosen in (PLATE_CELLS_DEMAND, PLATE_CELLS_CAP) else PLATE_CELL_POLICY
+
+
+def demand_driven(config: "CapacityConfig | None" = None) -> bool:
+    return plate_policy(config) == PLATE_CELLS_DEMAND
+
 
 @dataclass(frozen=True)
 class CapacityConfig:
@@ -58,8 +94,12 @@ class CapacityConfig:
 
     # Most cells added by one decision, and the capability's absolute limit.
     max_step: int = 2
-    # The capability allows 8 cells per resource (max_cells; also the coal cap).
-    max_cells: int = 8
+    # The capability's absolute limit per resource (MAX_STARTER_CELLS; also the coal cap, below
+    # which coal follows the burners' need). Was 8; the demand policy's payback rule found 10
+    # iron cells on the aud-1114-0436 bill (docs/v2/PLANNERS.md "Starter capacity").
+    max_cells: int = MAX_STARTER_CELLS
+    # None: the module switch PLATE_CELL_POLICY; "demand" or "cap" overrides it (tests).
+    plate_cell_policy: str | None = None
     # Plate and stone cells: at most max_plate_cells; how many below that is
     # the time comparison against the lookahead demand. A fixed cap of 4
     # starved the early game (seed 283895142: smelting finished at 48.8 min,
@@ -250,12 +290,33 @@ def _option_seconds(facts: _Facts, k: int, supply: Mapping, net: float, config: 
     }
 
 
+def _payback(facts: _Facts, option: dict, config: CapacityConfig) -> dict:
+    """Plates one new cell yields before the bill is done (its retirement) against its own plate cost.
+
+    online = fund + build seconds; done = the option's seconds (the bill's completion, after
+    which the district and bus retire the cells, starter_retirement); yield =
+    cell_rate x (done - online) / 60. The cell pays when the yield exceeds its own cost.
+    """
+    online = option["fund_seconds"] + option["build_seconds"]
+    done = option["seconds"]
+    cost = facts.cost.get(facts.item, 0.0)
+    plates = facts.cell_rate * max(0.0, done - online) / 60.0 if math.isfinite(done) else 0.0
+    return {
+        "online_seconds": round(online, 1),
+        "retire_seconds": round(done, 1) if math.isfinite(done) else None,
+        "yield_per_cell": round(plates, 1),
+        "cost_per_cell": cost,
+        "pays": math.isfinite(done) and plates > cost,
+    }
+
+
 def _assess(
     facts: _Facts,
     supply: Mapping,
     config: CapacityConfig,
     extra_fuel_burn: float = 0.0,
     fuel_cells_needed: int | None = None,
+    gate_seconds: float | None = None,
 ) -> CapacityDecision | None:
     """One decision for ``facts.item``, or None when waiting is as good.
 
@@ -279,7 +340,14 @@ def _assess(
         # (seed 4176033748: iron 1 -> 7 cells in 8 minutes at "net 1.3/min").
         net = facts.produced + pending
     wait = _seconds(facts.required, net)
-    cap = config.max_cells if facts.item == FUEL_ITEM else min(config.max_cells, config.max_plate_cells)
+    by_demand = facts.item in SMELTED_ITEMS and demand_driven(config)
+    gate = max(0.0, finite_number(gate_seconds) or 0.0) if by_demand else 0.0
+    if facts.item == FUEL_ITEM:
+        cap = config.max_cells
+    elif by_demand:
+        cap = config.max_cells  # no fixed plate count: payback below decides
+    else:
+        cap = min(config.max_cells, config.max_plate_cells)
     if facts.item == FUEL_ITEM and fuel_cells_needed is not None:
         # Coal never gets more cells than the burners need (one coal cell
         # fuels about 3.5 smelting cells); measured rates do not raise this.
@@ -288,12 +356,23 @@ def _assess(
     if room < 1:
         return None
     options = [_option_seconds(facts, k, supply, net, config) for k in range(1, room + 1)]
+    if by_demand:
+        # The bill ends no earlier than its research gate, waiting or not (rule a).
+        wait = max(wait, gate)
+        for row in options:
+            row["payback"] = _payback(facts, row, config)
+            row["seconds"] = max(row["seconds"], gate)
     feasible = [row for row in options if math.isfinite(row["seconds"])]
+    if by_demand:
+        feasible = [row for row in feasible if row["payback"]["pays"]]  # rule b
     best = min(feasible, key=lambda row: (row["seconds"], row["extra_cells"])) if feasible else None
     chosen = 0
     if facts.required > 0 and best is not None:
         saving = wait - best["seconds"]
-        if saving >= config.min_saving_seconds and best["seconds"] <= wait * config.max_ratio:
+        # The demand policy drops max_ratio: on a 1500-plate bill +2 cells at 8 saved ~100 s
+        # (ratio 0.87) and were refused; payback and the absolute saving decide instead.
+        clear = by_demand or best["seconds"] <= wait * config.max_ratio
+        if saving >= config.min_saving_seconds and clear:
             chosen = best["extra_cells"]
     fuel_deficit = False
     if facts.item == FUEL_ITEM and fuel_cells_needed is not None:
@@ -328,6 +407,8 @@ def _assess(
         "options": options,
         "priority_seconds": priority,
     }
+    if by_demand:
+        evidence.update(plate_cell_policy=PLATE_CELLS_DEMAND, gate_seconds=gate, payback=picked["payback"])
     reason = (
         f"{facts.item}: required {facts.required:.0f} (shortfall {facts.shortfall:.0f} + lookahead "
         f"{facts.demand:.0f}), net {net:.1f}/min; wait T(0)={_fmt(wait)} vs +{chosen} cells "
@@ -336,6 +417,12 @@ def _assess(
     )
     if fuel_deficit:
         reason += f"; fuel: {facts.current} coal cells < {fuel_cells_needed} needed by the burner cells"
+    if by_demand:
+        pay = picked["payback"]
+        reason += (
+            f"; demand policy: gate {_fmt(gate)}, a cell yields {pay['yield_per_cell']:.0f} > "
+            f"{pay['cost_per_cell']:.0f} before the bill is done"
+        )
     return CapacityDecision(
         item=facts.item,
         resource=RESOURCE_FOR_ITEM[facts.item],
@@ -397,8 +484,40 @@ def fuel_cells_needed(
     return max(1, math.ceil(burn * config.fuel_margin / net_per_coal_cell))
 
 
+def _fuel_covered(
+    supply: Mapping, kept: list[CapacityDecision], config: CapacityConfig, hand_fed: float
+) -> list[CapacityDecision]:
+    """Demand policy rule c: shrink plate decisions until coal cells (at most ``max_cells``) can fuel them."""
+    kept = list(kept)
+    while kept and fuel_cells_needed(supply, kept, config, hand_fed) > config.max_cells:
+        index = max(
+            (i for i, d in enumerate(kept) if d.item in SMELTED_ITEMS and d.target_cells > d.current_cells),
+            default=None,
+        )
+        if index is None:
+            break
+        decision = kept[index]
+        if decision.target_cells - 1 <= decision.current_cells:
+            kept.pop(index)
+            continue
+        kept[index] = CapacityDecision(
+            item=decision.item,
+            resource=decision.resource,
+            current_cells=decision.current_cells,
+            target_cells=decision.target_cells - 1,
+            reason=decision.reason + "; trimmed: coal cells cannot fuel more",
+            evidence={**decision.evidence, "fuel_trimmed": True},
+        )
+    return kept
+
+
 def plan_capacity(
-    supply, demand, *, config: CapacityConfig = CapacityConfig(), hand_fed_coal_per_minute: float = 0.0
+    supply,
+    demand,
+    *,
+    config: CapacityConfig = CapacityConfig(),
+    hand_fed_coal_per_minute: float = 0.0,
+    gate_seconds: float | None = None,
 ) -> list[CapacityDecision]:
     """Starter capacity expansions that finish the required items sooner than waiting.
 
@@ -406,7 +525,8 @@ def plan_capacity(
     assessed last so it can include the fuel of the other decisions' new
     cells (only decisions that survive the ordering rule count) and the
     hand-fed boiler (``hand_fed_coal_per_minute``, counted in the cells needed;
-    its measured burn is already in the coal row's consumption).
+    its measured burn is already in the coal row's consumption). ``gate_seconds``
+    (demand policy, plate items only): the research gate of the retirement bill.
     """
     if not isinstance(supply, Mapping):
         return []
@@ -416,10 +536,12 @@ def plan_capacity(
         evidence = _evidence(supply, item)
         if item == FUEL_ITEM or evidence is None:
             continue
-        decision = _assess(_facts(item, evidence, demand, config), supply, config)
+        decision = _assess(_facts(item, evidence, demand, config), supply, config, gate_seconds=gate_seconds)
         if decision is not None:
             others.append(decision)
     kept = _ordered(others)
+    if demand_driven(config):
+        kept = _fuel_covered(supply, kept, config, hand_fed_coal_per_minute)
     coal = _evidence(supply, FUEL_ITEM)
     if coal is None:
         return kept

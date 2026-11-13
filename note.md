@@ -252332,3 +252332,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - failure: a fleet round hung 75 min on a dead actor; jobs.summary dropped receipts three times (guard test added); a 0.5 wood pole made green growth "unfundable".
 - result: v2 1b89a38, gate PASS; long fleets 0448 and 0612 running; nothing after steel proven live.
 - next: read the long fleets at the oil stage; pace round with payback-driven starter cells; owner decisions pending (starter cap, respawn).
+## 2026-11-14 part pace-21: plate cells by payback, early slot, bus blockers (read of aud-1114-0436)
+- goal: smelting district + main bus within 20 min; round aud-1114-0436 (af83ce4, 12 seeds): smelt 26.5, bus 31.3 (7/12).
+- findings: 6-cell cap reached by 11.5-13.9 min on every seed; 8-step lookahead held 534 iron at 9.9 min vs ~1500 left to the bus; producer span "waits for underground-belt" was the district admitted only at the logistics end (early free-slot rule, from ~13.5 to ~18.6 min) and then plate-bound; bus not reached: 2311 proof walked an unbuilt tap's extension (tails 64 -> 72), 790/418 a district underground on the feed splitter's second tile (418 also mined the district plate belt first), 3098 transient feed-route block, 3242 district corridor survey budget; consumer_transitional idle (2062 s) is late-run, 1424 s from 3242 (no district), the rest from seeds without bus taps: a symptom, gate left as is.
+- actions: capacity_planning.PLATE_CELL_POLICY demand (retirement bill, research gate, payback, coal cover; "cap" restores the old rule); jobs._admission_error early slot rule; planned_bus FEED_UPSTREAM (3,2,4,5,6) + cut-over splitter preflight + proven_length; waste_report plate_supply_bound + producer binding; fleet pace line shows the plate bound.
+- metrics (offline): toy replay of the median with plan_capacity: cells 4->6->8->10 by 14.1 min, iron bill paid 23.1 vs 29.2 min; plate bound on aud-1114-0436: district 23.6 (actual +2.9), bus 26.4 (+4.6).
+- expected next round: district ~21-23, bus ~24-26 medians, bus reached 10-11/12; pace line plate bound below 22.
+- risk: more starter cells = more hauling and coal cells (~8); the 4th slot now goes to the early district, a late capacity job may wait for a slot.
+- next: fleet 12 x 45 min on these commits; read pace line (plate bound), chain producer binding, cells over time.

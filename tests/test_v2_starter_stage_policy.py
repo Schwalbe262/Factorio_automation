@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from factorio_agent.mining import StarterCapacity
 
@@ -28,6 +28,7 @@ class StarterStageTests(unittest.TestCase):
         self.assertEqual(result["type"], "insert")
         self.c.bootstrap.maintain_fuel.assert_called_once()
 
+    @patch("factorio_agent.capacity_planning.PLATE_CELL_POLICY", "cap")
     def test_native_unlock_stops_new_bulk_burner_investment_without_deleting_paid_work(self):
         self.obs["technologies"]["electric-mining-drill"] = True
         self.c.state["pending"]["copper-ore"] = {"paid": "preserved"}
@@ -38,6 +39,7 @@ class StarterStageTests(unittest.TestCase):
         self.c.bootstrap.maintain_fuel.assert_not_called()
         self.assertEqual(self.c.state["pending"]["copper-ore"], {"paid": "preserved"})
 
+    @patch("factorio_agent.capacity_planning.PLATE_CELL_POLICY", "cap")
     def test_the_closed_target_has_a_proof_that_names_the_unlock(self):
         c = StarterCapacity.__new__(StarterCapacity)
         c.cells = Mock(return_value=[])
@@ -47,6 +49,13 @@ class StarterStageTests(unittest.TestCase):
         self.assertEqual(proof["productive_cells"], 0)
         self.assertIsNone(c.proof(obs, {"resource": "iron-ore", "cells": 2}))
         self.assertIsNone(c.proof(dict(obs, technologies={}), {"resource": "iron-ore", "cells": 6}))
+
+    def test_demand_policy_keeps_building_plate_cells_after_the_unlock(self):
+        """Default demand policy: the outposts' ore waits for the district, the cells stay the plate source."""
+        self.obs["technologies"]["electric-mining-drill"] = True
+        result = self.c.step(self.obs, {"resource": "iron-ore", "cells": 10})
+        self.assertEqual(result["type"], "insert")
+        self.assertIsNone(self.c.proof(dict(self.obs, entities=[]), {"resource": "iron-ore", "cells": 10}))
 
     def test_a_coal_chest_emptied_by_collection_still_proves_by_its_working_drill(self):
         c = StarterCapacity.__new__(StarterCapacity)

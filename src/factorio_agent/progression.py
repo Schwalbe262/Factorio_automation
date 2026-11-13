@@ -648,21 +648,37 @@ def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
             if job.get("capability") == "mining_outpost" and job.get("status") not in TERMINAL_STATUSES | {"paused"}
         }
     from .power_coal_feed import hand_fed_coal_per_minute  # the hand-fed boiler burns starter coal too
+    from .capacity_planning import SMELTED_ITEMS, demand_driven
+    from .mining import BULK_RESOURCES, CELLS_AFTER_UNLOCK, UNLOCK_TECHNOLOGY, closed_by_unlock
 
+    demand = dict(observation.get("roadmap_material_demand") or {})
+    gate = None
+    by_demand = demand_driven()
+    if by_demand:
+        # Plate cells serve the bill up to their retirement (district + bus), not the 8-step
+        # lookahead; an outpost alone does not replace them (its ore waits for the district's
+        # first bank), only the retirement does (capacity_planning.PLATE_CELL_POLICY).
+        outposts = (outposts - BULK_RESOURCES) | retired_by_jobs(jobs)
+        retire = observation.get("retirement_demand")
+        items = retire.get("items") if isinstance(retire, Mapping) else None
+        if isinstance(items, Mapping):
+            for item in SMELTED_ITEMS:
+                demand[item] = items.get(item, 0.0)
+            gate = retire.get("gate_seconds")
     try:
         decisions = plan_capacity(
             observation.get("resource_supply_options") or {},
-            observation.get("roadmap_material_demand") or {},
+            demand,
             hand_fed_coal_per_minute=hand_fed_coal_per_minute(jobs, observation),
+            gate_seconds=gate,
         )
     except (ValueError, TypeError, KeyError, AttributeError):
         return []
-    from .mining import BULK_RESOURCES, CELLS_AFTER_UNLOCK, UNLOCK_TECHNOLOGY, closed_by_unlock
 
     technologies = observation.get("technologies")
-    # The drill research running now: a new plate cell would finish around the unlock and be
-    # closed by it; the outposts already wait for that research (early_start), so none is proposed.
-    unlocking = observation.get("research") == UNLOCK_TECHNOLOGY
+    # The drill research running now (cap policy): a new plate cell would finish around the unlock
+    # and be closed by it; the outposts already wait for that research (early_start), so none is proposed.
+    unlocking = not by_demand and observation.get("research") == UNLOCK_TECHNOLOGY
     queued_ids = {node.get("id") for node in queue_nodes}
     nodes = []
     for decision in decisions:
@@ -1070,6 +1086,78 @@ def lookahead_demand(catalog, jobs, observation, *, horizon=LOOKAHEAD_STEPS) -> 
         for name, count in step_bill(catalog, step).items():
             items[name] = items.get(name, 0.0) + count
     return {name: round(amount, 3) for name, amount in raw_cost(catalog, items).items()}
+
+
+# The roadmap step whose success retires the starter plate cells: iron-ore and copper-ore
+# need smelting_district AND planned_main_bus (starter_retirement.PERMANENT_SOURCES).
+RETIREMENT_STEP_ID = "main_bus"
+
+
+def _technology_seconds(catalog, technology: str) -> float:
+    """Lab seconds of ``technology`` on one lab at speed 1 (``unit_count`` x ``unit_energy`` ticks / 60)."""
+    row = (getattr(catalog, "technologies", None) or {}).get(technology)
+    if not isinstance(row, Mapping):
+        return 0.0
+    units, energy = row.get("unit_count"), row.get("unit_energy")
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (units, energy)):
+        return 0.0
+    return max(0.0, float(units) * float(energy) / 60.0)
+
+
+def retirement_demand(catalog, jobs, observation) -> dict:
+    """What the starter plate cells still deliver before they retire, and the research gate.
+
+    ``items``: raw cost of every unsatisfied on-path roadmap step up to and including
+    ``RETIREMENT_STEP_ID`` (fixed-priority steps are off the path, e.g. ``power_coal_feed``,
+    held until the district and bus exist). Not limited by ``LOOKAHEAD_STEPS``: the
+    starter cells serve exactly this bill, and with 8 steps the bus (and at 10 min the
+    district's hundreds of belts) fell outside the lookahead, so 6 cells looked like
+    enough (aud-1114-0436: lookahead 534 iron at 9.9 min, on-path bill ~1935). A step
+    with an open job is left out: its published plan is in the construction bill
+    (``shortfall``). Research steps add their packs, the running one only its
+    remaining share (``research_progress``).
+    ``gate_seconds``: lab-time lower bound of that research on the built labs (at least
+    one): the bill cannot complete before it however many plates there are.
+    """
+    observation = observation or {}
+    researched = _names(observation.get("technologies"))
+    progress = _Progress(tuple(jobs), frozenset(researched))
+    current = observation.get("research")
+    done = observation.get("research_progress")
+    done = float(done) if isinstance(done, (int, float)) and not isinstance(done, bool) else 0.0
+    entities = observation.get("entities") or ()
+    if isinstance(entities, Mapping):  # the job summary counts entities by name
+        labs = entities.get("lab") if isinstance(entities.get("lab"), int) else 0
+    else:
+        labs = sum(1 for e in entities if isinstance(e, Mapping) and e.get("name") == "lab")
+    items: dict[str, float] = {}
+    lab_seconds = 0.0
+    steps: list[str] = []
+    for step in ROADMAP:
+        if not progress.satisfied(step) and step.priority is None:
+            technology = step.parameters.get("technology") or STEP_TECHNOLOGY.get(step.capability)
+            if technology and technology not in researched:
+                share = max(0.0, 1.0 - done) if technology == current else 1.0
+                lab_seconds += share * _technology_seconds(catalog, technology)
+                row = (getattr(catalog, "technologies", None) or {}).get(technology)
+                units = row.get("unit_count") if isinstance(row, Mapping) else None
+                if isinstance(units, (int, float)) and not isinstance(units, bool):
+                    for ingredient in row.get("ingredients") or ():
+                        if isinstance(ingredient, Mapping) and isinstance(ingredient.get("amount"), (int, float)):
+                            name = ingredient.get("name")
+                            items[name] = items.get(name, 0.0) + share * units * ingredient["amount"]
+            if not progress.in_flight(step):
+                for name, count in step_bill(catalog, step).items():
+                    items[name] = items.get(name, 0.0) + count
+            steps.append(step.id)
+        if step.id == RETIREMENT_STEP_ID:
+            break
+    return {
+        "items": {name: round(amount, 3) for name, amount in raw_cost(catalog, items).items()},
+        "gate_seconds": round(lab_seconds / max(1, labs), 1),
+        "labs": labs,
+        "steps": steps,
+    }
 
 
 def _green_cluster_bill(catalog) -> dict[str, float]:

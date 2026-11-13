@@ -23,7 +23,8 @@ Rule (``docs/v2/PLANNERS.md``, "Early start"):
    (``technologies_coming``). Priority stays ``TOP_PRIORITY - index``: below
    every step it runs ahead of.
 3. Admission (``jobs._admission_error``): an early job never takes the last
-   free job slot (``EARLY_FREE_SLOTS``).
+   free job slot (``EARLY_FREE_SLOTS``) while a strict ``requires`` it lacks
+   has no active job; once all of them are active the slot is its own.
 4. Build (``Deferral`` passed to ``FactoryBuilder.ensure_plan``): an entity
    whose recipe waits for a coming technology, or whose hand craft would use
    a plate another active job waits for (only while the job is early), or

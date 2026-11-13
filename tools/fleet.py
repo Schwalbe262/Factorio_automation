@@ -433,13 +433,20 @@ def git_commit(code) -> str | None:
 # Owner's oldest target: a human player has the smelting area and the main bus within 20 game minutes.
 PACE_TARGET_MINUTES = 20.0
 PACE_STEPS = (("smelt", "smelting_district"), ("bus", "main_bus"))
+# PACE_STEPS column -> the waste_report.plate_supply_bound segment of the same step.
+PACE_BOUND = {"smelt": "district", "bus": "bus"}
 
 
 def pace_line(runs, target=PACE_TARGET_MINUTES):
     """``pace vs target``: per PACE_STEPS column, median minus ``target`` and the share of runs under it.
 
     A run that never reached the step counts as over the target (it is in the
-    share's denominator, not in the median).
+    share's denominator, not in the median). With ``plate_bound`` rows
+    (``waste_report.plate_supply_bound``), each column adds the median plate-supply
+    bound (the minute the run's own iron supply could have paid what it spent up to
+    the step) and the median of actual minus bound over the runs that reached it: a
+    bound above the target means the supply cannot make it (plate-bound), a large
+    actual-minus-bound means plates stood ready (rule-bound).
     """
     parts = []
     for head, step in PACE_STEPS:
@@ -451,7 +458,16 @@ def pace_line(runs, target=PACE_TARGET_MINUTES):
             gap = f"{median} ({median - target:+.1f})"
         else:
             gap = "- (never)"
-        parts.append(f"{head} median {gap}, {under}/{len(runs)} under")
+        text = f"{head} median {gap}, {under}/{len(runs)} under"
+        rows = [((r.get("plate_bound") or {}).get(PACE_BOUND[head]) or {}) for r in runs]
+        rows = [
+            b for b in rows if isinstance(b.get("bound"), (int, float)) and isinstance(b.get("actual"), (int, float))
+        ]
+        if rows:
+            bound = round(statistics.median(b["bound"] for b in rows), 1)
+            excess = round(statistics.median(b["actual"] - b["bound"] for b in rows), 1)
+            text += f", plate bound {bound} (actual {excess:+.1f})"
+        parts.append(text)
     return f"pace vs target {target:g} min: " + "; ".join(parts)
 
 
@@ -1490,6 +1506,12 @@ class Fleet:
         row["layouts"] = run_layouts(root, milestones=reached)
         row["furthest"] = dict(step=far[1], minute=far[2], index=far[0]) if far else None
         row["blocked_reasons"] = blocked_rows(timeline.jobs)
+        try:  # the minute the run's own iron supply could have paid each step (waste_report)
+            import waste_report
+
+            row["plate_bound"] = waste_report.plate_supply_bound(root, timeline)
+        except Exception:  # a report column never breaks the report
+            row["plate_bound"] = {}
         summary = report_run.report(root, jobs=timeline.jobs)
         row.update(
             controller_errors=summary.get("controller_errors") or {},
