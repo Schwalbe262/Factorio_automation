@@ -265,16 +265,18 @@ const mapEl = document.getElementById("map");
 function applyVB() { if (svgEl && vb) { svgEl.setAttribute("viewBox", vb.join(" ")); scheduleLabels(); } }
 // Map labels follow the zoom gently (they used to grow in full proportion and cover each other);
 // a label that would overlap one already placed, or lies outside the view, is hidden. Hover shows the name.
-const LABEL_PX = 11;
+const LABEL_PX = 13;
 let labelFrame = 0;
 function scheduleLabels() { if (!labelFrame) labelFrame = requestAnimationFrame(() => { labelFrame = 0; relabel(); }); }
 function relabel() {
   if (!svgEl || !vb) return;
-  const width = svgEl.clientWidth || mapEl.clientWidth || 800, unit = vb[2] / width;
+  // Screen pixels per map unit from the real transform (the view box is letterboxed, so width alone is wrong).
+  const ctm = svgEl.getScreenCTM(), width = svgEl.clientWidth || mapEl.clientWidth || 800;
+  const unit = ctm && ctm.a > 0 ? 1 / ctm.a : vb[2] / width;
   // Zooming in enlarges the labels gently (not in proportion, which made them cover each other):
-  // 9 px on the whole map, about 11 px at the core view, up to 18 px when zoomed far in.
+  // 11 px on the whole map, about 13 px at the core view, up to 24 px when zoomed far in.
   const ref = layout && layout.focus ? layout.focus[2] : vb[2];
-  const px = Math.min(18, Math.max(9, LABEL_PX * Math.pow(ref / vb[2], 0.4))), size = px * unit;
+  const px = Math.min(24, Math.max(11, LABEL_PX * Math.pow(ref / vb[2], 0.5))), size = px * unit;
   const placed = [], pad = 2 * unit;
   const texts = Array.from(svgEl.querySelectorAll("text")).reverse();  // later = drawn on top = placed first
   for (const t of texts) {
@@ -284,7 +286,7 @@ function relabel() {
     }
     t.style.display = "";
     t.style.fontSize = size + "px";
-    t.style.paintOrder = "stroke"; t.style.stroke = "var(--map-halo, #fff)"; t.style.strokeWidth = (3 * unit) + "px"; t.style.strokeLinejoin = "round";
+    t.style.paintOrder = "stroke"; t.style.stroke = "var(--map-halo, #fff)"; t.style.strokeWidth = (2.5 * unit) + "px"; t.style.strokeLinejoin = "round";
     let b;
     try { b = t.getBBox(); } catch (err) { continue; }
     const box = [b.x - pad, b.y - pad, b.x + b.width + pad, b.y + b.height + pad];
@@ -336,6 +338,8 @@ async function loadSvg(info) {
   svgEl = mapEl.querySelector("svg");
   if (!vb || !userMoved) vb = info.focus.slice();
   applyVB();
+  const z = parseFloat(new URLSearchParams(location.search).get("zoom"));  // ?zoom=0.2 opens zoomed in (shareable view)
+  if (z > 0 && !userMoved) zoom(z);
 }
 
 function renderLayout(d) {
