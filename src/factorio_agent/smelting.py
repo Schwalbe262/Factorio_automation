@@ -9,7 +9,7 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
-from .board import entity, hardware_conflicts, planned_unbuilt_hardware
+from .board import built_keys, entity, hardware_conflicts, planned_unbuilt_hardware
 from .power_grid import plan_connection as power_connection
 from .transport import plan_connection as belt_connection, underground_proof, xy
 from .planning import preflight
@@ -359,6 +359,51 @@ def feed_lane_positions(bank):
     return picked
 
 
+# District sources: (resource, nominal ore/min the bank must offer).
+DISTRICT_SOURCES = (("iron-ore", 60), ("copper-ore", 30), ("coal", 30))
+
+
+def district_sources(mining):
+    """``({resource: output port}, None)`` from saved mining banks, or ``(None, reason)``.
+
+    Per resource the first ready bank with enough nominal rate, else the first
+    saved (planned, maybe unbuilt) one: a saved bank's port is final (its exit
+    side was chosen before saving; a bridge re-plan keeps the ports).
+    """
+    sources = {}
+    banks = [b for b in mining.get("banks", []) if isinstance(b, dict) and isinstance(b.get("plan"), dict)]
+    for resource, rate in DISTRICT_SOURCES:
+        fitting = [
+            b
+            for b in banks
+            if b["plan"].get("resource") == resource
+            and b.get("nominal_rate_per_minute", 0) >= rate
+            and b["plan"].get("ports")
+            and (b.get("ready") or b.get("ok"))
+        ]
+        bank = next((b for b in fitting if b.get("ready")), fitting[0] if fitting else None)
+        if not bank:
+            return None, f"one_ready_{resource}_bank_with_nominal_{rate}_required"
+        sources[resource] = bank["plan"]["ports"][0]
+    return sources, None
+
+
+def _bank_for(mining, port):
+    return next((b for b in mining.get("banks", []) if (b.get("plan", {}).get("ports") or [None])[0] == port), {})
+
+
+def _foreign_unbuilt_conflicts(builder, obs, blocks, entities):
+    """Plan entities on a tile of another block's planned-but-unbuilt hardware, unless it is that same entity."""
+    planned = planned_unbuilt_hardware(builder, obs, blocks, exclude=("smelting_district",))
+    same = {(e["name"], e["position"]["x"], e["position"]["y"]) for e in entities}
+    conflicts = []
+    for row in hardware_conflicts(builder, entities, planned):
+        owner = planned[row["tile"]]
+        if (owner["name"], owner["position"]["x"], owner["position"]["y"]) not in same:
+            conflicts.append(row)
+    return conflicts
+
+
 class SmeltingDistrict:
     def __init__(self, game, bootstrap, builder, catalog, site=None):
         self.game, self.bootstrap, self.builder, self.catalog = game, bootstrap, builder, catalog
@@ -612,25 +657,20 @@ class SmeltingDistrict:
 
         budget = PlanningBudget(self.game)
         game = budget.game
-        if not obs.get("technologies", {}).get("logistics"):
+        if not obs.get("technologies", {}).get("logistics") and "logistics" not in self._coming(obs):
             return {"ok": False, "reason": "native_logistics_research_required"}
         p = self.path.parent / "mining-outposts.json"
         mining = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
         if mining.get("world_id") != obs["world_id"]:
             return {"ok": False, "reason": "current_world_mining_banks_required"}
-        sources = {}
-        for resource, rate in (("iron-ore", 60), ("copper-ore", 30), ("coal", 30)):
-            bank = next(
-                (
-                    b
-                    for b in mining["banks"]
-                    if b.get("ready") and b["plan"]["resource"] == resource and b["nominal_rate_per_minute"] >= rate
-                ),
-                None,
-            )
-            if not bank:
-                return {"ok": False, "reason": f"one_ready_{resource}_bank_with_nominal_{rate}_required"}
-            sources[resource] = bank["plan"]["ports"][0]
+        sources, reason = district_sources(mining)
+        if sources is None:
+            return {"ok": False, "reason": reason}
+        # Early start: a bank may be planned but not built yet. Its unbuilt
+        # hardware outside its reserved area (bridge poles) is no routing
+        # keep-out (transport.unbuilt_external_keepouts skips mining blocks),
+        # so the whole plan is checked against it below.
+        early_banks = not all(_bank_for(mining, port).get("ready") for port in sources.values())
         board_path = self.path.parent / "pcb-board.json"
         board = json.loads(board_path.read_text(encoding="utf-8"))
         if board.get("world_id") != obs["world_id"] or board.get("catalog_fingerprint") != self.catalog.fingerprint:
@@ -775,6 +815,11 @@ return {ok=true,legal=legal}
                     {"stage": "whole_geometry", "area": site["area"], "reason": "whole_prospective_plan_overlaps"}
                 )
                 continue
+            if early_banks and _foreign_unbuilt_conflicts(self.builder, obs, board.get("blocks", {}), es):
+                failures.append(
+                    {"stage": "planned_hardware", "area": site["area"], "reason": "plan_meets_unbuilt_mining_hardware"}
+                )
+                continue
             if set().union(*boxes) & reserved_growth:
                 failures.append(
                     {"stage": "growth_footprint", "area": site["area"], "reason": "plan_entity_in_reserved_growth_slot"}
@@ -809,6 +854,8 @@ return {ok=true,legal=legal}
                 "routes": [{"metrics": r["route_metrics"], "pairs": r["underground_pairs"]} for r in routes],
                 "nominal_input_rates": {"iron-ore": 60, "copper-ore": 30},
                 "coal_splitter_policy": "ordinary balanced outputs; existing power feed remains separate",
+                # The bank ports this plan was routed from (re-plan or block when one changes).
+                "source_ports": dict(sources),
             }
         stages = {
             stage: sum(f["stage"] == stage for f in failures) for stage in dict.fromkeys(f["stage"] for f in failures)
@@ -828,7 +875,45 @@ return {ok=true,legal=legal}
             },
         }
 
+    def _coming(self, obs):
+        from .early_start import ledger_jobs, technologies_coming
+
+        return technologies_coming(obs, ledger_jobs(self.path.parent, obs.get("world_id")))
+
+    def _inputs_changed(self, obs):
+        """None, a blocked result, or ``{"replan": True}`` when a source bank port of this plan changed.
+
+        Only plans that recorded ``source_ports`` are checked. A port is still
+        valid while some saved bank of this world has it. Nothing of the plan
+        built: the plan and its board block are dropped and planned again.
+        Something built: blocked (the built part may stand in the new way).
+        """
+        recorded = self.state.get("source_ports")
+        if not isinstance(recorded, dict) or self.state.get("world_id") != obs["world_id"]:
+            return None
+        p = self.path.parent / "mining-outposts.json"
+        mining = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        saved = []
+        if mining.get("world_id") == obs["world_id"]:
+            saved = [b["plan"]["ports"][0] for b in mining.get("banks", []) if b.get("plan", {}).get("ports")]
+        if all(port in saved for port in recorded.values()):
+            return None
+        built = built_keys(obs)
+        if any((e["name"], *xy(e)) in built for e in self.state["plan"]["entities"]):
+            return {"status": "blocked", "reason": "smelting_inputs_changed_after_partial_build"}
+        board_path = self.path.parent / "pcb-board.json"
+        board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
+        if board.get("blocks", {}).get("smelting_district") == self.state["plan"]:
+            board["blocks"].pop("smelting_district")
+            _atomic_json(board_path, board)
+        self.state = {}
+        _atomic_json(self.path, self.state)
+        return {"replan": True}
+
     def step(self, obs):
+        changed = self._inputs_changed(obs) if self.state else None
+        if changed is not None and not changed.get("replan"):
+            return changed
         if not self.state:
             prepared = self.prepare(obs)
             if not prepared.get("ok"):
@@ -850,7 +935,12 @@ return {ok=true,legal=legal}
         cleanup = self.clean_feed_baseline(obs)
         if cleanup is not None:
             return cleanup
-        result = self.builder.ensure_plan(obs, self.state["plan"])
+        from .early_start import deferral
+
+        # Early start: entities waiting for coming research or for a plate
+        # another job waits for are left for later; the rest is built.
+        defer = deferral(self.path.parent, obs, self.catalog, "smelting_district")
+        result = self.builder.ensure_plan(obs, self.state["plan"], **({"defer": defer} if defer else {}))
         if result.get("status") != "succeeded":
             return result
         proof = self.proof(obs)

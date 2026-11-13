@@ -520,8 +520,15 @@ class DemandTests(unittest.TestCase):
             placed = [{"name": "lab", "position": {"x": 1.5, "y": 1.5}}]
             rows = self.demand(jobs, {"world_id": "w", "entities": placed}, root=tmp)
             self.assertEqual(rows["lab"]["count"], 4)  # 5 planned, 1 standing; the constant said 2
-            self.assertEqual(rows["lab"]["current"], 4)
+            # No prerequisite succeeded: the district runs early (early_start.py) and is not current demand.
+            self.assertEqual(rows["lab"]["current"], 0)
             self.assertEqual(rows[BELT]["count"], 20 + 2 + 4 * 4)
+            done = [
+                {"capability": name, "parameters": {"x": 1}, "status": "succeeded"}
+                for name in ("power", "bootstrap_logistics", "mining_outpost")
+            ]
+            normal = self.demand(jobs + done, {"world_id": "w", "entities": placed}, root=tmp)
+            self.assertEqual(normal["lab"]["current"], 4)
             other = self.demand(jobs, {"world_id": "other", "entities": placed}, root=tmp)
             self.assertEqual(other["lab"]["count"], 2)  # a plan of another world is ignored
 

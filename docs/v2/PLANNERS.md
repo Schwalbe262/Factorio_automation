@@ -250,6 +250,48 @@ for entity in plan order:
 A job waiting for one item no longer holds back what it can already place.
 Pinned by `tests/test_v2_build_ahead.py`.
 
+## Early start (`early_start.py`, "pre-build")
+
+A roadmap block starts once its inputs are planned, not finished: the saved
+plans of its prerequisites fix its geometry, and most of its hardware needs no
+new research. Declared per capability in `jobs.CAPABILITIES[c]["early_start"]`:
+
+| Capability | `requires` (admission) | `running` | `inputs` | `locked_until` |
+|---|---|---|---|---|
+| `smelting_district` | power | - | `mining_bank_ports`: per source (iron 60, copper 30, coal 30) a saved bank, built or not, whose port is on the board | logistics |
+| `planned_main_bus` | power | smelting_district | `district_feed_anchors`: district plan registered, the belt under each bus feed splitter built | logistics |
+
+```
+propose step S early (progression.autopilot_nodes -> early_start.early_ready) when the strict rule fails and
+  early.requires succeeded, every S.after step satisfied or in flight, every early.running succeeded or active,
+  receipt early_start_inputs[S.capability].known, and every locked_until technology researched or coming
+  (research, native queue, technology of an active job, STEP_TECHNOLOGY), native gate unlockers within locked_until
+  priority unchanged: TOP_PRIORITY - index, below every step it runs ahead of
+admit (jobs.submit, WorkQueue.refresh): early.requires instead of requires;
+  an early job never takes the last free slot (EARLY_FREE_SLOTS = 1: at most 3 active when it is admitted)
+build (ensure_plan(defer=early_start.deferral(...))), per plan entity in order:
+  recipe locked by a coming technology            -> left for later, "waiting for research <t> to unlock <recipe>"
+  hand craft would use a plate another active job waits for (contested_plates; only while early) -> later
+  acquisition only waits                         -> later (the next item is tried: furnaces from stone go on)
+  mining drill / inserter behind a deferred entity -> later (plan order)
+  everything else is crafted and placed; all done but deferred -> "waiting for deferred plan entities: ..."
+succeed only on the unchanged native proof (district: plates on the output ports; bus: plates on lane tails);
+  the bus splice into the district waits for smelting_district to succeed (planned_bus.step)
+clocks: while early (a strict requires missing) the job deadline does not run (early_ticks/early_seconds);
+  the stall rule keeps its progress key (entities, research progress), which research or the prerequisites move
+demand: an early job's saved plan counts in supply-cell demand but not as current (contested plates never feed it)
+inputs final: a bank port is final once the bank is saved (exit side chosen before saving; bridge re-plans keep
+  ports); the district records source_ports and, when one is no longer a saved bank port, re-plans if nothing of it
+  is built (board block dropped) or blocks with smelting_inputs_changed_after_partial_build
+```
+
+Without early inputs in the receipt the roadmap behaves as before. Other
+candidates for the same declaration: `automation_science` (needs the bus's
+published taps; its tap cutover splices the bus, so it would need a splice
+hold like the bus), `logistic_science` (after its research), `steel_production`
+(after steel processing), `dedicated_materials_*`. Pinned by
+`tests/test_v2_early_start.py`.
+
 ## Supervisor and incidents (`supervisor.py`, `incidents.py`, `IncidentConfig`)
 
 | Kind (severity order) | Opens when | Default |

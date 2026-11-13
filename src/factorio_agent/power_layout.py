@@ -292,7 +292,7 @@ return {ok=true,world_id=d.world_id,ground=ground}
             reason="normally collect spilled construction-site items without discarding materials",
         )
 
-    def ensure_plan(self, observation, plan):
+    def ensure_plan(self, observation, plan, **options):
         clearance_only = (
             plan.get("entities") == []
             and isinstance(plan.get("clear_obstacles"), list)
@@ -337,7 +337,7 @@ return {ok=true}
                 }
         if clearance_only:
             return {"status": "succeeded", "reason": "approved clearance-only plan complete"}
-        result = super().ensure_plan(observation, plan)
+        result = super().ensure_plan(observation, plan, **options)
         if result.get("status") != "succeeded":
             return result
         for wanted in plan["entities"]:

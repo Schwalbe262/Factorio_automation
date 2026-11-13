@@ -81,7 +81,6 @@ from itertools import permutations
 import json
 import math
 from pathlib import Path
-import re
 
 from .blocks.params import pole_radius, pole_reach
 from .blocks.stock_tail import STOCK_STACKS
@@ -690,17 +689,9 @@ class SupplyCell:
 
     def contested_plates(self, obs):
         """Raw items another active job is waiting for (its reason or evidence names the item)."""
-        items = set()
-        for job in self._jobs(obs):
-            if job.get("capability") == CAPABILITY or job.get("status") not in ACTIVE:
-                continue
-            reason = str(job.get("reason") or "")
-            evidence = job.get("evidence") if isinstance(job.get("evidence"), dict) else {}
-            for raw in _raw_items():
-                named = re.search(rf"(?<![\w-]){re.escape(raw)}(?![\w-])", reason)
-                if evidence.get("item") == raw or (reason.startswith("waiting") and named):
-                    items.add(raw)
-        return items
+        from .early_start import contested_plates  # one rule for the supply cell and early starts
+
+        return contested_plates(self._jobs(obs), exclude=(CAPABILITY,))
 
     # site
     def prepare(self, obs, products):
