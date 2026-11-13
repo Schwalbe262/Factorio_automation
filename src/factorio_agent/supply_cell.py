@@ -694,6 +694,19 @@ class SupplyCell:
 
         return contested_plates(self._jobs(obs), exclude=(CAPABILITY,))
 
+    def research_plates(self, obs):
+        """Raw items a research job is waiting for: the cell takes none of them, not even for its own proof.
+
+        Research is the critical path. With a higher job priority the cell
+        swallowed every plate while the science machines stood empty for
+        minutes (seed 2644599892: "waiting for drill-fed iron-plate", have 0).
+        """
+        from .early_start import contested_plates
+        from .jobs import RESEARCH_CAPABILITIES
+
+        jobs = [job for job in self._jobs(obs) if job.get("capability") in RESEARCH_CAPABILITIES]
+        return contested_plates(jobs)
+
     # site
     def prepare(self, obs, products):
         enabled = _enabled(obs)
@@ -986,9 +999,12 @@ class SupplyCell:
             return None
         chest = self._chest_name(state)
         contested = self.contested_plates(obs) if demand is None else set()
+        research = self.research_plates(obs)
         for deficit, item, position in self.feed_targets(
             obs, state, minimum=minimum, demand=demand, contested=contested
         ):
+            if item in research:
+                continue
             held = int((obs.get("inventory") or {}).get(item, 0)) - reserve
             if held >= min(deficit, FEED_BATCH):
                 return {

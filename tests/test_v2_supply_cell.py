@@ -698,5 +698,17 @@ class MultiProductRetireTests(UseFixture):
         self.assertEqual([(n["id"], n["parameters"]) for n in nodes], [(sc.RETIRE_NODE_ID, {"retire": True})])
 
 
+class ResearchPlatesTests(unittest.TestCase):
+    def test_plates_a_research_job_waits_for_are_off_limits_to_the_cell(self):
+        # Seed 2644599892: the science machines stood empty while the cell took every iron plate.
+        waiting = {"capability": "bootstrap_research", "status": "waiting"}
+        waiting["reason"] = "waiting for drill-fed iron-plate production"
+        other = {"capability": "power", "status": "waiting", "reason": "waiting for drill-fed copper-plate production"}
+        cell = SimpleNamespace(_jobs=lambda obs: [waiting, other])
+        self.assertEqual(sc.SupplyCell.research_plates(cell, {}), {"iron-plate"})
+        waiting["status"] = "succeeded"
+        self.assertEqual(sc.SupplyCell.research_plates(cell, {}), set())
+
+
 if __name__ == "__main__":
     unittest.main()
