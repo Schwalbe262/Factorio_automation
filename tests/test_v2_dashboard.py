@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 
 from factorio_agent import progression
@@ -263,7 +264,7 @@ class TailTests(Fixture):
 class ServerTests(Fixture):
     def test_endpoints(self):
         self.build()
-        server = dashboard.serve(self.root, port=0)
+        server = dashboard.serve(self.root, port=0, base=Path(self.tmp.name))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -275,6 +276,238 @@ class ServerTests(Fixture):
             self.assertTrue(state["layout"]["available"])
             svg = urllib.request.urlopen(base + "/api/layout.svg", timeout=10).read().decode("utf-8")
             self.assertIn("startup_science", svg)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+STEP = {s.id: s for s in progression.ROADMAP}
+
+
+def job(step_id, status, last_tick=None, reason="ok"):
+    step = STEP[step_id]
+    return dict(
+        capability=step.capability, parameters=step.parameters, status=status, reason=reason, last_tick=last_tick
+    )
+
+
+class FleetFixture(unittest.TestCase):
+    """A runtime base with fleets/ manifests and v2/<name>-<seed> run folders."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name) / "runtime"
+        (self.base / "fleets").mkdir(parents=True)
+        self.live = set()  # pids that count as alive
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def alive(self, record):
+        return record.get("pid") in self.live
+
+    def manifest(self, name, created, seeds, statuses=None, **extra):
+        runs = [
+            dict(seed=s, runtime=str(self.base / "v2" / f"{name}-{s}"), status=(statuses or {}).get(s, "stopped"))
+            for s in seeds
+        ]
+        write(
+            self.base / "fleets" / (name + ".json"),
+            dict(kind="factorio-fleet-v1", name=name, created_at=created, target_minutes=45, planner="none", runs=runs)
+            | extra,
+        )
+
+    def make_run(self, name, seed, *, power, auto=None, blocked=None, green=False, pid=None, tick=60000):
+        root = self.base / "v2" / f"{name}-{seed}"
+        jobs = {"j-power": job("power", "succeeded", power * 3600)}
+        events = [
+            {"key": "j-power", "event": "action_result", "time": 10.0, "tick": power * 3600},
+            # no tick: the last earlier row's tick
+            {"key": "j-power", "event": "terminal", "time": 11.0, "status": "succeeded"},
+        ]
+        if auto is not None:
+            jobs["j-auto"] = job("starter_research_automation", "succeeded")
+            # no row tick: the evidence tick wins
+            events.append(
+                {
+                    "key": "j-auto",
+                    "event": "terminal",
+                    "time": 12.0,
+                    "status": "succeeded",
+                    "evidence": {"tick": auto * 3600},
+                }
+            )
+        if blocked:
+            jobs["j-bus"] = job("main_bus", "blocked", 50000, reason=blocked)
+            events.append({"key": "j-bus", "event": "terminal", "time": 13.0, "status": "blocked", "tick": 50000})
+        if green:
+            jobs["j-green"] = job("logistic_science", "running")
+        write(root / "jobs.json", {"jobs": jobs})
+        jsonl(root / "job-events.jsonl", events)
+        write(root / "logs" / "controller-state.json", {"status": "running", "last_observed_tick": tick})
+        if pid:
+            write(root / "server.json", {"pid": pid, "creation_time": 5})
+            write(root / "supervisor-process.json", {"pid": pid + 1, "creation_time": 5})
+            self.live.update({pid, pid + 1})
+        return root
+
+    def build(self):
+        self.manifest("pace1", 100.0, [1, 2])
+        self.make_run("pace1", 1, power=8, auto=11, blocked="no_route at 12,34")
+        self.make_run("pace1", 2, power=9)
+        self.manifest("auto-1113-1618", 200.0, [3, 4], commit="aaa1111")
+        self.make_run("auto-1113-1618", 3, power=10, auto=14, blocked="no_route at 5,6")
+        self.make_run("auto-1113-1618", 4, power=12, auto=16)
+        self.manifest("auto-1113-1708", 300.0, [5, 6, 7], statuses={5: "running", 7: "planned"})
+        write(self.base / "fleets" / "reports" / "auto-1113-1708.report.txt", "fleet auto-1113-1708 commit bbb2222\n")
+        self.make_run("auto-1113-1708", 5, power=6, auto=9, pid=500, green=True)
+        self.make_run("auto-1113-1708", 6, power=7, blocked="planner_fault 3")
+        # seed 7: no folder yet
+        write(self.base / "fleets" / "cost.json", {"per_run_mb": 1})
+
+    def board(self):
+        return dashboard.FleetBoard(self.base, clock=lambda: NOW, alive=self.alive)
+
+
+class FleetPayloadTests(FleetFixture):
+    def test_fleets_newest_first_with_strip_stats_and_health(self):
+        self.build()
+        data = self.board().payload()
+        json.dumps(data)
+        self.assertEqual([f["name"] for f in data["fleets"]], ["auto-1113-1708", "auto-1113-1618", "pace1"])
+        self.assertEqual(data["default_open"], "auto-1113-1708")  # the newest fleet with a live run
+        newest = data["fleets"][0]
+        self.assertEqual(
+            (newest["commit"], newest["runs_total"], newest["running"], newest["stopped"]), ("bbb2222", 3, 1, 2)
+        )
+        self.assertEqual(newest["columns"][-1]["head"], "green")  # a logistic_science job exists
+        self.assertNotIn("green", [c["head"] for c in data["fleets"][1]["columns"]])
+        run5, run6, run7 = newest["runs"]
+        self.assertTrue(run5["alive"] and run5["server"] and run5["supervisor"] and run5["link"])
+        self.assertEqual(run5["runtime"], "auto-1113-1708-5")
+        self.assertEqual(run5["milestones"], {"power": 6.0, "starter_research_automation": 9.0})
+        self.assertEqual(run5["furthest"]["step"], "starter_research_automation")
+        self.assertEqual((run5["game_minutes"], run5["active"], run5["blocked"]), (round(60000 / 3600, 1), 1, 0))
+        self.assertFalse(run6["alive"])
+        self.assertEqual(run6["blocked_now"], {"capability": "planned_main_bus", "reason": "planner_fault 3"})
+        self.assertFalse(run7["link"])
+        self.assertEqual(run7["milestones"], {})
+        self.assertEqual(newest["stats"]["power"], {"min": 6.0, "median": 6.5, "max": 7.0, "n": 2})
+        self.assertEqual(newest["stats"]["auto"]["n"], 1)
+        self.assertEqual(newest["runs_with_data"], 2)
+        self.assertIn("실행 중 1/3", newest["health"])
+        self.assertIn("막힌 런 1", newest["health"])
+        self.assertEqual(newest["health_level"], "warn")
+
+    def test_blocked_histograms_per_fleet_and_recent(self):
+        self.build()
+        data = self.board().payload()
+        pace = data["fleets"][2]
+        [row] = pace["blocked"]
+        self.assertEqual((row["reason"], row["count"], row["example"]), ("no_route at #,#", 1, 1))
+        self.assertEqual(row["example_runtime"], "pace1-1")
+        top = data["recent_blocked"][0]
+        self.assertEqual((top["reason"], top["count"], top["runs"]), ("no_route at #,#", 2, 2))
+        self.assertIn(top["example_runtime"], ("pace1-1", "auto-1113-1618-3"))
+
+    def test_trend_by_round_for_a_name_series(self):
+        self.build()
+        [trend] = self.board().payload()["trend"]
+        self.assertEqual(trend["prefix"], "auto")
+        rounds = trend["rounds"]
+        self.assertEqual([r["name"] for r in rounds], ["auto-1113-1618", "auto-1113-1708"])
+        self.assertEqual([r["commit"] for r in rounds], ["aaa1111", "bbb2222"])
+        self.assertEqual([r["median"]["power"] for r in rounds], [11.0, 6.5])
+        self.assertEqual([r["reached"]["auto"] for r in rounds], [2, 1])
+        self.assertEqual([r["finished"] for r in rounds], [False, True])
+
+    def test_job_events_are_read_incrementally(self):
+        self.build()
+        board = self.board()
+        board.payload()
+        root = self.base / "v2" / "pace1-2"
+        with (root / "job-events.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"key": "j-auto", "event": "terminal", "time": 20.0, "status": "succeeded"}))
+        write(root / "jobs.json", {"jobs": {"j-auto": job("starter_research_automation", "succeeded")}})
+        card = board.cards[str(root.resolve())]
+        offset = card.ends.offset
+        run = board.payload()["fleets"][2]["runs"][1]
+        self.assertGreater(card.ends.offset, offset)
+        self.assertEqual(run["milestones"].get("starter_research_automation"), 9.0)  # last earlier tick
+
+    def test_missing_and_corrupt_files_do_not_raise(self):
+        self.build()
+        write(self.base / "fleets" / "broken.json", '{"kind": "factorio-fleet-v1", "na')
+        write(self.base / "fleets" / "other.json", {"kind": "something-else", "name": "other"})
+        board = self.board()
+        before = board.payload()
+        root = self.base / "v2" / "pace1-1"
+        write(root / "jobs.json", '{"jobs": {"half')
+        write(root / "logs" / "controller-state.json", "[1,")
+        with (root / "job-events.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write('garbage\n{"event": "terminal", "time": 1, "key": "j-power"')
+        write(root / "server.json", "{")
+        after = board.payload()
+        self.assertEqual([f["name"] for f in after["fleets"]], [f["name"] for f in before["fleets"]])
+        self.assertEqual(after["fleets"][2]["runs"][0]["milestones"], before["fleets"][2]["runs"][0]["milestones"])
+        self.assertEqual(dashboard.FleetBoard(Path(self.tmp.name) / "nothing").payload()["fleets"], [])
+
+
+class RuntimeParameterTests(FleetFixture):
+    def test_strict_runtime_folder_names(self):
+        self.build()
+        ok = dashboard.runtime_folder(self.base, "pace1-1")
+        self.assertEqual(ok, (self.base / "v2" / "pace1-1").resolve())
+        for bad in (
+            "",
+            "..",
+            "../fleets",
+            "a/b",
+            "a\\b",
+            ".hidden",
+            "pace1-1.",
+            "C:x",
+            "/abs",
+            "a..b",
+            "x" * 200,
+            None,
+        ):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                dashboard.runtime_folder(self.base, bad)
+        for absent in ("pace1-9", "fleets"):
+            with self.assertRaises(LookupError):
+                dashboard.runtime_folder(self.base, absent)
+
+    def test_endpoints_with_runtime_parameter(self):
+        self.build()
+        default = self.base / "v2" / "pace1-1"
+        server = dashboard.serve(default, port=0, base=self.base)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def get(path):
+            try:
+                with urllib.request.urlopen(url + path, timeout=10) as response:
+                    return response.status, response.read()
+            except urllib.error.HTTPError as error:
+                return error.code, error.read()
+
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}"
+            status, body = get("/api/fleets")
+            self.assertEqual((status, json.loads(body)["fleets"][0]["name"]), (200, "auto-1113-1708"))
+            status, body = get("/api/state")
+            self.assertEqual(json.loads(body)["header"]["runtime"], "pace1-1")
+            status, body = get("/api/state?runtime=auto-1113-1708-5")
+            self.assertEqual((status, json.loads(body)["header"]["runtime"]), (200, "auto-1113-1708-5"))
+            for bad in ("..%2Ffleets", "%2e%2e", "a%5Cb", "pace1-1&runtime=pace1-2", ""):
+                self.assertEqual(get("/api/state?runtime=" + bad)[0], 400, bad)
+            self.assertEqual(get("/api/state?runtime=pace1-9")[0], 404)
+            self.assertEqual(get("/api/layout.svg?runtime=..")[0], 400)
+            self.assertEqual(get("/api/layout.svg?runtime=pace1-2&v=1")[0], 404)  # no plan yet
+            page = get("/")[1].decode("utf-8")
+            self.assertIn("병렬 실행", page)
+            self.assertIn("/api/fleets", page)
         finally:
             server.shutdown()
             server.server_close()

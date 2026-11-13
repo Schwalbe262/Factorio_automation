@@ -1,6 +1,13 @@
-"""Local read-only web dashboard for one v2 runtime.
+"""Local read-only web dashboard for one v2 runtime and the fleet runs.
 
-Usage: python -B tools/dashboard.py [--runtime runtime/v2/<name>] [--port 8765]
+Usage: python -B tools/dashboard.py [--runtime runtime/v2/<name>] [--base runtime] [--port 8765]
+
+Tab "병렬 실행" polls ``/api/fleets``: every ``<base>/fleets/*.json`` manifest
+with per-run milestones (``fleet.milestones`` over job-events read
+incrementally), blocked-reason histograms (``fleet.aggregate``) and the
+round-to-round trend of name series such as ``auto-*``. ``/api/state`` and
+``/api/layout.svg`` take ``?runtime=<folder>`` (a strict folder name under
+``<base>/v2``) to show any run in the first tab.
 
 Serves http://127.0.0.1:<port>/ (loopback only). The page polls
 ``/api/state`` every 5 s and fetches ``/api/layout.svg`` only when the site
@@ -20,15 +27,19 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import re
+import statistics
 import sys
 import threading
 import time
+from urllib.parse import parse_qs
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fleet as fleet_tool  # noqa: E402
 import report_run  # noqa: E402
-from factorio_agent import progression  # noqa: E402
+from factorio_agent import actor_client, progression  # noqa: E402
 from factorio_agent.site.masterplan import MasterPlan  # noqa: E402
 from factorio_agent.site.planrender import (  # noqa: E402
     ALLOCATION_COLOUR,
@@ -127,7 +138,8 @@ class JsonlTail:
         except OSError:
             return self.rows
         if size < self.offset:
-            self.offset, self.partial, self.rows = 0, b"", []
+            self.offset, self.partial = 0, b""
+            self._reset()
             self.changes += 1
         if size == self.offset:
             return self.rows
@@ -146,9 +158,16 @@ class JsonlTail:
         for line in lines:
             row = report_run.parse_row(line.decode("utf-8", "replace"))
             if row is not None:
-                self.rows.append(row)
+                self._add(row)
         self.changes += 1
         return self.rows
+
+    # Subclasses that keep a digest instead of every row override these two.
+    def _reset(self):
+        self.rows = []
+
+    def _add(self, row):
+        self.rows.append(row)
 
 
 def process_alive(pid, creation_time):
@@ -181,9 +200,9 @@ def summarize(value, depth=0):
     return value
 
 
-def default_runtime(repo=REPO) -> Path:
-    """The runtime ``lifecycle status`` uses: the ``runtime`` of ``runtime/active-runtime.json``."""
-    pointer = repo / "runtime" / "active-runtime.json"
+def default_runtime(repo=REPO, base=None) -> Path:
+    """The runtime ``lifecycle status`` uses: the ``runtime`` of ``<base>/active-runtime.json`` (base: repo/runtime)."""
+    pointer = Path(base if base is not None else repo / "runtime") / "active-runtime.json"
     try:
         value = json.loads(pointer.read_text(encoding="utf-8-sig")).get("runtime")
     except (OSError, ValueError, AttributeError):
@@ -578,8 +597,398 @@ class Dashboard:
             return self._layout["svg"]
 
 
+# ----- fleets (tab "병렬 실행") ------------------------------------------------
+FLEET_COLUMNS = (*fleet_tool.COLUMNS, ("green", "logistic_science"))
+COLUMN_LABEL = {
+    "power": "전력",
+    "auto": "자동화 연구",
+    "emd": "전기 채굴기 연구",
+    "logi": "물류",
+    "iron": "철 전초기지",
+    "copr": "구리 전초기지",
+    "coal": "석탄 전초기지",
+    "smelt": "제련 구역",
+    "bus": "메인 버스",
+    "red": "빨강 과학",
+    "green": "초록 과학",
+}
+RECENT_FLEETS = 5
+TOP_REASONS = 10
+# A runtime folder name: no separators, no "..", no leading/trailing dot (Windows strips those).
+RUNTIME_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,118}[A-Za-z0-9])?")
+# Rounds of one automatic loop share a prefix: auto-1113-1618, auto-1113-1708 -> "auto".
+SERIES = re.compile(r"([A-Za-z][A-Za-z_]*)-\d[\d-]*")
+COMMIT = re.compile(r"\bcommit\s+([0-9a-f]{6,40})\b")
+PROCESS_FILES = ("server.json", "supervisor-process.json", "agent-client/client-process.json", "actor-client.json")
+
+
+def runtime_folder(base, name) -> Path:
+    """``base/v2/<name>`` for a strict folder name; ValueError for a bad name, LookupError when absent."""
+    if not isinstance(name, str) or not RUNTIME_NAME.fullmatch(name) or ".." in name:
+        raise ValueError("bad runtime name")
+    v2 = (Path(base) / "v2").resolve()
+    root = (v2 / name).resolve()
+    if root.parent != v2 or root.name != name or not root.is_dir():
+        raise LookupError("no runtime folder " + name)
+    return root
+
+
+def _signature(path):
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+class TerminalTail(JsonlTail):
+    """``job-events.jsonl`` digested incrementally to ``critical_path.Run.end``: key -> (tick, status, reason).
+
+    A terminal row without a tick takes its evidence tick, else the tick of the last earlier row that had one."""
+
+    def __init__(self, path):
+        super().__init__(path)
+        self.end = {}
+        self.tick = None
+
+    def _reset(self):
+        self.rows, self.end, self.tick = [], {}, None
+
+    def _add(self, row):
+        tick = row.get("tick")
+        if type(tick) is int:
+            self.tick = tick
+        if row.get("event") != "terminal":
+            return
+        if type(tick) is not int:
+            evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+            tick = evidence["tick"] if type(evidence.get("tick")) is int else self.tick
+        if type(tick) is int:
+            self.end[row.get("key")] = (tick, row.get("status"), str(row.get("reason") or ""))
+
+
+class TextHead:
+    """The first few KB of a text file, re-read only when it changes; None when missing."""
+
+    def __init__(self, path, size=2048):
+        self.path, self.size, self.signature, self.value = Path(path), size, None, None
+
+    def get(self):
+        signature = _signature(self.path)
+        if signature != self.signature:
+            try:
+                with self.path.open("rb") as handle:
+                    self.value = handle.read(self.size).decode("utf-8", "replace")
+            except OSError:
+                self.value = None
+            self.signature = signature
+        return self.value if self.signature else None
+
+
+class RunCard:
+    """One fleet run's summary from its folder, recomputed only when jobs, controller state or job events change."""
+
+    def __init__(self, root, alive):
+        self.root = Path(root)
+        self.alive = alive
+        self.jobs = JsonFile(self.root / "jobs.json")
+        self.state = JsonFile(self.root / "logs" / "controller-state.json")
+        self.ends = TerminalTail(self.root / "job-events.jsonl")
+        self._key = self._progress = self._live_key = self._live = None
+
+    def liveness(self) -> dict:
+        key = tuple(_signature(self.root / name) for name in PROCESS_FILES)
+        # A dead process does not come back without a new registry file; a live one is checked every time.
+        if key == self._live_key and self._live is not None and not any(self._live["up"].values()):
+            return self._live
+        try:
+            records = fleet_tool.run_records(self.root)
+            up = {name: bool(record) and bool(self.alive(record)) for name, record in records.items()}
+            client = actor_client.client_state(self.root, up.get("client", False))
+            label = actor_client.test_mode(self.root) or {}
+        except Exception:  # a half-written registry must not break the page
+            up, client, label = {"server": False, "client": False, "supervisor": False}, "down", {}
+        self._live = {"up": up, "client": client, "test_mode": label.get("test_mode")}
+        self._live_key = key
+        return self._live
+
+    def progress(self) -> dict:
+        value = self.jobs.dict().get("jobs")
+        jobs = {k: v for k, v in value.items() if isinstance(v, dict)} if isinstance(value, dict) else {}
+        state = self.state.dict()
+        self.ends.update()
+        key = (self.jobs.signature, self.state.signature, self.ends.changes)
+        if key == self._key and self._progress is not None:
+            return self._progress
+        try:
+            reached, far = fleet_tool.milestones(jobs, self.ends.end, progression.ROADMAP, progression._same)
+            counts = fleet_tool.job_summary(jobs, state)
+        except Exception as error:  # odd shapes keep the last good summary
+            if self._progress is None:
+                self._progress = {"milestones": {}, "blocked_reasons": [], "error": _text(repr(error), 120)}
+            return self._progress
+        stuck = [j for j in jobs.values() if j.get("status") in ("blocked", "failed")]
+        latest = max(stuck, key=lambda j: _num(j.get("last_tick")) or _num(j.get("created_at")) or 0, default=None)
+        self._progress = {
+            "game_minutes": counts["game_minutes"],
+            "active": counts["active"],
+            "blocked": len(stuck),
+            "succeeded": counts["succeeded"],
+            "milestones": reached,
+            "furthest": {"step": far[1], "minute": far[2], "index": far[0]} if far else None,
+            "blocked_reasons": fleet_tool.blocked_rows(jobs),
+            "blocked_now": {"capability": latest.get("capability"), "reason": _text(latest.get("reason") or "?", 90)}
+            if latest
+            else None,
+            "has_green": any(j.get("capability") == "logistic_science" for j in jobs.values()),
+        }
+        self._key = key
+        return self._progress
+
+
+def _histogram(rows, label=None):
+    """``fleet.aggregate``'s blocked/failed reason histogram as a list (reason -> count -> example)."""
+    agg = fleet_tool.aggregate(rows)
+    out = []
+    for reason, value in list(agg["blocked_reasons"].items())[:TOP_REASONS]:
+        example = value["seeds"][0] if value["seeds"] else None
+        out.append(
+            {
+                "reason": reason,
+                "count": value["count"],
+                "capability": value.get("capability"),
+                "runs": len(value["seeds"]),
+                "example": example,
+                "example_runtime": (label or {}).get(example, example if label is None else None),
+            }
+        )
+    return out
+
+
+class FleetBoard:
+    """Every fleet manifest under ``<base>/fleets`` with per-run progress (read-only, cached per file)."""
+
+    def __init__(self, base, *, clock=time.time, alive=None):
+        self.base = Path(base).resolve()
+        self.dir = self.base / "fleets"
+        self.clock = clock
+        self.alive = alive or fleet_tool.alive
+        self.lock = threading.Lock()
+        self.manifests: dict[Path, JsonFile] = {}
+        self.heads: dict[Path, TextHead] = {}
+        self.cards: dict[str, RunCard] = {}
+
+    def _manifests(self):
+        try:
+            paths = [p for p in self.dir.glob("*.json") if p.name != "cost.json"]
+        except OSError:
+            paths = []
+        out = []
+        for path in paths:
+            value = self.manifests.setdefault(path, JsonFile(path)).get()
+            if (
+                isinstance(value, dict)
+                and value.get("kind") == "factorio-fleet-v1"
+                and isinstance(value.get("name"), str)
+            ):
+                out.append(value)
+        return out
+
+    def _head(self, path):
+        return self.heads.setdefault(path, TextHead(path)).get()
+
+    def _commit(self, manifest):
+        if isinstance(manifest.get("commit"), str) and manifest["commit"].strip():
+            return manifest["commit"].strip()[:12]
+        for suffix in (".report.txt", ".start.txt"):
+            match = COMMIT.search(self._head(self.dir / "reports" / (manifest["name"] + suffix)) or "")
+            if match:
+                return match.group(1)[:12]
+        return None
+
+    def _run(self, run):
+        seed = run.get("seed")
+        name = Path(str(run.get("runtime") or "")).name
+        row = {
+            "seed": seed,
+            "runtime": name or None,
+            "link": False,
+            "status": run.get("status"),
+            "launch_error": _text(run["launch_error"], 120) if run.get("launch_error") else None,
+            "server": False,
+            "supervisor": False,
+            "client": "down",
+            "alive": False,
+            "test_mode": None,
+            "game_minutes": None,
+            "milestones": {},
+            "furthest": None,
+            "active": None,
+            "blocked": None,
+            "blocked_now": None,
+            "blocked_reasons": [],
+            "has_green": False,
+        }
+        try:
+            root = runtime_folder(self.base, name)
+        except (ValueError, LookupError):
+            return row  # only folders under <base>/v2 are read (and linkable)
+        card = self.cards.get(str(root))
+        if card is None:
+            card = self.cards[str(root)] = RunCard(root, self.alive)
+        live, progress = card.liveness(), card.progress()
+        up = live["up"]
+        row.update(
+            link=True,
+            server=up.get("server", False),
+            supervisor=up.get("supervisor", False),
+            client=live["client"],
+            alive=bool(up.get("server") and up.get("supervisor")),
+            test_mode=live["test_mode"],
+            **{k: progress.get(k) for k in ("game_minutes", "furthest", "active", "blocked", "blocked_now")},
+            milestones=progress.get("milestones") or {},
+            blocked_reasons=progress.get("blocked_reasons") or [],
+            has_green=progress.get("has_green", False),
+        )
+        return row
+
+    def _fleet(self, manifest):
+        runs = [self._run(r) for r in manifest.get("runs") or [] if isinstance(r, dict)]
+        with_data = [r for r in runs if r["link"]]
+        green = any(r["has_green"] or "logistic_science" in r["milestones"] for r in runs)
+        columns = [(h, s) for h, s in FLEET_COLUMNS if h != "green" or green]
+        stats = {}
+        for head, step in columns:
+            value = fleet_tool.stats(r["milestones"].get(step) for r in with_data)
+            stats[head] = dict(value or {"min": None, "median": None, "max": None, "n": 0})
+        running = sum(r["alive"] for r in runs)
+        tests = sum(bool(r["test_mode"]) for r in runs)
+        failed = sum(r["status"] == "launch_failed" for r in runs)
+        blocked_runs = sum(bool(r["blocked"]) for r in runs)
+        lost = sum(r["status"] == "running" and not r["alive"] for r in runs)
+        histogram = _histogram(runs, {r["seed"]: r["runtime"] for r in runs if r["link"]})
+        indices = [r["furthest"]["index"] for r in with_data if r["furthest"]]
+        median_step = progression.ROADMAP[int(statistics.median_low(indices))].id if indices else None
+        health = [f"실행 중 {running}/{len(runs)}"]
+        if median_step:
+            health.append(f"중간 진행 {median_step}")
+        if blocked_runs:
+            health.append(f"막힌 런 {blocked_runs}" + (f" (최다: {histogram[0]['reason']})" if histogram else ""))
+        if failed:
+            health.append(f"시작 실패 {failed}")
+        if lost:
+            health.append(f"프로세스 없음 {lost} (manifest는 running)")
+        level = "bad" if failed or lost else ("warn" if blocked_runs else "ok")
+        created = _num(manifest.get("created_at"))
+        series = SERIES.fullmatch(manifest["name"])
+        return {
+            "name": manifest["name"],
+            "created_at": created,
+            "commit": self._commit(manifest),
+            "target_minutes": manifest.get("target_minutes"),
+            "planner": manifest.get("planner"),
+            "client": manifest.get("client"),
+            "test_runs": tests,
+            "runs_total": len(runs),
+            "running": running,
+            "stopped": len(runs) - running,
+            "round_report": self._head(self.dir / "reports" / (manifest["name"] + ".report.txt")) is not None,
+            "series": series.group(1) if series else None,
+            "health": " · ".join(health),
+            "health_level": level,
+            "columns": [{"head": h, "step": s, "label": COLUMN_LABEL.get(h, h)} for h, s in columns],
+            "stats": stats,
+            "runs_with_data": len(with_data),
+            "blocked": histogram,
+            "runs": [{k: v for k, v in r.items() if k not in ("blocked_reasons", "has_green")} for r in runs],
+            "_rows": runs,
+        }
+
+    def payload(self) -> dict:
+        with self.lock:
+            fleets = [self._fleet(m) for m in self._manifests()]
+            fleets.sort(key=lambda f: (f["created_at"] or 0, f["name"]), reverse=True)
+            recent = fleets[:RECENT_FLEETS]
+            rows = [dict(r, seed=r["runtime"]) for f in recent for r in f["_rows"] if r["link"]]
+            recent_blocked = _histogram(rows)
+            trend = self._trend(fleets)
+            for f in fleets:
+                f.pop("_rows")
+            open_name = next((f["name"] for f in fleets if f["running"]), fleets[0]["name"] if fleets else None)
+            return {
+                "generated_at": self.clock(),
+                "base": str(self.base),
+                "fleets": fleets,
+                "default_open": open_name,
+                "recent_fleets": [f["name"] for f in recent],
+                "recent_blocked": recent_blocked,
+                "trend": trend,
+                "columns": [{"head": h, "step": s, "label": COLUMN_LABEL.get(h, h)} for h, s in FLEET_COLUMNS],
+            }
+
+    @staticmethod
+    def _trend(fleets):
+        """Median minute per milestone by round, for every name prefix with two or more fleets."""
+        groups: dict[str, list] = {}
+        for f in fleets:
+            if f["series"]:
+                groups.setdefault(f["series"], []).append(f)
+        out = []
+        for prefix, members in sorted(groups.items()):
+            if len(members) < 2:
+                continue
+            members = sorted(members, key=lambda f: (f["created_at"] or 0, f["name"]))
+            heads = [h for h, _ in FLEET_COLUMNS if any(h in f["stats"] for f in members)]
+            out.append(
+                {
+                    "prefix": prefix,
+                    "heads": [{"head": h, "label": COLUMN_LABEL.get(h, h)} for h in heads],
+                    "rounds": [
+                        {
+                            "name": f["name"],
+                            "created_at": f["created_at"],
+                            "commit": f["commit"],
+                            "runs": f["runs_with_data"],
+                            "running": f["running"],
+                            "finished": f["round_report"],
+                            "median": {h: (f["stats"].get(h) or {}).get("median") for h in heads},
+                            "reached": {h: (f["stats"].get(h) or {}).get("n", 0) for h in heads},
+                        }
+                        for f in members
+                    ],
+                }
+            )
+        return out
+
+
+class Runtimes:
+    """The default runtime's Dashboard plus a few for ``?runtime=<folder>`` under ``<base>/v2``."""
+
+    KEEP = 6
+
+    def __init__(self, default_root, base):
+        self.default = Dashboard(default_root)
+        self.base = Path(base).resolve()
+        self.others: dict[Path, Dashboard] = {}
+        self.lock = threading.Lock()
+
+    def get(self, name=None) -> Dashboard:
+        if name is None:
+            return self.default
+        root = runtime_folder(self.base, name)
+        if root == self.default.root:
+            return self.default
+        with self.lock:
+            dash = self.others.pop(root, None) or Dashboard(root)
+            self.others[root] = dash  # most recent last
+            while len(self.others) > self.KEEP:
+                self.others.pop(next(iter(self.others)))
+            return dash
+
+
 class Handler(BaseHTTPRequestHandler):
-    dashboard: Dashboard = None  # set by serve()
+    runtimes: Runtimes = None  # set by serve()
+    fleets: FleetBoard = None
 
     def log_message(self, *_args):
         pass
@@ -592,16 +1001,40 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _json(self, value):
+        self._send(
+            json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8"
+        )
+
+    def _dashboard(self, query):
+        """The runtime of ``?runtime=<folder>`` (strict name under <base>/v2), else the default; None after an error reply."""
+        names = parse_qs(query, keep_blank_values=True).get("runtime")
+        try:
+            if names is not None and len(names) != 1:
+                raise ValueError("one runtime parameter")
+            return self.runtimes.get(names[0] if names else None)
+        except ValueError:
+            self._send(b"bad runtime name", "text/plain; charset=utf-8", 400)
+        except LookupError:
+            self._send(b"no such runtime", "text/plain; charset=utf-8", 404)
+        return None
+
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
+        path, _, query = self.path.partition("?")
         try:
             if path in ("/", "/index.html"):
                 self._send(PAGE.read_bytes(), "text/html; charset=utf-8")
             elif path == "/api/state":
-                body = json.dumps(self.dashboard.payload(), ensure_ascii=False, default=str)
-                self._send(body.encode("utf-8"), "application/json; charset=utf-8")
+                dash = self._dashboard(query)
+                if dash is not None:
+                    self._json(dash.payload())
+            elif path == "/api/fleets":
+                self._json(self.fleets.payload())
             elif path == "/api/layout.svg":
-                svg = self.dashboard.layout_svg()
+                dash = self._dashboard(query)
+                if dash is None:
+                    return
+                svg = dash.layout_svg()
                 if svg is None:
                     self._send(b"no layout", "text/plain; charset=utf-8", 404)
                 else:
@@ -612,23 +1045,31 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
-def serve(root, port=8765, host="127.0.0.1") -> ThreadingHTTPServer:
-    handler = type("DashboardHandler", (Handler,), {"dashboard": Dashboard(root)})
+def serve(root, port=8765, host="127.0.0.1", base=None) -> ThreadingHTTPServer:
+    """``root``: the default runtime; ``base``: the runtime base whose ``fleets/`` and ``v2/`` the fleet tab reads."""
+    base = Path(base) if base is not None else REPO / "runtime"
+    attrs = {"runtimes": Runtimes(root, base), "fleets": FleetBoard(base)}
+    handler = type("DashboardHandler", (Handler,), attrs)
     return ThreadingHTTPServer((host, port), handler)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--runtime", type=Path, help="runtime folder (default: runtime/active-runtime.json)")
+    parser.add_argument("--runtime", type=Path, help="runtime folder (default: <base>/active-runtime.json)")
+    parser.add_argument("--base", type=Path, default=REPO / "runtime", help="runtime base (fleets/, v2/)")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
-    root = args.runtime if args.runtime is not None else default_runtime()
+    base = args.base if args.base.is_absolute() else (Path.cwd() / args.base).resolve()
+    root = args.runtime if args.runtime is not None else default_runtime(base=base)
     if not root.is_absolute():
         root = (Path.cwd() / root).resolve()
     if not root.is_dir():
         raise SystemExit(f"runtime folder not found: {root}")
-    server = serve(root, args.port)
-    print(f"dashboard for {root} at http://127.0.0.1:{server.server_address[1]}/  (Ctrl+C stops)", flush=True)
+    server = serve(root, args.port, base=base)
+    print(
+        f"dashboard for {root} (fleets of {base}) at http://127.0.0.1:{server.server_address[1]}/  (Ctrl+C stops)",
+        flush=True,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
