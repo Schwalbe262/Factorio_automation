@@ -83,7 +83,17 @@ def execute(argv=None, services=None):
     worker.add_argument("--key", required=True)
     worker.add_argument("--max-seconds", type=float, default=900)
     for name in ("pause", "resume", "reconcile", "retry"):
-        commands.add_parser(name).add_argument("--key", required=True)
+        control_parser = commands.add_parser(name)
+        control_parser.add_argument("--key", required=True)
+        if name == "retry":
+            control_parser.add_argument("--remedy", help="remedy rung JSON {rung, kind, options} (remedy ladder)")
+    what_if = commands.add_parser("what-if", help="read-only re-plan of a blocked job with remedy options")
+    what_if.add_argument("--key", required=True)
+    what_if.add_argument("--rung", required=True)
+    what_if.add_argument("--kind", default="replan")
+    what_if.add_argument("--options", default="{}", help="remedy options JSON object")
+    what_if.add_argument("--seconds", type=float, default=30.0)
+    what_if.add_argument("--next", default="null", help="next_remedy JSON recorded on the job")
     watch = commands.add_parser("watch")
     watch.add_argument("--hide", action="store_true")
     args = parser.parse_args(argv)
@@ -383,7 +393,32 @@ def execute(argv=None, services=None):
             priority=args.priority,
         )
     elif args.command in {"pause", "resume", "reconcile", "retry"}:
-        result = control(root, services.game(root), args.key, args.command)
+        rung = json.loads(args.remedy) if getattr(args, "remedy", None) else None
+        result = control(root, services.game(root), args.key, args.command, remedy_rung=rung)
+    elif args.command == "what-if":
+        from .jobs import note_remedy
+        from . import remedy as ladder
+
+        options = json.loads(args.options)
+        if not isinstance(options, dict) or not 0 < args.seconds <= 90:
+            raise ValueError("what-if needs an options object and a budget in (0, 90] seconds")
+        job = Ledger(root).data["jobs"].get(args.key)
+        if job is None:
+            raise ValueError("unknown job key")
+        if not ladder.eligible(job):
+            result = {"fits": None, "reason": "job_not_on_the_remedy_ladder", "status": job.get("status")}
+        else:
+            game = services.game(root)
+            outcome = ladder.what_if(
+                root, game, services.catalog(root, game), dict(job, key=args.key), options, budget_seconds=args.seconds
+            )
+            rung = ladder.Rung(args.rung, args.kind, options)
+            check = ladder.record([], rung, ladder.needs_of(job) or {}, outcome, time.time())[-1]
+            # Only the unchanged request refreshes the job's needs: a relaxed re-plan's failure is
+            # not the job's constraint (and a new signature would re-open every rung).
+            fresh = outcome.get("needs") if args.rung == ladder.REPLAN.name else None
+            noted = note_remedy(root, args.key, check=check, next_remedy=json.loads(args.next), needs=fresh)
+            result = dict(outcome, check=check, noted=noted.get("noted"))
     elif args.command in {"run", "worker"}:
         game = services.game(root)
         # Catalog publication and job execution share the same writer lock.

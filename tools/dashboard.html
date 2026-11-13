@@ -210,7 +210,10 @@ function renderNow(d) {
       h("td", {}, badge(j.status, j.status_label)),
       h("td", {}, h("div", { class: "reason" }, j.reason || "-"),
         j.last_failure ? h("div", { class: "evidence" }, "마지막 실패: " + j.last_failure) : null,
-        j.evidence ? h("div", { class: "evidence" }, "증거: " + j.evidence) : null),
+        j.evidence ? h("div", { class: "evidence" }, "증거: " + j.evidence) : null,
+        j.needs ? h("div", { class: "evidence" }, "필요 (needs): " + j.needs) : null,
+        j.remedies_tried ? h("div", { class: "evidence" }, "시도한 해결책: " + j.remedies_tried) : null,
+        j.next_remedy ? h("div", { class: "evidence" }, "다음 해결책: " + j.next_remedy) : null),
       h("td", { class: "num" }, j.actions), h("td", { class: "num" }, fmtMin(j.age_minutes)),
       h("td", { class: "num" }, fmtMin(j.minutes_without_progress)),
     ]), i => (["blocked", "failed"].includes(n.jobs[i].status) ? { class: "blocked" } : {}));

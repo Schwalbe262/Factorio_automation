@@ -9,6 +9,7 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
+from . import remedy
 from .board import entity
 from .power_grid import plan_connection, replan_power_bridge
 from .transport import VECTORS, xy, plan_connection as belt_connection, underground_proof
@@ -1186,7 +1187,8 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             )
             if not isinstance(metadata.get("rate"), (int, float)) or metadata["rate"] <= 0:
                 return {"status": "blocked", "reason": "mining_rate_query_failed"}
-            count = min(8, math.ceil((target - rate) / metadata["rate"]))
+            # A shrink rung of the remedy ladder plans fewer drills now (growth adds the rest later).
+            count = remedy.scaled_count(min(8, math.ceil((target - rate) / metadata["rate"])))
             pending = self.prepare(obs, resource, count)
             if not pending.get("ok"):
                 detail = {

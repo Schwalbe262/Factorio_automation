@@ -367,6 +367,16 @@ class Dashboard:
                 evidence = job.get("evidence")
                 row["evidence"] = _text(summarize(evidence), 600) if evidence else None
                 row["last_failure"] = _text(job.get("last_failure"), 300) if job.get("last_failure") else None
+                # Remedy ladder (src/factorio_agent/remedy.py): what failed, what was tried, what comes next.
+                needs = job.get("needs")
+                row["needs"] = _text(summarize(needs), 400) if needs else None
+                tried = job.get("remedies_tried") or []
+                row["remedies_tried"] = (
+                    _text(", ".join(f"{t.get('rung')}:{'fits' if t.get('fits') else 'no'}" for t in tried[-6:]), 300)
+                    if tried
+                    else None
+                )
+                row["next_remedy"] = _text(summarize(job.get("next_remedy")), 200) if job.get("next_remedy") else None
             rows.append(row)
         order = {"running": 0, "waiting": 1, "pending": 2, "paused": 3, "blocked": 4, "failed": 5}
         rows.sort(key=lambda r: (order.get(r["status"], 9), r["priority"] if _num(r["priority"]) is not None else 0))

@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
-from . import evidence_capture
+from . import evidence_capture, remedy
 from .board import built_keys, entity
 from .routing import LONG_ROUTE_TURNS, VECTORS, route_trunks
 from .resource_policy import (
@@ -911,6 +911,12 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
 
     distance = abs(a["x"] - b["x"]) + abs(a["y"] - b["y"])
     node_budget = max(150000, min(400000, int(distance + 1) * 2000))
+    # Remedy ladder route relaxation (remedy.ROUTE_RELAX): longer fallback reach, more turns, more detour.
+    relax = remedy.route_limits()
+    long_turns = relax["long_route_turns"] or LONG_ROUTE_TURNS
+    if relax["max_detour_ratio"] is not None:
+        max_detour_ratio = max(max_detour_ratio or 1.35, relax["max_detour_ratio"])
+    reach = {"long_route_distance": relax["long_route_distance"]} if relax["long_route_distance"] else {}
     for attempt in range(8):
         route = route_trunks(
             a,
@@ -921,7 +927,8 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
             end_direction=destination["facing"],
             max_nodes=node_budget,
             candidate_validator=accepts_layers,
-            long_route_turns=LONG_ROUTE_TURNS,
+            long_route_turns=long_turns,
+            **reach,
             **({"max_detour_ratio": max_detour_ratio} if max_detour_ratio is not None else {}),
         )
         compiled = compile_crossings(route, foreign, maximum_span=survey["max_span"], verified_pipes=pipes)

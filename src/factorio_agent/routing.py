@@ -436,6 +436,7 @@ def route_trunks(
     candidate_validator=None,
     minimum_start_run=None,
     long_route_turns=None,
+    long_route_distance=None,
 ):
     """Select whole straight trunk corridors, never incremental squiggles.
 
@@ -449,6 +450,7 @@ def route_trunks(
     route of at least LONG_ROUTE_DISTANCE tiles, the fewest-turn tile corridors
     (``min_turn_paths``, at most that many turns, same detour bound) are offered to
     the validator; a cross-base route can need more corners than seven segments.
+    long_route_distance replaces LONG_ROUTE_DISTANCE (the remedy ladder's route relaxation).
     """
     failure = {"ok": False, "reason": "no_clean_trunk_corridor", "path": [], "segments": [], "visited": 0}
     try:
@@ -712,7 +714,8 @@ def route_trunks(
                     valid.append(((m["turns"], m["length"], tuple(path)), path, m))
             if valid:
                 break
-        if not valid and long_route_turns is not None and direct >= LONG_ROUTE_DISTANCE and minimum_start_run is None:
+        reach = LONG_ROUTE_DISTANCE if long_route_distance is None else long_route_distance
+        if not valid and long_route_turns is not None and direct >= reach and minimum_start_run is None:
             # A long cross-base route can need more corners than the seven-segment
             # skeleton families describe (stone bank north of the district, furnace
             # block south of the bus: 7 turns). Fall back to the fewest-turn whole

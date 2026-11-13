@@ -49,6 +49,7 @@ jobs.run_jobs: per pass one observe and at most one drill-cell survey (bootstrap
 | Plan | `science_growth.py` | staged red science block: start size, reserved slots, evidence growth rule (`science_growth` capability) |
 | Plan | `research_policy.py` | `choose_research` from catalog data (idle research lane) |
 | Plan | `incidents.py` | incident kinds, remedy menus, incident documents, `check_decision` |
+| Plan | `plan_needs.py`, `remedy.py` | failure contract `needs` of planners; remedy ladder rungs, options, resolver, read-only `what_if` |
 | Plan | `luna_client.py` | `LunaDecisionClient.decide(document)` via the Codex CLI (planner luna only) |
 | Game | `core/rcon.py`, `core/deterministic_game.py` | RCON client; `query`/`observe`/`act` (all world effects are Lua bodies in `act`) |
 | Game | `runtime.py` | `create`/`start`/`game_for`/`catalog_for`; `WorldBoundGame`; `NETWORK_SEGMENT_SETTINGS` |
@@ -113,9 +114,58 @@ All other top-level modules are capability controllers constructed in
 | Obsolete blocks | `obsolete.py`; `supply_cell_nodes`, `starter_retirement_nodes`, `science_retirement_nodes` | one retire node per obsolete block at -1000 (startup science: -599 while growth wants hardware) | retire before the successor is verified, while a dependent job is open or a bootstrap batch is funded; propose twice |
 | Supply cell planner | `supply_cell.supply_cell_nodes` (from `autopilot_nodes`) | add one `supply_cell` build node (-52) and later one retire node (-1000) | propose twice per map; retire while demand remains and no `produce` row took over |
 | Research planners | `research_capacity` (observe receipt, `industry.py` startup cell), `research_policy.choose_research` (`StarterExecutors.idle_action`) | size science rate/labs; start lab research when no job acts | start research while a job owns research or any job has an unresolved world effect |
+| Remedy ladder | `Supervisor._remedy_ladder`, `remedy.py`, `plan_needs.py` | a planning failure with `needs`: read-only what-if per rung, `retry --remedy` when it fits (section below) | retry without a fitting what-if, touch unknown outcomes, put options in job parameters |
 | Auto-retry | `Supervisor._auto_retry` | `retry` a blocked job after a new success, <= 3 times | retry unknown outcomes, rollbacks, deadlines |
 | Incidents | `incidents.IncidentTracker` | open `empty_queue`, `blocked_job`, `no_progress`, `planner_review` | act; planner none only logs |
 | Model (luna) | `luna_client` + `Supervisor._poll_decision` | one menu remedy: retry/pause a task, add <= 3 nodes, wait | send coordinates, Lua or entities (`supervisor.FORBIDDEN`); gate dispatch; retry unknown outcomes |
+
+## When a plan does not fit: the remedy ladder
+
+A spatial planner (site, route, bank, corridor, tap) that finds no plan does
+not leave its job blocked for a human fix. Three parts (`plan_needs.py`,
+`remedy.py`, `Supervisor._remedy_ladder`):
+
+1. **Failure contract.** `jobs._advance_job` stores `job["needs"]` for every
+   blocked/failed planning result (`plan_needs.from_result`): `kind` (`route`,
+   `tap`, `site`, `bank`, `preflight`, `power`, `plan`), `reason`, `block`,
+   `item`, `from`/`to`, `blockers` (entity, owner, position), `limit`, `tried`,
+   `rejected_by`, and `change`: the single change that would unblock it. A
+   planner may return `plan_needs` itself; otherwise the record is derived from
+   the evidence it already returns. A wait for items or research has no needs.
+   (`evidence["needs"]`, item -> units, is a different thing: `critical_path.claims`.)
+2. **Ladder.** One rule walks the rungs in a fixed order, `remedy.LADDER`:
+   `replan` (same request, facts changed), `layout` (another candidate of the
+   block), `site` (another site / a longer connection), `relax` (declared soft
+   constraints up to a hard maximum), `clear` (remove what is ours and in the
+   way: paid guarded `mine`, plan republished first, replacement before
+   removal), `shrink` (a smaller request now). A rung is a set of options the
+   planner reads while it plans (`remedy.option`, set around the step from
+   `job["remedy"]`; never in the job parameters). Rungs per planner:
+   `remedy.RELAXATIONS`. Bounds: each rung once per `needs` signature; one
+   what-if per supervisor cycle and per job every `REMEDY_CHECK_SECONDS`, at
+   most `REMEDY_MAX_CHECKS` before the facts change; a rung costing more actor
+   time than waiting for a known unblock (`needs["wait_seconds"]`) or spending an
+   item the critical path claims is skipped. Unknown outcomes, rollbacks and
+   deadlines never enter (`remedy.eligible`).
+3. **What-if.** Before a rung is applied, `what-if` (CLI command, `remedy.what_if`)
+   re-plans the job read-only with the rung's options: the planner's pure
+   `prepare` from `postmortem.DRY_RUN` on `postmortem.ReadOnlyGame` and a
+   sandbox copy of the state outside the run, planning budget
+   `remedy.WHAT_IF_SECONDS`. Only a plan (or no answer, e.g. a refused write)
+   leads to `retry --remedy {rung, kind, options}`; a no-fit is recorded and
+   the next rung is checked next cycle. With every rung spent the job stays
+   blocked: the queue node's `retry_plan` names `wait_for` (`needs["change"]`)
+   and `replan` is re-armed after `REMEDY_FACTS_SECONDS` once the published
+   facts changed (`_site_facts`), else after `REMEDY_RECHECK_SECONDS`.
+
+Visible on the job (ledger, observe receipt `jobs`, dashboard): `needs`,
+`remedies_tried` (rung, fits, reason per check), `next_remedy`, `remedy` (the
+applied rung); events `remedy_checked` / `remedy_applied` in
+`job-events.jsonl`, `remedy_check` in `logs/controller-events.jsonl`.
+`tools/waste_report.py` prints blocked seconds per `needs` kind and per rung
+checked / fitted / applied / resolved, so a fleet shows which planners still
+dead-end. A capability without a pure `prepare` keeps the older auto-retry
+rules (`_auto_retry`, `_replan_retry`).
 
 Inside a job, `StarterExecutors.step` first runs shared upkeep before the
 capability's own controller: `pending_repair` and `_approved_initial_defense`

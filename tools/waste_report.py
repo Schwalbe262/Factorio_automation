@@ -366,6 +366,9 @@ def analyse(root: Path) -> dict:
                     n,
                 )
 
+    # --- remedy ladder: seconds blocked per needs kind, remedies applied and resolved ---------
+    remedies = remedy_summary(run.events, end, w, cap)
+
     # Dispatch latency of on-path roadmap steps only (a fixed priority keeps a step off the path on purpose):
     # ready = the later of every `requires` capability's and every `after` step's first success.
     first_success = {}
@@ -424,7 +427,74 @@ def analyse(root: Path) -> dict:
                     },
                 )
 
-    return {"run": str(root), "seed": seed, "end_minute": round(end / 3600, 1), "waste": w.as_dict()}
+    return {
+        "run": str(root),
+        "seed": seed,
+        "end_minute": round(end / 3600, 1),
+        "waste": w.as_dict(),
+        "remedies": remedies,
+    }
+
+
+def remedy_summary(events, end, w=None, cap=str) -> dict:
+    """Blocked seconds per ``needs`` kind (``blocked_by_needs`` waste rows) and per remedy rung how often it
+    was applied and how often the job's next terminal after it was a success (``resolved``).
+
+    A block with needs lasts from its terminal event to the job's next retry, or to ``end``. Rungs come
+    from ``remedy_applied`` events (``jobs.control`` retry with a remedy), checks from ``remedy_checked``.
+    """
+    by_key = defaultdict(list)
+    for e in events:
+        if e.get("event") in ("terminal", "retry", "remedy_applied", "remedy_checked"):
+            by_key[e.get("key")].append(e)
+    rungs = defaultdict(lambda: {"checked": 0, "fitted": 0, "applied": 0, "resolved": 0})
+    kinds = defaultdict(lambda: {"seconds": 0.0, "blocks": 0})
+    for key, rows in by_key.items():
+        open_block = None
+        pending = []
+        for e in rows:
+            tick = e.get("tick") if isinstance(e.get("tick"), int) else None
+            if e["event"] == "remedy_checked":
+                row = rungs[str(e.get("rung"))]
+                row["checked"] += 1
+                row["fitted"] += bool(e.get("fits"))
+            elif e["event"] == "remedy_applied":
+                rungs[str(e.get("rung"))]["applied"] += 1
+                pending.append(str(e.get("rung")))
+            elif e["event"] == "retry" and open_block is not None:
+                kind, start, reason = open_block
+                if tick is not None and start is not None:
+                    kinds[kind]["seconds"] += max(0, tick - start) / TICKS
+                open_block = None
+            elif e["event"] == "terminal":
+                if e.get("status") == "succeeded":
+                    for rung in pending:
+                        rungs[rung]["resolved"] += 1
+                    pending = []
+                needs = e.get("needs") if isinstance(e.get("needs"), dict) else None
+                if needs and e.get("status") in ("blocked", "failed"):
+                    kinds[str(needs.get("kind"))]["blocks"] += 1
+                    start = tick if tick is not None else (e.get("evidence") or {}).get("tick")
+                    open_block = (
+                        str(needs.get("kind")),
+                        start if isinstance(start, int) else None,
+                        str(e.get("reason")),
+                    )
+        if open_block is not None and open_block[1] is not None:
+            kind, start, reason = open_block
+            kinds[kind]["seconds"] += max(0, end - start) / TICKS
+            if w is not None:
+                w.add(
+                    "blocked_by_needs",
+                    (end - start) / TICKS,
+                    {"tick": start, "job": cap(key), "reason": f"{kind}: {reason[:100]}"},
+                )
+    return {
+        "blocked_by_needs_kind": {
+            k: {"seconds": round(v["seconds"], 1), "blocks": v["blocks"]} for k, v in kinds.items()
+        },
+        "rungs": dict(rungs),
+    }
 
 
 def runs_for(target: str, runtime: Path = RUNTIME) -> list[Path]:
@@ -467,6 +537,21 @@ def aggregate(results: list[dict]) -> dict:
     return dict(sorted(out.items(), key=lambda kv: -kv[1]["total_seconds"]))
 
 
+def remedy_totals(results) -> tuple[dict, dict]:
+    """Fleet sums of ``remedy_summary``: (needs kind -> seconds/blocks, rung -> counters)."""
+    kinds = defaultdict(lambda: {"seconds": 0.0, "blocks": 0})
+    rungs = defaultdict(lambda: {"checked": 0, "fitted": 0, "applied": 0, "resolved": 0})
+    for result in results:
+        found = result.get("remedies") or {}
+        for kind, row in (found.get("blocked_by_needs_kind") or {}).items():
+            kinds[kind]["seconds"] += row.get("seconds", 0)
+            kinds[kind]["blocks"] += row.get("blocks", 0)
+        for rung, row in (found.get("rungs") or {}).items():
+            for k in rungs[rung]:
+                rungs[rung][k] += row.get(k, 0)
+    return dict(kinds), dict(rungs)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("target", help="a runtime directory or a fleet name")
@@ -495,6 +580,16 @@ def main(argv=None) -> int:
         for cause in row["causes"][:3]:
             print(
                 f"{'':34s}{cause['seconds']:>6}s {cause['runs']:>2} runs x{cause['count']:<4} {cause['job']}: {cause['reason']}"
+            )
+    kinds, rungs = remedy_totals(results)
+    if kinds or rungs:
+        print("remedy ladder (blocked seconds per needs kind; rung checked/fitted/applied/resolved):")
+        for kind, row in sorted(kinds.items(), key=lambda kv: -kv[1]["seconds"]):
+            print(f"  needs {kind:12s} {row['seconds']:>7.0f}s in {row['blocks']} block(s)")
+        for rung, row in sorted(rungs.items()):
+            print(
+                f"  rung  {rung:28s} checked {row['checked']:>3} fitted {row['fitted']:>3} "
+                f"applied {row['applied']:>3} resolved {row['resolved']:>3}"
             )
     if len(results) > 1:
         return 0

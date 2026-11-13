@@ -344,7 +344,43 @@ def connect_inputs(
     along range); ``demand`` maps item -> declared plates/minute. Returns
     ``{"ok": True, "entities", "routes", "taps", "ignored_units", "sources"}``
     with ``entities`` = ``entities`` + taps + routes, or a failure naming the item.
+
+    Routes are planned one after the other, so an earlier short route can wall
+    off a later port (eval-1575138435: the 5-tile copper branch ran across the
+    iron input's approach; all three iron tap rows then had no corridor). When
+    an input fails, the whole set is planned again with that input first, at
+    most once per input (``route_order`` on the result; a failure carries
+    ``orders_tried``).
     """
+    order = list(range(len(inputs)))
+    tried = []
+    while True:
+        tried.append([inputs[i]["item"] for i in order])
+        found = _connect_in_order(
+            game,
+            builder,
+            obs,
+            bus,
+            owner=owner,
+            allocation=allocation,
+            inputs=[inputs[i] for i in order],
+            entities=entities,
+            demand=demand,
+            span=span,
+            route=route,
+        )
+        if found.get("ok"):
+            return dict(found, route_order=tried[-1]) if len(tried) > 1 else found
+        failed = next((i for i in order if inputs[i]["item"] == found.get("item")), None)
+        if failed is None or failed == order[0] or len(tried) > len(inputs):
+            return dict(found, orders_tried=tried) if len(tried) > 1 else found
+        order = [failed] + [i for i in order if i != failed]
+        if [inputs[i]["item"] for i in order] in tried:
+            return dict(found, orders_tried=tried)
+
+
+def _connect_in_order(game, builder, obs, bus: dict, *, owner, allocation, inputs, entities, demand, span, route):
+    """``connect_inputs`` for one fixed input order."""
     view = BusView(bus)
     # Trunk extensions cross other blocks' planned belts too and may not meet their hardware.
     blocks = _board_blocks(game, obs)
