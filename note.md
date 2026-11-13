@@ -252185,3 +252185,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - failure: round auto-1113-1848 invalid (ImportError CHUNK_CHARTED_LUA: main checkout merged during the round); a stopped loop shell kept running and started a second fleet; GUI supervisor was untracked by lifecycle (stale pid) and had to be killed before new-map.
 - result: v2 at 3e8669f, gate PASS 2751; GUI map eval-4177156614 and round all-1113-2047 started on it.
 - next: read all-1113-2047; fix production_row_input_source_missing and bus reach.
+
+## 2026-11-13 mine frame follows the patch (neighbouring ores)
+- part: mining_layout_policy / mining_border / outposts; goal: owner screenshot eval-4177156614 (stone touching iron).
+- found: bank reserved_area = box of footprint+exit+apron (iron 7x27, 7x12 drills); stone exit faced east into iron; drills already clean.
+- actions: grid cells also refuse pole/collector on other ore; patch_grid frame_rects, mixed_ore_zone, border_lane decision (filter splitter device, payback rule, logistics-gated); bank reserved_rects + patch_frame; mining checks compare rects; ports facing another patch rank last and outposts try other sides; configure_splitter takes a filter (paid, read back); observation carries splitter_filter.
+- result: tests/test_v2_mining_border.py 14 pass; mining/outpost lupa set 176 pass.
+- not yet: building border lanes (native ore rule + resource_survey must accept a declared mixed area), whole mixed-zone sorter, site-plan zones still bbox.
+- next: live check of reserved_rects publish and the edge turn on a map with touching patches.

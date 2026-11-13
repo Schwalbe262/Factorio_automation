@@ -39,6 +39,7 @@ from .power_grid import plan_connection as power_connection
 from .resource_policy import MINING_EXIT_LUA, annotate_mining_exit, mining_exit_candidates
 from .site.transform import Transform, apply
 from .smelting import merge_entities
+from .mining_border import FACING_REACH, FILTER_RESEARCH, decide_border_lane, filter_device, mixed_zone, tile_rects
 from .actor_client import CHUNK_CHARTED_LUA
 
 
@@ -519,6 +520,13 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
         tx, ty = site_exit["corridor_start"]
         return cells + abs(x - tx) + abs(y - ty)
 
+    foreign = {p for p, t in tiles.items() if t["name"] != resource}
+
+    def faces(core):
+        """True when another resource's ore lies ahead of the output port (the exit would face that patch)."""
+        x, y = _xy(core["ports"][0])
+        return any((x + d, y + dy) in foreign for d in range(1, FACING_REACH + 1) for dy in (-1, 0, 1))
+
     def covered(plan):
         seen = {}
         counts = {"left": 0, "right": 0}
@@ -563,6 +571,7 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
             continue
         row_tiles = min(base[2].values())
         amount = min(base[0], 100000)
+        clear = 0 if faces(core) else 1
         if site_exit is None:
             score = (slots - pairs, row_tiles, base[1], amount, -x * x - y * y)
         else:
@@ -570,6 +579,8 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
             if cost is None or (zone is not None and not _inside(future["mining_footprint"], zone)):
                 continue
             score = (slots - pairs, row_tiles, -cost, base[1], amount)
+        if foreign:
+            score = (clear,) + score  # a port that does not face another patch comes first
         ranked.append(
             dict(
                 x=x,
@@ -580,6 +591,7 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
                 unique_resource_amount=base[0],
                 unique_resource_tiles=base[1],
                 row_resource_tiles=base[2],
+                faces_neighbour=not clear,
                 score=score,
             )
         )
@@ -644,7 +656,12 @@ def _grid_at(ore, other, blocked, reserved, bounds, ox, oy, radius):
     tops = [row0 + BANK_PITCH * k for k in range(int((max(ys) + radius - row0) // BANK_PITCH) + 1)]
     span = math.floor(radius)
 
-    def valid(x, y):
+    def check(x, y, top):
+        """``(cells, None)`` for a clean drill, ``(cells, foreign tiles)`` for a border drill, else None.
+
+        A border drill's mining area holds another resource (it would put that
+        item on this lane); its body, pole and collector tiles never stand on it.
+        """
         if not (bounds[0][0] <= x - radius and x + radius < bounds[1][0]):
             return None
         if not (bounds[0][1] <= y - radius and y + radius < bounds[1][1]):
@@ -655,29 +672,54 @@ def _grid_at(ore, other, blocked, reserved, bounds, ox, oy, radius):
         box = [[x - 1.5, y - 1.5], [x + 1.5, y + 1.5]]
         if any(overlap(box, r) for r in reserved):
             return None
-        area = [(x + i, y + j) for i in range(-span, span + 1) for j in range(-span, span + 1)]
-        if any(p in other for p in area):
+        # The cell's own frame tiles (body, pole, collector) never take another patch's ore.
+        lane = {(x + 2, y)} | {(x + dx, top + 2) for dx in range(-1, 3)}
+        if (foot | lane) & other.keys():
             return None
+        area = [(x + i, y + j) for i in range(-span, span + 1) for j in range(-span, span + 1)]
         cells = [p for p in area if p in ore]
-        return cells if len(cells) >= GRID_MIN_ORE_TILES else None
+        if len(cells) < GRID_MIN_ORE_TILES:
+            return None
+        foreign = [p for p in area if p in other]
+        return cells, (foreign or None)
 
     rows, covered, drills = [], set(), 0
+    border = []
     for top in tops[:MAX_GRID_ROWS]:
-        used, placed = [], []
+        used, placed, edge_cells = [], [], []
         for x in columns:
-            hit = [(x, y, cells) for y in (top, top + 4) if (cells := valid(x, y))]
+            hit, rim = [], []
+            for y in (top, top + 4):
+                found = check(x, y, top)
+                if found and found[1] is None:
+                    hit.append((x, y, found[0]))
+                elif found:
+                    rim.append((x, y, found[0], found[1]))
             if hit:
                 used.append(x)
                 placed += [(x, y) for x, y, _ in hit]
                 for _, _, cells in hit:
                     covered.update(cells)
+            edge_cells += rim
         if used:
             rows.append({"top_y": top, "columns": used, "drills": placed})
             drills += len(placed)
+            border.append((top, edge_cells))
     if not rows:
         return None
     edge = max(max(r["columns"]) for r in rows)
     amount = sum(ore[p] for p in covered)
+    for row, (top, edge_cells) in zip(rows, border):
+        # Border drills of this row: own ore they would add, and what else their areas hold.
+        gained = set()
+        for _, _, cells, _ in edge_cells:
+            gained.update(p for p in cells if p not in covered)
+        row["border"] = {
+            "drills": [(x, y) for x, y, _, _ in edge_cells],
+            "gained_tiles": len(gained),
+            "gained_amount": sum(ore[p] for p in gained),
+            "foreign": sorted({other[p] for _, _, _, f in edge_cells for p in f}),
+        }
     return {
         "origin": (ox, oy),
         "rows": rows,
@@ -691,7 +733,7 @@ def _grid_at(ore, other, blocked, reserved, bounds, ox, oy, radius):
     }
 
 
-def patch_grid(snapshot, policy, reservations=(), *, forbidden=(), origin=None):
+def patch_grid(snapshot, policy, reservations=(), *, forbidden=(), origin=None, filter_ready=False):
     """The whole-patch drill grid ("simple" layout of the Mining Patch Planner), in the policy's flow.
 
     Generalises the paired bank (:func:`paired_mining.mining_pair`): the patch is
@@ -715,9 +757,14 @@ def patch_grid(snapshot, policy, reservations=(), *, forbidden=(), origin=None):
     back = frame.inverse()
     resource = policy["resource"]
     ore = {_xy(t): t["amount"] for t in tiles if t["name"] == resource}
-    other = {_xy(t) for t in tiles if t["name"] != resource}
+    other = {_xy(t): t["name"] for t in tiles if t["name"] != resource}
     if not ore:
         return {"ok": False, "reason": "mining_grid_patch_has_no_resource"}
+    mixed = mixed_zone(ore, other)
+    if mixed is not None:
+        (x0, y0), (x1, y1) = mixed["bbox"]
+        x0, y0, x1, y1 = frame.rect(x0, y0, x1, y1)
+        mixed["bbox"] = [[x0, y0], [x1, y1]]
     blocked = {back.point(x, y) for x, y in forbidden}
     radius = snapshot["native"]["mining_radius"]
     base = policy["grid_origin"]
@@ -732,24 +779,54 @@ def patch_grid(snapshot, policy, reservations=(), *, forbidden=(), origin=None):
         if grid is not None and (best is None or grid["score"] > best["score"]):
             best = grid
     if best is None:
-        return {"ok": False, "reason": "mining_grid_has_no_drill_site", "shifts_scored": len(shifts)}
+        return {
+            "ok": False,
+            "reason": "mining_grid_has_no_drill_site",
+            "shifts_scored": len(shifts),
+            **({"mixed_ore_zone": mixed} if mixed else {}),
+        }
 
     def world(x, y):
         mx, my = frame.point(x, y)
         return {"x": mx, "y": my}
 
     rows = []
+    frame_tiles = set()
     for index, row in enumerate(best["rows"]):
         right = max(row["columns"])
-        rows.append(
-            {
-                "index": index,
-                "anchor": world(right, row["top_y"]),
-                "columns": len(row["columns"]),
-                "drills": [world(x, y) for x, y in row["drills"]],
-                "port": world(best["edge_x"] + 2, row["top_y"] + 2),
-            }
-        )
+        top = row["top_y"]
+        port = (best["edge_x"] + 2, top + 2)
+        # This row's frame: drill bodies, their poles and the collector up to the common edge.
+        tiles = {(x + i, y + j) for x, y in row["drills"] for i in (-1, 0, 1) for j in (-1, 0, 1)}
+        tiles |= {(x + 2, y) for x, y in row["drills"]}
+        tiles |= {(min(row["columns"]) - 1 + k, top + 2) for k in range(int(port[0] - min(row["columns"])) + 2)}
+        frame_tiles |= {frame.point(x, y) for x, y in tiles}
+        edge = row["border"]
+        foreign = edge["foreign"][0] if edge["foreign"] else ""
+        device = filter_device(port, resource, foreign, sink="chest")
+        record = {
+            "index": index,
+            "anchor": world(right, top),
+            "columns": len(row["columns"]),
+            "drills": [world(x, y) for x, y in row["drills"]],
+            "port": world(*port),
+        }
+        if edge["drills"]:
+            lane = decide_border_lane(
+                edge["gained_amount"],
+                edge["gained_tiles"],
+                edge["foreign"],
+                device["entities"],
+                filter_ready=filter_ready,
+            )
+            lane["drills"] = [world(x, y) for x, y in edge["drills"]]
+            if lane["decision"] == "mixed":
+                lane["mixed"] = [resource, foreign]
+                lane["device"] = turned_bank(
+                    _plan(device["entities"], [], resource=resource), policy["flow"], (base["x"], base["y"])
+                )["entities"]
+            record["border_lane"] = lane
+        rows.append(record)
     return {
         "ok": True,
         "origin": world(*best["origin"]),
@@ -761,15 +838,22 @@ def patch_grid(snapshot, policy, reservations=(), *, forbidden=(), origin=None):
         "covered_amount": best["covered_amount"],
         "score": list(best["score"]),
         "shifts_scored": len(shifts),
+        # The whole-patch frame (row-wise rects): every row's drill bodies, poles and collector.
+        "frame_rects": tile_rects(frame_tiles),
+        **({"mixed_ore_zone": mixed} if mixed else {}),
     }
 
 
 def grid_summary(grid) -> dict:
     """The record a bank keeps of its patch grid (its own plan is one row pair of it)."""
-    return {
-        k: deepcopy(grid[k])
-        for k in ("origin", "flow", "drills", "covered_tiles", "unreachable_tiles", "score", "shifts_scored")
-    } | {"rows": [{k: deepcopy(r[k]) for k in ("index", "anchor", "columns", "port")} for r in grid["rows"]]}
+    keys = ("origin", "flow", "drills", "covered_tiles", "unreachable_tiles", "score", "shifts_scored")
+    optional = ("frame_rects", "mixed_ore_zone")
+    row_keys = ("index", "anchor", "columns", "port", "border_lane")
+    return (
+        {k: deepcopy(grid[k]) for k in keys}
+        | {k: deepcopy(grid[k]) for k in optional if k in grid}
+        | {"rows": [{k: deepcopy(r[k]) for k in row_keys if k in r} for r in grid["rows"]]}
+    )
 
 
 def plan_offore_exit(game, builder, obs, core, future, reservations):
@@ -1087,6 +1171,7 @@ def prepare_new_bank(
         if not snapshot.get("ok"):
             return snapshot
         grid = None
+        mixed_record = None
         if policy is None:
             # Whole-patch grid (patch_grid): its lattice becomes the bank's policy grid, so this
             # bank is one row pair of it; a bank already on the patch fixes the lattice.
@@ -1099,7 +1184,9 @@ def prepare_new_bank(
                 reservations,
                 forbidden=forbidden_tiles(planning, obs, area),
                 origin=fixed["origin"] if fixed else None,
+                filter_ready=bool((obs.get("technologies") or {}).get(FILTER_RESEARCH)),
             )
+            mixed_record = planned_grid.get("mixed_ore_zone")
             if planned_grid.get("ok"):
                 grid = planned_grid
         sites = []
@@ -1202,15 +1289,23 @@ def prepare_new_bank(
                 clearance_world_id=obs["world_id"],
             )
             area = deepcopy(future["mining_footprint"])
+            outside = set()
             for p in exit_plan["path"] + [e["position"] for e in exit_plan["output_access"]]:
                 for axis, k in enumerate(("x", "y")):
                     area[0][axis] = min(area[0][axis], p[k] - 0.5)
                     area[1][axis] = max(area[1][axis], p[k] + 0.5)
-            met = [name for name, other in registered if overlap(area, other)]
+                if not overlap(
+                    [[p["x"] - 0.49, p["y"] - 0.49], [p["x"] + 0.49, p["y"] + 0.49]], future["mining_footprint"]
+                ):
+                    outside.add((p["x"], p["y"]))
+            # The reservation is the row pair's footprint plus its exit and output access, not their box.
+            rects = [deepcopy(future["mining_footprint"])] + tile_rects(outside)
+            met = [name for name, other in registered if any(overlap(r, other) for r in rects)]
             if met:
                 failures.append("bank_reserved_area_meets_registered_block:" + str(met[0]))
                 continue
             plan.update(
+                reserved_rects=deepcopy(rects),
                 mining_reserved_area=deepcopy(future["mining_footprint"]),
                 layout_contract=deepcopy(contract),
                 flow_contract={
@@ -1229,6 +1324,8 @@ def prepare_new_bank(
                 ready=False,
                 reserved_pair_slots=candidate["reserved_pair_slots"],
                 reserved_area=area,
+                reserved_rects=rects,
+                **({"patch_frame": deepcopy(grid["frame_rects"])} if grid and grid.get("frame_rects") else {}),
                 mining_reserved_area=future["mining_footprint"],
                 nominal_rate_per_minute=profile["collector_ceiling_per_minute"],
                 remaining_resource_survey=live_resources["unique_remaining_resource"],
@@ -1244,6 +1341,7 @@ def prepare_new_bank(
                     growth=selected["growth"],
                     candidate_count=len(sites),
                     native_queries=planning.queries,
+                    faces_neighbour=bool(candidate.get("faces_neighbour")),
                     **({"site_score": list(candidate["score"])} if site_exit is not None else {}),
                 ),
             )
@@ -1252,6 +1350,7 @@ def prepare_new_bank(
             "reason": "no_policy_compliant_paired_bank_with_growth_and_power",
             "candidate_count": len(sites),
             "candidate_failures": failures[-8:],
+            **({"mixed_ore_zone": mixed_record} if mixed_record else {}),
         }
     except _BudgetExceeded as exc:
         return {"ok": False, "reason": "mining_layout_planning_budget_exceeded", "detail": str(exc)}
