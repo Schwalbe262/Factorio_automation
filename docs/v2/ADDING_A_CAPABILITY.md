@@ -86,7 +86,14 @@ Follow `production_site.place_line`:
 Legacy controllers (`science.legacy_science_candidates`,
 `green_science.LEGACY_GREEN_ANCHORS`, `brick_production.prepare(anchors=...)`,
 `steel_production.prepare(anchors=...)`) still carry development-map
-coordinates. Do not copy them.
+coordinates. Do not copy them. Red and green science use theirs only when
+the controller has no site service; with one, an empty allocation is a
+blocked reason (`green_science_needs_deeper_district`, ...).
+
+A route may end inside a registered board block only at one of its
+registered, built ports (`transport._production_keepouts`). A consumer
+that taps or feeds another block (green's plate splitter branch, its lab
+entry) extends its chain to a port just outside that block's reservation.
 
 ## 4. Route, power, preflight
 

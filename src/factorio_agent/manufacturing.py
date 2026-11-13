@@ -90,13 +90,30 @@ def science_consumer_row(x, y, count):
     )
 
 
-def green_core(x, y, count):
+GREEN_CORE_DEPTH = 48  # narrow core: plate edge (west) to far edge (east)
+GREEN_CORE_LENGTH = 54  # along the plate edge (53 used, even so a site fit can turn it)
+
+
+def green_core(x, y, count, *, narrow=False):
+    """Green science core; plates enter on the west edge, packs leave east.
+
+    The reserved area is ``[x - 10.5, x + 43.5) x [y - 10.5, y + 42.5)``
+    (54 x 53). ``narrow`` moves the inserter cell 4 tiles west, directly
+    behind the circuit cell, which trims the reservation to
+    ``[x - 10.5, x + 37.5) x [y - 10.5, y + 43.5)`` (``GREEN_CORE_DEPTH`` x
+    ``GREEN_CORE_LENGTH``): 48 tiles from the plate edge, the depth of a
+    master plan district strip. The internal routes stay inside either
+    reservation.
+    """
+    inserters_dx = 28 if narrow else 32
     cells = {
         "gears": recipe_cell(x, y, "iron-gear-wheel", ["iron-plate"], split_output=True),
         "belts": recipe_cell(x + 24, y, "transport-belt", ["iron-gear-wheel", "iron-plate"]),
         "wire": recipe_cell(x, y + 16, "copper-cable", ["copper-plate"]),
         "circuits": recipe_cell(x + 16, y + 16, "electronic-circuit", ["copper-cable", "iron-plate"]),
-        "inserters": recipe_cell(x + 32, y + 16, "inserter", ["electronic-circuit", "iron-gear-wheel", "iron-plate"]),
+        "inserters": recipe_cell(
+            x + inserters_dx, y + 16, "inserter", ["electronic-circuit", "iron-gear-wheel", "iron-plate"]
+        ),
         "green": science_consumer_row(x + 8, y + 36, count),
         "iron": fanout(x - 8, y - 8, "iron-plate", 4),
     }
@@ -122,7 +139,9 @@ def green_core(x, y, count):
         "entities": merge_entities(*(c["entities"] for c in cells.values())),
         "connections": pairs[6:] + pairs[:6],
         "ports": [ip("iron", "iron-plate"), ip("wire", "copper-plate"), op("green")],
-        "reserved_area": [[x - 10.5, y - 10.5], [x + 43.5, y + 42.5]],
+        "reserved_area": [[x - 10.5, y - 10.5], [x + 37.5, y + 43.5]]
+        if narrow
+        else [[x - 10.5, y - 10.5], [x + 43.5, y + 42.5]],
     }
 
 
@@ -143,6 +162,35 @@ def lab_green_entry(lab_plan):
         "port": port("logistic-science-pack", x, y + 3, 0),
         "entities": es,
         "pair": {"input": [x, y + 2], "output": [x, y - 1], "direction": 0, "span": 3},
+    }
+
+
+def lab_green_entry_outside(lab_plan):
+    """``lab_green_entry`` with its receiving port moved outside the lab block.
+
+    A plan-site science block is a registered board reservation: a belt
+    route may only end at a port outside it (``transport._production_keepouts``),
+    and red science's own route runs up the first column east of the block
+    into the lab belt head. Below the labs the chain doglegs one column west
+    and back, then tunnels east under that column (one underground, gap 3)
+    to the port 5 tiles east of the head, outside the block; the last tiles
+    are the old south side-load, so green still rides the free lane.
+    """
+    entry = lab_green_entry(lab_plan)
+    x, y = entry["join"]["x"], entry["join"]["y"] + 3
+    es = entry["entities"] + [
+        entity("transport-belt", x, y + 4, 0),
+        entity("transport-belt", x - 1, y + 4, 4),
+        entity("transport-belt", x - 1, y + 5, 0),
+        dict(entity("underground-belt", x, y + 5, 12), belt_to_ground_type="output"),
+        dict(entity("underground-belt", x + 4, y + 5, 12), belt_to_ground_type="input"),
+        entity("transport-belt", x + 5, y + 5, 12),
+    ]
+    return {
+        "join": entry["join"],
+        "port": port("logistic-science-pack", x + 5, y + 5, 12),
+        "entities": es,
+        "pairs": [entry["pair"], {"input": [x + 4, y + 5], "output": [x, y + 5], "direction": 12, "span": 4}],
     }
 
 

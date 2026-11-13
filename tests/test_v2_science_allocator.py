@@ -62,9 +62,19 @@ class ScienceAllocatorTests(unittest.TestCase):
 
 
 class GreenAllocatorTests(unittest.TestCase):
-    def test_default_district_depth_cannot_hold_the_green_core(self):
+    def test_default_district_depth_holds_the_narrow_green_core(self):
         with TemporaryDirectory() as directory:
             site, _, _ = service(Path(directory))
+            self.assertEqual(site.plan("w1").district_depth, 48)
+            cores = planned_green_cores(site, "w1", 3)
+            self.assertTrue(cores)
+            for core in cores:
+                self.assertTrue(inside(core["reserved_area"], site.allocation(core["allocation"], "w1").rect))
+
+    def test_shallower_district_strips_cannot_hold_the_green_core(self):
+        config = SiteConfig(district_depth=32, district_depth_fallbacks=(24,))
+        with TemporaryDirectory() as directory:
+            site, _, _ = service(Path(directory), config=config)
             self.assertEqual(planned_green_cores(site, "w1", 3), [])
             self.assertEqual(site.plan("w1").allocations, [])
 
