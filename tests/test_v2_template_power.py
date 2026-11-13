@@ -33,6 +33,22 @@ class TemplatePowerTests(unittest.TestCase):
     def test_lab_row_poles_form_one_network(self):
         self.assertEqual(len(pole_groups(lab_row(1.5, 8.5)["entities"])), 1)
 
+    def test_staged_subsets_stay_one_network(self):
+        """A staged block builds a prefix of slots (science_growth): 2 of 8 labs, 1..6 machines."""
+        from factorio_agent.science_growth import lab_slots, machine_slots
+
+        labs = lab_row(1.5, 8.5)
+        for built in range(1, 9):
+            rest = [e for slot in lab_slots(labs)[built:] for e in slot]
+            entities = [e for e in labs["entities"] if e not in rest]
+            self.assertEqual(len(pole_groups(entities)), 1, built)
+        for count in range(1, 7):
+            row = science_row(8.5, 22.5, count)
+            for built in range(1, count + 1):
+                rest = [e for slot in machine_slots(row)[built:] for e in slot]
+                entities = [e for e in row["entities"] if e not in rest]
+                self.assertEqual(len(pole_groups(entities)), 1, (count, built))
+
 
 if __name__ == "__main__":
     unittest.main()

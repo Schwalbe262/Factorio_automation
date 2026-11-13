@@ -42,6 +42,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Plan | `progression.py` | `ROADMAP` (Step list), `autopilot_nodes`, `capacity_nodes`, `produce_nodes`, `lookahead_demand`, `bulk_item_demand` |
 | Plan | `capacity_planning.py` | `plan_capacity`: starter cells, wait vs expand by time |
 | Plan | `research_capacity.py` | labs + science assemblers sized together; `research_capacity_receipt`, `recommended_science_rate` |
+| Plan | `science_growth.py` | staged red science block: start size, reserved slots, evidence growth rule (`science_growth` capability) |
 | Plan | `research_policy.py` | `choose_research` from catalog data (idle research lane) |
 | Plan | `incidents.py` | incident kinds, remedy menus, incident documents, `check_decision` |
 | Plan | `luna_client.py` | `LunaDecisionClient.decide(document)` via the Codex CLI (planner luna only) |

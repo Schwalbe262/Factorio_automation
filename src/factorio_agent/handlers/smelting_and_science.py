@@ -95,6 +95,26 @@ def validate_automation_science(parameters):
     validate_rate(parameters)
 
 
+def science_growth_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "science_growth")
+    if early is not None:
+        return early
+    result = ex.builder.ensure_power(obs)
+    if result.get("status") != "succeeded":
+        return result
+    return ex.science.grow(obs, parameters or {})
+
+
+def science_growth_proof(ex, obs, result, parameters):
+    return ex.science.growth_proof(obs, parameters)
+
+
+def validate_science_growth(parameters):
+    from ..science import validate_growth
+
+    validate_growth(parameters)
+
+
 def logistic_science_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "logistic_science")
     if early is not None:
@@ -133,6 +153,7 @@ register(
     proof=automation_science_proof,
     validate=validate_automation_science,
 )
+register("science_growth", step=science_growth_step, proof=science_growth_proof, validate=validate_science_growth)
 register(
     "logistic_science", step=logistic_science_step, proof=logistic_science_proof, validate=validate_logistic_science
 )

@@ -104,6 +104,14 @@ CAPABILITIES = {
         "requires": ["smelting_district"],
         "effect": "reserve normal machine science and labs, connect raw plate belts and power; no actor-fed science inputs",
     },
+    "science_growth": {
+        "parameters": {
+            "labs": "integer [1,8], built labs of the staged red science block after growth",
+            "machines": "integer [1,8], built red science machines after growth",
+        },
+        "requires": ["automation_science"],
+        "effect": "build reserved lab and science machine slots of the staged red science block (science_growth.py); proposed only on observed lab activity",
+    },
     "logistic_science": {
         "parameters": {
             "rate_per_minute": "finite number (0,30], requested design rate; commissioning does not certify sustained throughput"
@@ -409,6 +417,8 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "bulk_item_demand": obs.get("bulk_item_demand"),
         "research_capacity": obs.get("research_capacity"),
         "research_capacity_error": obs.get("research_capacity_error"),
+        "science_growth": obs.get("science_growth"),
+        "science_growth_error": obs.get("science_growth_error"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {k: v for k, v in job.items() if k in {"key", "capability", "status", "reason", "actions", "last_tick"}}

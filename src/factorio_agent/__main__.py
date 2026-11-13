@@ -243,6 +243,15 @@ def execute(argv=None, services=None):
                 obs["research_capacity"] = research_capacity_receipt(services.catalog(root, game), jobs_list, obs)
             except Exception as exc:  # a sizing estimate must never break observe
                 obs["research_capacity_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .science_growth import growth_receipt
+
+            try:
+                jobs_list = list(Ledger(root).data["jobs"].values())
+                growth = growth_receipt(root, services.catalog(root, game), jobs_list, obs)
+                if growth is not None:
+                    obs["science_growth"] = growth
+            except Exception as exc:  # a growth estimate must never break observe
+                obs["science_growth_error"] = f"{type(exc).__name__}: {exc}"[:200]
         result = summary(obs, Ledger(root))
     elif args.command == "request":
         parameters = json.loads(args.parameters)

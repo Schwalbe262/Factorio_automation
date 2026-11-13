@@ -52,6 +52,10 @@ BULK_THRESHOLD = 20
 COVER_MINUTES = 5.0
 PRODUCE_MAX_RATE = 600.0
 PRODUCE_MIN_RATE = 1.0
+# Growth of the staged red science block (``science_growth_nodes``).
+SCIENCE_GROWTH_CAPABILITY = "science_growth"
+# Below every roadmap step: growth fills a free job slot, it never delays the roadmap.
+SCIENCE_GROWTH_PRIORITY = TOP_PRIORITY - 500
 
 
 @dataclass(frozen=True)
@@ -475,7 +479,53 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
                 "reason": f"autopilot roadmap step {index + 1}/{len(ROADMAP)}: {step.id}{note}",
             }
         )
+    proposed += science_growth_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     return proposed
+
+
+def science_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
+    """One ``science_growth`` node when the receipt's ``science_growth`` decision grows the staged block.
+
+    The decision (``science_growth.growth_decision``) already holds the
+    evidence rule; here only: the capability exists, its ``requires``
+    succeeded, no growth node or job is open, and the same target has not
+    stalled (blocked/failed) before.
+    """
+    if SCIENCE_GROWTH_CAPABILITY not in capabilities:
+        return []
+    row = observation.get("science_growth")
+    if not isinstance(row, Mapping) or not row.get("grow"):
+        return []
+    succeeded = {job.get("capability") for job in jobs if job.get("status") == "succeeded"}
+    if not set(capabilities[SCIENCE_GROWTH_CAPABILITY].get("requires", [])) <= succeeded:
+        return []
+    labs, machines = row.get("target_labs"), row.get("target_machines")
+    if type(labs) is not int or type(machines) is not int:
+        return []
+    parameters = {"labs": labs, "machines": machines}
+    for node in queue_nodes:
+        if node.get("capability") == SCIENCE_GROWTH_CAPABILITY and node.get("status", "pending") in OPEN_NODE_STATUSES:
+            return []
+    for job in jobs:
+        if job.get("capability") != SCIENCE_GROWTH_CAPABILITY:
+            continue
+        if job.get("status") not in TERMINAL_STATUSES:
+            return []
+        if job.get("status") in STALLED_STATUSES and job.get("parameters") == parameters:
+            return []
+    node_id = f"{NODE_PREFIX}science_growth_{labs}_{machines}"
+    if node_id in {node.get("id") for node in queue_nodes}:
+        return []
+    return [
+        {
+            "id": node_id,
+            "capability": SCIENCE_GROWTH_CAPABILITY,
+            "parameters": parameters,
+            "priority": SCIENCE_GROWTH_PRIORITY,
+            "depends_on": [],
+            "reason": f"science growth to {labs} labs, {machines} machines: {row.get('reason', '')}"[:300],
+        }
+    ]
 
 
 def _upcoming(jobs, researched: Iterable[str], horizon: int) -> list[Step]:

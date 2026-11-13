@@ -14,6 +14,7 @@ from .manufacturing import GREEN_CORE_DEPTH, GREEN_CORE_LENGTH, green_core, raw_
 from .manufacturing import connect_power_groups, lab_green_entry, lab_green_entry_outside
 from .planning import preflight, overlap, survey_slots
 from .science import nominal_plate_supply
+from .science_growth import built_labs
 from .plate_supply import bus_budget, plate_bus
 from .planned_tap import tap_budget
 from . import planned_tap
@@ -564,7 +565,8 @@ class LogisticScience:
         live = actual.get((join["name"], *xy(join)))
         if not live or live["unit_number"] != join["unit_number"] or live["direction"] != join["direction"]:
             return None
-        labs = [actual.get(("lab", *xy(e))) for e in self.science.state["labs"]["entities"] if e["name"] == "lab"]
+        # Only the built stage of a staged lab row (``science_growth.built_labs``); reserved slots come later.
+        labs = [actual.get(("lab", *xy(e))) for e in built_labs(self.science.state)]
         if any(not e or not e.get("electric_network_connected") or e.get("energy", 0) <= 0 for e in labs):
             return None
         green_stock = sum(e.get("inventory", {}).get("logistic-science-pack", 0) for e in labs)

@@ -4,8 +4,10 @@ Geometry comes only from the master plan (``site.busframe.Bus``): the bus
 head ``origin``, its flow ``direction`` (any of N/E/S/W) and the lane table.
 For each built material (``BUILT_MATERIALS``) the first lane of that material
 gets a straight trunk of ``TRUNK_TILES`` belts (capped at the bus length)
-from the head along the flow direction. Foreign belts already crossing the
-lane are passed with ordinary underground pairs (``transport.compile_crossings``).
+from the head along the flow direction. Foreign belts crossing the lane, built
+or only planned by another board block (``board.foreign_belts``), are passed
+with ordinary underground pairs (``transport.compile_crossings``); a trunk that
+would still meet or side-load planned hardware is refused (``board.surface_conflict``).
 The other lanes of the table stay reserved, nothing is built on them.
 
 Feed: red science takes each smelting district plate port and green science
@@ -48,7 +50,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .board import entity
+from .board import blocks_without_bus, entity, foreign_belts, surface_conflict
 from .core.deterministic_builder import _plan
 from .core.deterministic_state import _atomic_json
 from .planning import preflight
@@ -280,12 +282,23 @@ class PlannedBus:
         if not isinstance(span, dict) or not span.get("ok"):
             return {"ok": False, "reason": "planned_bus_underground_span_unknown"}
         length = min(TRUNK_TILES, bus.length)
-        observed = [e for e in obs["entities"] if e["name"] in ("transport-belt", "underground-belt")]
+        # Other blocks' planned-but-unbuilt belts are crossed like built ones, and
+        # no trunk tile may meet or side-load their planned hardware (board.foreign_belts).
+        blocks = blocks_without_bus(board)
+        observed = foreign_belts(obs, blocks)
         entities, pairs, trunks = [], [], []
         for lane in lanes:
             trunk = trunk_plan(bus, lane, length, observed, span["max_span"])
             if not trunk.get("ok"):
                 return {"ok": False, "reason": "planned_bus_trunk_blocked", "item": lane.material, "detail": trunk}
+            clash = surface_conflict(self.builder, obs, blocks, trunk["entities"])
+            if clash is not None:
+                return {
+                    "ok": False,
+                    "reason": "planned_bus_trunk_meets_planned_hardware",
+                    "item": lane.material,
+                    "detail": clash,
+                }
             entities = merge_entities(entities, trunk["entities"])
             pairs += trunk.get("underground_pairs", [])
             trunks.append(

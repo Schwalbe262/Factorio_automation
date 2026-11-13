@@ -52,7 +52,7 @@ import json
 import math
 from pathlib import Path
 
-from .board import entity
+from .board import blocks_without_bus, entity, foreign_belts, surface_conflict
 from .core.deterministic_builder import _plan
 from .core.deterministic_state import _atomic_json
 from .site.busframe import Bus, compass_of, right_of
@@ -328,7 +328,9 @@ def connect_inputs(
     with ``entities`` = ``entities`` + taps + routes, or a failure naming the item.
     """
     view = BusView(bus)
-    observed = [e for e in obs["entities"] if e["name"] in ("transport-belt", "underground-belt")]
+    # Trunk extensions cross other blocks' planned belts too and may not meet their hardware.
+    blocks = _board_blocks(game, obs)
+    observed = foreign_belts(obs, blocks, exclude=(owner,))
     live = {(e["name"], *xy(e)): e for e in obs["entities"]}
     routes, taps, sources, ignored = [], [], {}, []
 
@@ -364,6 +366,10 @@ def connect_inputs(
                 attempts.append((row["port"], units, row["entities"], tap))
         failures = []
         for source, units, tap_entities, tap in attempts:
+            clash = surface_conflict(builder, obs, blocks, tap_entities, exclude=(owner,)) if tap else None
+            if clash is not None:
+                failures.append({"reason": "tap_meets_planned_hardware", "detail": clash})
+                continue
             try:
                 trial = merge_entities(entities, tap_entities)
             except ValueError:
@@ -400,6 +406,20 @@ def connect_inputs(
         "ignored_units": ignored,
         "sources": sources,
     }
+
+
+def _board_blocks(game, obs) -> dict:
+    """This world's board blocks without bus-owned tap hardware ({} without a readable board)."""
+    root = getattr(getattr(game, "cfg", None), "runtime_dir", None)
+    if root is None:
+        return {}
+    try:
+        board = _read(Path(root) / "pcb-board.json")
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(board, dict) or board.get("world_id") != obs.get("world_id"):
+        return {}
+    return blocks_without_bus(board)
 
 
 def tap_pairs(taps) -> list[dict]:

@@ -681,8 +681,8 @@ def hardware_from_observation(catalog, observation: Mapping, packs: Iterable[str
     return ResearchHardware(assemblers, rates, labs, DEFAULT_LAB_SPEED, stock)
 
 
-def research_capacity_receipt(catalog, jobs, observation: Mapping, *, horizon=4) -> dict:
-    """The planner's decision for the running (or next) research queue, for the observe receipt."""
+def queue_targets(catalog, jobs, observation: Mapping, *, horizon=4) -> list[ResearchTarget]:
+    """The running research (with its progress) and the next roadmap technologies, at most ``horizon``."""
     researched = _researched(observation)
     names = []
     current = observation.get("research")
@@ -701,6 +701,28 @@ def research_capacity_receipt(catalog, jobs, observation: Mapping, *, horizon=4)
         if target is not None:
             targets.append(target)
             names.append(name)
+    return targets
+
+
+def lab_pack_rate(targets, labs: int, pack=RED_PACK, lab_speed=DEFAULT_LAB_SPEED) -> float | None:
+    """Packs/minute of ``pack`` that ``labs`` busy labs consume over ``targets`` (None without a target using it).
+
+    Same weighting as ``recommended_science_rate``:
+    ``labs * lab_speed * 60 * sum(units * packs) / sum(units * unit_seconds)``.
+    """
+    rows = [row for row in targets if row.packs_per_unit.get(pack) and row.units > 0 and row.unit_seconds > 0]
+    if not rows:
+        return None
+    work = sum(row.units * row.unit_seconds for row in rows)
+    packs = sum(row.units * row.packs_per_unit[pack] for row in rows)
+    return labs * lab_speed * 60.0 * packs / work
+
+
+def research_capacity_receipt(catalog, jobs, observation: Mapping, *, horizon=4) -> dict:
+    """The planner's decision for the running (or next) research queue, for the observe receipt."""
+    researched = _researched(observation)
+    targets = queue_targets(catalog, jobs, observation, horizon=horizon)
+    names = [target.technology for target in targets]
     evidence = _evidence_from_supply(observation)
     receipt: dict[str, Any] = {"technologies": names}
     if targets:
