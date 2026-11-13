@@ -290,20 +290,25 @@ def _option_seconds(facts: _Facts, k: int, supply: Mapping, net: float, config: 
     }
 
 
-def _payback(facts: _Facts, option: dict, config: CapacityConfig) -> dict:
-    """Plates one new cell yields before the bill is done (its retirement) against its own plate cost.
+def _payback(facts: _Facts, option: dict, config: CapacityConfig, retire_seconds: float | None = None) -> dict:
+    """Plates one new cell yields before it retires against its own plate cost.
 
-    online = fund + build seconds; done = the option's seconds (the bill's completion, after
-    which the district and bus retire the cells, starter_retirement); yield =
-    cell_rate x (done - online) / 60. The cell pays when the yield exceeds its own cost.
+    online = fund + build seconds; done = ``retire_seconds`` (the district's expected
+    completion with this option, ``_assess``: once the district smelts the outposts' ore
+    the cell's plates no longer shorten anything) when known, never later than the
+    option's seconds (the whole bill's completion); yield = cell_rate x (done - online) / 60.
+    The cell pays when the yield exceeds its own cost.
     """
     online = option["fund_seconds"] + option["build_seconds"]
     done = option["seconds"]
+    if retire_seconds is not None and not math.isnan(retire_seconds):
+        done = min(done, retire_seconds)
     cost = facts.cost.get(facts.item, 0.0)
     plates = facts.cell_rate * max(0.0, done - online) / 60.0 if math.isfinite(done) else 0.0
     return {
         "online_seconds": round(online, 1),
         "retire_seconds": round(done, 1) if math.isfinite(done) else None,
+        "retire_by": "district" if retire_seconds is not None and done == retire_seconds else "bill",
         "yield_per_cell": round(plates, 1),
         "cost_per_cell": cost,
         "pays": math.isfinite(done) and plates > cost,
@@ -317,8 +322,14 @@ def _assess(
     extra_fuel_burn: float = 0.0,
     fuel_cells_needed: int | None = None,
     gate_seconds: float | None = None,
+    retire: _Facts | None = None,
+    retire_gate_seconds: float | None = None,
 ) -> CapacityDecision | None:
     """One decision for ``facts.item``, or None when waiting is as good.
+
+    ``retire`` (demand policy): the same item's facts against the district's bill
+    (``progression.retirement_demand`` ``district``); a new cell's payback ends when
+    that bill is done (``max(retire_gate_seconds, T_district(k))``), not at the bus.
 
     An unmeasured production rate or an unknown cell cost never yields an
     expansion: a missing cost must not turn a shortage into a free cell.
@@ -359,8 +370,13 @@ def _assess(
     if by_demand:
         # The bill ends no earlier than its research gate, waiting or not (rule a).
         wait = max(wait, gate)
+        retire_gate = max(0.0, finite_number(retire_gate_seconds) or 0.0)
         for row in options:
-            row["payback"] = _payback(facts, row, config)
+            retire_at = None
+            if retire is not None:
+                district = _option_seconds(retire, row["extra_cells"], supply, net, config)["seconds"]
+                retire_at = max(district, retire_gate)
+            row["payback"] = _payback(facts, row, config, retire_at)
             row["seconds"] = max(row["seconds"], gate)
     feasible = [row for row in options if math.isfinite(row["seconds"])]
     if by_demand:
@@ -421,7 +437,7 @@ def _assess(
         pay = picked["payback"]
         reason += (
             f"; demand policy: gate {_fmt(gate)}, a cell yields {pay['yield_per_cell']:.0f} > "
-            f"{pay['cost_per_cell']:.0f} before the bill is done"
+            f"{pay['cost_per_cell']:.0f} before the {pay['retire_by']} is done"
         )
     return CapacityDecision(
         item=facts.item,
@@ -518,6 +534,8 @@ def plan_capacity(
     config: CapacityConfig = CapacityConfig(),
     hand_fed_coal_per_minute: float = 0.0,
     gate_seconds: float | None = None,
+    retire_demand: Mapping | None = None,
+    retire_gate_seconds: float | None = None,
 ) -> list[CapacityDecision]:
     """Starter capacity expansions that finish the required items sooner than waiting.
 
@@ -527,6 +545,8 @@ def plan_capacity(
     hand-fed boiler (``hand_fed_coal_per_minute``, counted in the cells needed;
     its measured burn is already in the coal row's consumption). ``gate_seconds``
     (demand policy, plate items only): the research gate of the retirement bill.
+    ``retire_demand`` / ``retire_gate_seconds`` (demand policy, plate items): the district's
+    bill and gate; a new plate cell's payback ends at the district's expected completion.
     """
     if not isinstance(supply, Mapping):
         return []
@@ -536,7 +556,17 @@ def plan_capacity(
         evidence = _evidence(supply, item)
         if item == FUEL_ITEM or evidence is None:
             continue
-        decision = _assess(_facts(item, evidence, demand, config), supply, config, gate_seconds=gate_seconds)
+        retire = None
+        if isinstance(retire_demand, Mapping) and item in SMELTED_ITEMS:
+            retire = _facts(item, evidence, retire_demand, config)
+        decision = _assess(
+            _facts(item, evidence, demand, config),
+            supply,
+            config,
+            gate_seconds=gate_seconds,
+            retire=retire,
+            retire_gate_seconds=retire_gate_seconds,
+        )
         if decision is not None:
             others.append(decision)
     kept = _ordered(others)
