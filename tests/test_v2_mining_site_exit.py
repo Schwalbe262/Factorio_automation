@@ -679,6 +679,64 @@ class SiteExitRecordTests(unittest.TestCase):
             self.assertEqual(prepare.call_args.kwargs, {})
 
 
+class OtherPatchTests(unittest.TestCase):
+    def test_a_bank_without_a_site_on_its_patch_is_planned_on_the_next_patch(self):
+        # auto-1113-1758 seed 2072381151: the planned coal patch was taken by the power coal
+        # feed; every exit side failed and the plan's second coal patch was never tried.
+        import tempfile
+        from pathlib import Path
+
+        from factorio_agent.outposts import NO_COMPLIANT_BANK, MiningOutposts
+        from factorio_agent.site.geometry import Rect
+        from factorio_agent.site.planmodel import PatchRef, ResourcePlan
+
+        def ref(centroid, distance):
+            return PatchRef("coal", 100, 100000, Rect(0, 0, 10, 10), centroid, distance, distance)
+
+        row = ResourcePlan("coal", ref((-179.5, 34.0), 183), (ref((12.4, 42.0), 43), ref((400.0, 0.0), 400)))
+        plan = SimpleNamespace(zone=lambda name: None, resource=lambda name: row if name == "coal" else None)
+        zones = [("bus", Rect(-20, -20, 20, 0)), ("mining:coal", Rect(-195, 20, -165, 49))]
+        site = SimpleNamespace(plan=lambda world_id: plan, world=lambda world_id: SimpleNamespace(zones=lambda: zones))
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=Path(temp.name)))
+        outposts = MiningOutposts(game, None, None, site=site)
+        obs = {"world_id": "w", "resources": {"coal": {"position": {"x": -179.5, "y": 34.0}}}}
+        calls = []
+
+        def prepare(game, builder, obs, resource, count, reservations, **options):
+            calls.append((obs["resources"]["coal"]["position"], options))
+            if len(calls) == 1:
+                return {"ok": False, "reason": NO_COMPLIANT_BANK, "candidate_failures": []}
+            return {"ok": True, "plan": {}}
+
+        with patch("factorio_agent.paired_mining.prepare_new_bank", side_effect=prepare):
+            result = outposts.prepare(obs, "coal", 2)
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls[1][0], {"x": 12.4, "y": 42.0})
+        self.assertEqual(result["plan"]["other_patch"]["centroid"], [12.4, 42.0])
+        names = [name for name, _area in calls[1][1]["registered"]]
+        self.assertIn("plan:bus", names)
+        self.assertNotIn("plan:mining:coal", names)
+        self.assertEqual(len(calls), 2)  # the 400-tile patch is never tried
+
+    def test_a_budget_failure_does_not_move_the_bank(self):
+        import tempfile
+        from pathlib import Path
+
+        from factorio_agent.outposts import MiningOutposts
+
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=Path(temp.name)))
+        site = SimpleNamespace(plan=lambda world_id: (_ for _ in ()).throw(RuntimeError("never read")))
+        outposts = MiningOutposts(game, None, None, site=site)
+        failure = {"ok": False, "reason": "mining_layout_planning_budget_exceeded"}
+        with patch("factorio_agent.paired_mining.prepare_new_bank", return_value=failure) as prepare:
+            self.assertEqual(outposts.prepare({"world_id": "w"}, "coal", 2), failure)
+        self.assertEqual(prepare.call_count, 1)
+
+
 class AlternativeExitTests(unittest.TestCase):
     def test_other_sides_are_offered_nearest_the_consumer_first(self):
         from factorio_agent.mining_site import alternative_exits

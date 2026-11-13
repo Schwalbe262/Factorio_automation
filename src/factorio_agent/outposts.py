@@ -14,7 +14,7 @@ from .power_grid import plan_connection, replan_power_bridge
 from .transport import VECTORS, xy, plan_connection as belt_connection, underground_proof
 from .planning import overlap, preflight
 from .resource_policy import mark_mining_core, mining_reservations
-from .mining_site import alternative_exits, guide_tuple, site_exit
+from .mining_site import alternative_exits, guide_tuple, other_patches, plan_zone_areas, site_exit
 
 
 RESOURCES = {"iron-ore", "copper-ore", "coal", "stone"}
@@ -28,6 +28,10 @@ MAX_BRIDGE_REPLANS = 2
 PLANNED_TILE_REACH = 72
 # An unbuilt bank whose reservation meets a registered block is planned again this often.
 MAX_BANK_REPLANS = 2
+# A bank whose plan patch has no site tries this many of the plan's other patches (best first).
+MAX_OTHER_PATCHES = 2
+MAX_OTHER_PATCH_DISTANCE = 200  # tiles from the plan start: farther patches are outposts, not primaries
+NO_COMPLIANT_BANK = "no_policy_compliant_paired_bank_with_growth_and_power"
 
 
 def _key(e):
@@ -246,7 +250,10 @@ class MiningOutposts:
         options = {k: shared[k] for k in ("registered", "planned") if shared[k]}
         exit_record = site_exit(getattr(self, "site", None), obs.get("world_id"), resource)
         if exit_record is None:
-            return prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, **options)
+            result = prepare_new_bank(self.game, self.builder, obs, resource, count, reservations, **options)
+            return (
+                result if result.get("ok") else self._other_patch(obs, resource, count, reservations, options, result)
+            )
         result = prepare_new_bank(
             self.game, self.builder, obs, resource, count, reservations, site_exit=exit_record, **options
         )
@@ -262,7 +269,56 @@ class MiningOutposts:
             )
             if other.get("ok"):
                 return other
-        return dict(result, exit_sides_tried=tried)
+        return self._other_patch(obs, resource, count, reservations, options, dict(result, exit_sides_tried=tried))
+
+    def _other_patch(self, obs, resource, count, reservations, options, failure):
+        """Plan the bank on the site plan's next patches of ``resource`` when its own patch has no site.
+
+        Fleet auto-1113-1758 seed 2072381151: the planned coal patch (215
+        tiles) held the power coal feed and the electric coal drill, no bank
+        candidate was left on any exit side, the bank blocked for good and no
+        district followed, while the plan listed a second coal patch 43 tiles
+        from the start. The other patch has no plan zone, so its bank must
+        also keep clear of every other plan zone; other plans' unbuilt tiles
+        are read again around the new patch seed.
+        """
+        from .paired_mining import prepare_new_bank
+
+        if failure.get("reason") != NO_COMPLIANT_BANK:
+            return failure  # a budget or survey failure is no answer about the patch
+        patches = [
+            p
+            for p in other_patches(getattr(self, "site", None), obs.get("world_id"), resource)
+            if p["distance"] <= MAX_OTHER_PATCH_DISTANCE
+        ]
+        if not patches:
+            return failure
+        zones = plan_zone_areas(getattr(self, "site", None), obs.get("world_id"), exclude_prefix="mining:" + resource)
+        board_path = self.path.parent / "pcb-board.json"
+        board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
+        tried = []
+        for patch in patches[:MAX_OTHER_PATCHES]:
+            x, y = patch["centroid"]
+            row = dict((obs.get("resources") or {}).get(resource) or {}, position={"x": x, "y": y})
+            seeded = dict(obs, resources=dict(obs.get("resources") or {}, **{resource: row}))
+            tried.append([round(x, 1), round(y, 1)])
+            shared = self.planned_keepouts(seeded, board, resource)
+            seeded_options = dict(options, registered=list(shared["registered"]) + zones)
+            if shared["planned"]:
+                seeded_options["planned"] = shared["planned"]
+            other = prepare_new_bank(
+                self.game,
+                self.builder,
+                seeded,
+                resource,
+                count,
+                list(reservations) + shared["tile_areas"],
+                **seeded_options,
+            )
+            if other.get("ok"):
+                other["plan"]["other_patch"] = {"centroid": [x, y], "bbox": patch.get("bbox")}
+                return other
+        return dict(failure, other_patches_tried=tried)
 
     def bank_powered(self, obs, plan) -> bool:
         """Every drill of ``plan`` stands, is connected and has power (no ore evidence needed)."""

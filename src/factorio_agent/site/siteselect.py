@@ -117,16 +117,19 @@ def _trim(rect: Rect, other: Rect, keep: Rect | None = None) -> Rect | None:
     """
     keep = keep or rect
     cut_x = (
-        Rect(rect.x0, rect.y0, other.x0, rect.y1)
+        (rect.x0, rect.y0, other.x0, rect.y1)
         if other.x0 + other.x1 >= rect.x0 + rect.x1
-        else Rect(other.x1, rect.y0, rect.x1, rect.y1)
+        else (other.x1, rect.y0, rect.x1, rect.y1)
     )
     cut_y = (
-        Rect(rect.x0, rect.y0, rect.x1, other.y0)
+        (rect.x0, rect.y0, rect.x1, other.y0)
         if other.y0 + other.y1 >= rect.y0 + rect.y1
-        else Rect(rect.x0, other.y1, rect.x1, rect.y1)
+        else (rect.x0, other.y1, rect.x1, rect.y1)
     )
-    options = [r for r in (cut_x, cut_y) if r.x1 > r.x0 and r.y1 > r.y0]
+    # A strip is empty, not inverted, when ``other`` spans ``rect`` on that axis and
+    # reaches past its far edge (fleet auto-1113-1758 seeds 2159617943 and 2599086091:
+    # "inverted rect" faulted the master plan, so no supply cell, bus or plan zone).
+    options = [Rect(*r) for r in (cut_x, cut_y) if r[2] > r[0] and r[3] > r[1]]
     if not options:
         return None
     return max(options, key=lambda r: (_overlap_area(r, keep), r.area))

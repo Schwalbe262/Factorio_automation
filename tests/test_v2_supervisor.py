@@ -881,6 +881,30 @@ class MultiJobTests(Fixture):
         self.s._control_command = original
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
 
+    def test_a_deferred_retry_comes_back_on_the_next_cycle_without_a_new_success(self):
+        # auto-1113-1708 seed 1054430559: the belt row's retry after the bus waited for a slot
+        # and then for another success that never came.
+        self.cli.jobs["row"] = job("row", "c0", status="blocked", reason="coal_bank_required")
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.cli.jobs["done"] = job("done", "c2", status="succeeded")
+        original = self.s._control_command
+        self.s._control_command = lambda command, key: False  # slot refusal
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.s._control_command = original
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "row"]])
+
+    def test_a_row_without_an_input_source_is_retried_only_after_a_source_block_succeeds(self):
+        reason = "production_row_input_source_missing"
+        self.cli.jobs["row"] = job("row", "produce", status="blocked", reason=reason)
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        for index in range(5):  # unrelated successes do not use up its retries
+            self.cli.jobs["o" + str(index)] = job("o" + str(index), "c3", status="succeeded")
+            self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.cli.jobs["bus"] = job("bus", "planned_main_bus", status="succeeded")
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "row"]])
+
     def test_stalled_job_without_a_block_timestamp_is_timed_from_first_sight(self):
         self.cli.jobs["stuck"] = job("stuck", "c0", status="blocked", reason="objective_progress_stalled")
         self.assertFalse(self.s._auto_retry(self.s._snapshot()))
