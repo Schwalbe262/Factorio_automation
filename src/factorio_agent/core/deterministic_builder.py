@@ -23,6 +23,17 @@ def _report(status: str, reason: str, **evidence: Any) -> dict[str, Any]:
     return {"status": status, "reason": reason, "evidence": evidence}
 
 
+def _reserved_view(observation: dict, reserve: Counter) -> dict:
+    """``observation`` with ``reserve`` units taken out of the carried inventory (build-ahead view)."""
+    if not reserve:
+        return observation
+    inventory = dict(observation.get("inventory") or {})
+    for name, units in reserve.items():
+        if name in inventory:
+            inventory[name] = max(0, int(inventory[name]) - int(units))
+    return dict(observation, inventory=inventory)
+
+
 def power_flow_ready(evidence: dict[str, Any]) -> bool:
     return bool(
         evidence.get("ok")
@@ -411,7 +422,8 @@ class FactoryBuilder:
                     if placement_item == item and find(wanted) is None:
                         p = wanted["position"]
                         missing.add((wanted["name"], p["x"], p["y"]))
-                result = self.bootstrap.ensure_item(observation, item, min(cap, len(missing)))
+                wanted_count = min(cap, len(missing))
+                result = self.bootstrap.ensure_item(observation, item, wanted_count)
                 if self.construction_materials is not None:
                     result = self.construction_materials.ensure(observation, result)
                 if defer is not None and (why := defer.after(item, result)):
@@ -422,9 +434,14 @@ class FactoryBuilder:
                     # items are already carried: place those instead, all in one
                     # round trip on the assisted backend (eval-4177156614: runs of
                     # single "build a carried plan entity" belts, one pass each).
+                    # Build ahead never spends what the waiting item's own craft
+                    # needs (craft_reserve): fleet all-1114-0256 placed the belts
+                    # collected for the district's underground pair on later routes
+                    # 11 of 12 times, so the first bank smelted only at ~25 min.
+                    ahead_view = _reserved_view(observation, self.craft_reserve(item, wanted_count))
                     if self.game.backend == "assisted":
                         batch = self._carried_batch(
-                            observation, entities[index + 1 :], skipped=frozenset(deferred) | {item}
+                            ahead_view, entities[index + 1 :], skipped=frozenset(deferred) | {item}
                         )
                         if len(batch) > 1:
                             return {
@@ -432,7 +449,7 @@ class FactoryBuilder:
                                 "actions": batch,
                                 "reason": "build carried plan entities while an earlier one waits for its item",
                             }
-                    ahead = self._build_ahead(observation, plan, entities[index + 1 :], find)
+                    ahead = self._build_ahead(ahead_view, plan, entities[index + 1 :], find)
                     if ahead is not None:
                         return ahead
                 return result
@@ -671,6 +688,29 @@ return {ok=true,world_id=d and d.world_id,ground=ground}
             "count": min(50, row["count"]),
             "reason": f"pick up items lying on the reserved {entity['name']} tile before building it",
         }
+
+    def craft_reserve(self, item: str, count: int) -> Counter:
+        """Units of ``item``'s direct ingredients one hand craft of ``count`` needs.
+
+        Build ahead plans against the carried inventory minus this reserve: a
+        splitter waiting for circuits keeps its 4 belts per craft, an underground
+        pair its 5 belts. A catalog without the recipe reserves nothing.
+        """
+        recipes = getattr(self.catalog, "recipes", None) or {}
+        recipe = recipes.get(item) if hasattr(recipes, "get") else None
+        if not isinstance(recipe, dict) or count <= 0:
+            return Counter()
+        made = sum(
+            float(p.get("amount") or 0)
+            for p in recipe.get("products") or ()
+            if isinstance(p, dict) and p.get("name") == item
+        )
+        crafts = math.ceil(count / made) if made > 0 else count
+        reserve = Counter()
+        for ingredient in recipe.get("ingredients") or ():
+            if isinstance(ingredient, dict) and ingredient.get("type", "item") == "item" and ingredient.get("name"):
+                reserve[ingredient["name"]] += int(math.ceil(float(ingredient.get("amount") or 0) * crafts))
+        return reserve
 
     def _build_ahead(self, observation: dict, plan: dict, later: list[dict], find) -> dict | None:
         """One later plan entity whose item is carried and whose footprint is free, or None.
