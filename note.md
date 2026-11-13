@@ -252101,3 +252101,12 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: smelting_district retried live, building. Found next blocker by reading code: paired_smelting/paired_mining are dev-map migrations (absolute coordinates, smelter-lanes.json never written on fresh maps) in front of automation_science.
 - failure reason: compile_crossings accepted an upstream feeder only when it was straight behind the port.
 - next action: drop the migrations from the fresh-map path, science fed from district plate ports (Opus worker), then measure red science live.
+
+## 2026-11-13 Part 44 - fresh-map spine after smelting (seed 1400895309 -> 283895142)
+- goal: get from smelting_district to science and a planned bus on any seed.
+- hypothesis: everything after the district still assumes the development map.
+- actions: removed paired_smelting/paired_mining from ROADMAP, science plates from district ports (plate_supply.py), power link retries from a pole outside other blocks; red science sizes to connected supply (65ab85e); planner exception blocks only its job (48ebc56); catalog fingerprint hashed once (4beaad7); planned_main_bus trunk from the site plan (2e3b9d3); green core 48 deep on plan allocations, branch/lab ports outside blocks (7e6ae35); science row gear pole linked (9542691).
+- metrics: seed 1400895309 smelting_district succeeded at 57.7 min (first time on a plan); automation_science built 232 actions, never proved: gear cell pole 10 tiles from row poles, job_deadline_exceeded. Profile of one slice: 4.3 s of 8.2 s planning was catalog.fingerprint (234 calls). Stale paired_smelting job raised 816 controller errors before the planner_fault rule. Tests 2232 PASS.
+- result: new map eval-283895142 started on 9542691; logistic_science and main_bus not yet run live.
+- failure reason: dev-map templates relied on incidental power routes; migrations read state files nothing writes.
+- next action: watch the new seed to red/green science and bus; bus taps in the bus frame and science on taps (Opus worker).
