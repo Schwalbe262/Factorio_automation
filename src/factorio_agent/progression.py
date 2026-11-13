@@ -436,6 +436,9 @@ def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
         for job in jobs
         if job.get("capability") == "mining_outpost" and job.get("status") == "succeeded"
     }
+    from .starter_retirement import retired_by_jobs  # a permanent source replaced the starter cells
+
+    outposts |= retired_by_jobs(jobs)
     try:
         decisions = plan_capacity(
             observation.get("resource_supply_options") or {},
@@ -519,6 +522,9 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
             }
         )
     proposed += science_growth_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .starter_retirement import starter_retirement_nodes  # mine starter cells a permanent source replaced
+
+    proposed += starter_retirement_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     return proposed
 
 

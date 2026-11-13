@@ -102,6 +102,11 @@ class StarterExecutors:
         self.radar_coverage = None
         self.construction_mall_path = Path(game.cfg.runtime_dir) / "construction-mall.json"
         self.bootstrap.construction_stock_source = self._construction_stock
+        from .starter_retirement import StarterRetirement
+
+        # Starter cells of a resource with a permanent source: no fuel, no rebuild, mined later.
+        self.starter_retirement = StarterRetirement(game, self.bootstrap, self.builder)
+        self.bootstrap.retirement = self.starter_retirement
         self.base_coal_recovery = None
         self.water_distribution = None
         from .radar_network import RadarNetwork

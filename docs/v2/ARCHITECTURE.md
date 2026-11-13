@@ -51,6 +51,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Game | `core/deterministic_builder.py` | `_plan(entities, ports)`, `FactoryBuilder.ensure_plan` (one action per call), coal sites |
 | Game | `power_layout.py` | `V2FactoryBuilder.ensure_plan` = resource policy check + base `ensure_plan`; `RegularizePower` |
 | Game | `core/deterministic_bootstrap.py`, `construction_supply.py` | starter cells; `V2Bootstrap`: fuel/stock batching, hand-craft cap |
+| Game | `starter_retirement.py` | starter cells of a resource with a permanent source: no fuel, no rebuild, collected and mined (`starter_retirement` capability); bus surplus tiles as the construction plate stock (PLANNERS.md) |
 | Game | `core/world_catalog.py` | live recipes/entities/technologies (`catalog.json`) |
 | Space | `site/service.py` | `SiteService`: one survey + master plan per runtime, allocation of district blocks |
 | Space | `site/worldmap.py`, `site/survey.py` | tile map; bulk read-only survey |

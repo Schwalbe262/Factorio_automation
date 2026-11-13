@@ -186,7 +186,14 @@ class AutopilotTests(unittest.TestCase):
         self.assertNotIn("auto_research_logistic_science_pack", ids(nodes))
 
     def test_completed_roadmap_proposes_nothing(self):
-        self.assertEqual(self.propose(done_through("chemical_science")), [])
+        # A finished roadmap still retires the starter cells its permanent sources replaced, once each.
+        jobs = done_through("chemical_science")
+        self.assertEqual(ids(self.propose(jobs)), ["auto_starter_retirement_iron-ore"])
+        retired = [
+            {"capability": "starter_retirement", "parameters": {"resource": r}, "status": "succeeded"}
+            for r in ("iron-ore", "copper-ore", "stone", "coal")
+        ]
+        self.assertEqual(self.propose(jobs + retired), [])
 
     def test_depends_on_only_references_known_ids(self):
         jobs = done_through("main_bus")

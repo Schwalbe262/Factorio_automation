@@ -83,6 +83,23 @@ def validate_supply_cell(parameters):
     validate_parameters(parameters)
 
 
+def starter_retirement_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "starter_retirement")
+    if early is not None:
+        return early
+    return ex.starter_retirement.step(obs, parameters or {})
+
+
+def starter_retirement_proof(ex, obs, result, parameters):
+    return ex.starter_retirement.proof(obs, parameters or {})
+
+
+def validate_starter_retirement(parameters):
+    from ..starter_retirement import validate_parameters
+
+    validate_parameters(parameters)
+
+
 def regularize_power_layout_step(ex, obs, parameters):
     ex.builder._sync(obs)
     fuel_obs = ex.starter_observation(obs)
@@ -109,4 +126,10 @@ register(
     validate=validate_prepare_components,
 )
 register("supply_cell", step=supply_cell_step, proof=supply_cell_proof, validate=validate_supply_cell)
+register(
+    "starter_retirement",
+    step=starter_retirement_step,
+    proof=starter_retirement_proof,
+    validate=validate_starter_retirement,
+)
 register("regularize_power_layout", step=regularize_power_layout_step, proof=regularize_power_layout_proof)
