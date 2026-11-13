@@ -252340,3 +252340,10 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - expected next round: district ~21-23, bus ~24-26 medians, bus reached 10-11/12; pace line plate bound below 22.
 - risk: more starter cells = more hauling and coal cells (~8); the 4th slot now goes to the early district, a late capacity job may wait for a slot.
 - next: fleet 12 x 45 min on these commits; read pace line (plate bound), chain producer binding, cells over time.
+
+## 2026-11-14 part early-blockers (worker agent-a4e56d50; read of aud-1114-0526 / aud-1114-0436)
+- goal: remove the early blockers new in aud-1114-0526 and the unexplained route failures of 0436.
+- findings (offline replays of the run folders, survey Lua emulated from site-map + observe-raw): 1723389324 supply-cell link pole (-11.5,38.5) lay in the startup cell's 2nd lab slot, built at tick 43966 after the cell was planned (~38647; start_floor builds 2 labs); 1032498969 startup grid chain over iron ore (33.5,12.5) outside the cell area (survey checked ore only inside); 4058652641 all 31 supply sites in the lake, dry ones' straight links crossed plan zones; 3098273696 bus feeds must cross, first feed took the other head's approach tile; 2446866888 iron bank bridge pole (23.5,10.5) inside the header corridor in front of the iron head (built, stays); 3242269094 copper route guide widened to another patch's corridor -> survey budget; its coal tap had no trunk (district never built); 3111291866 power coal tap route budget spent on south-facing taps; 3565429217 postcondition_not_verified at 44.3 min (proof flap 40 s before the run end; auto-retry covers it).
+- actions: 25f4c0d (lab slots planned hardware, LINK_POLE_LUA, supply-cell site-map filter + hop links + relax rung), 27c9a3f (bus keep_clear orders, bridges keep out of corridors, far guide dropped, idle ladder recheck 90 s), power_coal_tap join_rank.
+- expected next round: no supply_cell obstructed / no_clear_supply_cell_site, no bootstrap resource block, bus feed blocks only where a built pole blocks a head.
+- next: fleet 12 x 45 min; check supply_cell rejected_by evidence and remedy events.
