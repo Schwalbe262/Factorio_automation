@@ -39,6 +39,7 @@ W_AREA = 0.05  # per reserved tile: space left for neighbours
 W_POWER = 0.0  # per kW: off by default; a caller with a tight grid may raise it
 W_POLLUTION = 0.0  # per pollution/min: off by default (owner: later, with evolution pressure)
 W_OVER_BUDGET = 10.0  # per kW above ``Demand.power_budget_kw``: the grid would brown out
+W_REBUILD_AHEAD = 1.0  # per tile-equivalent of a rebuild the descriptor already knows is coming (``rebuild_ahead``)
 HORIZON_GROWTH = 2.0  # without a demand model, a produce request is expected to double over the horizon
 HORIZON_MINUTES = 30.0  # upcoming roadmap units (supply_demand.item_demand) are needed within about this long
 EARLY_TICKS = 2 * 60 * 60 * 60  # plates count as scarce during the first two game hours
@@ -89,6 +90,9 @@ def score(descriptor: dict, demand: Demand, port_cost: float = 0.0) -> tuple[flo
     }
     power = float(descriptor.get("power_kw") or 0.0)
     pollution = float(descriptor.get("pollution_per_min") or 0.0)
+    if descriptor.get("rebuild_ahead"):
+        # A known later rebuild (a lab part the blue extension cannot use), already in tile-equivalents.
+        terms["rebuild_ahead"] = W_REBUILD_AHEAD * float(descriptor["rebuild_ahead"])
     if demand.w_power:
         terms["power"] = demand.w_power * power
     if demand.w_pollution:
@@ -186,7 +190,7 @@ def record(options: list[dict], chosen: dict, *, config: Settings, pool_size: in
         "niche": chosen["niche"],
         "source": chosen["source"],
         "genome": candidate["genome"].to_dict(),
-        "descriptor": compact(candidate["descriptor"]),
+        "descriptor": candidate.get("compact") or compact(candidate["descriptor"]),
         "score": chosen["score"],
         "terms": chosen["terms"],
         "explore": asdict(config),
@@ -283,19 +287,59 @@ def rank_for_context(catalog: Any, found: list[dict], request: dict, demand: Dem
 TICKS_PER_SECOND = 60
 
 
-def run_layouts(root: Path) -> list[dict]:
-    """The layout records of one run: ``production-row-*.json`` and ``logistic-science.json``."""
+SCIENCE_BLOCKS = ("automation_science", "logistic_science")  # followed by research milestones
+
+
+def followup_seconds(block: str, verified, milestones: dict | None) -> int | None:
+    """Game seconds from the block's proof to the next roadmap milestone it serves.
+
+    Science blocks: the next ``research_*`` milestone; produce rows: the next milestone of
+    any kind. ``milestones`` is ``fleet.milestones``' step id -> game minute.
+    """
+    if not isinstance(verified, int) or not milestones:
+        return None
+    proof = verified / (60 * TICKS_PER_SECOND)
+    later = [
+        minute
+        for step, minute in milestones.items()
+        if isinstance(minute, (int, float))
+        and minute > proof + 1e-9
+        and (block not in SCIENCE_BLOCKS or str(step).startswith("research_"))
+    ]
+    return round((min(later) - proof) * 60) if later else None
+
+
+def run_layouts(root: Path, milestones: dict | None = None) -> list[dict]:
+    """The layout records of one run: ``production-row-*.json``, ``logistic-science.json`` and
+    ``automation-science.json`` (a red block planned before the layout family counts as its
+    template variant, ``science_layout.legacy_record``). ``milestones`` (step id -> game minute)
+    adds the time from each block's proof to its next milestone (``followup_seconds``)."""
     root = Path(root)
     found = []
-    for path in sorted(root.glob("production-row-*.json")) + [root / "logistic-science.json"]:
+    paths = sorted(root.glob("production-row-*.json")) + [
+        root / "logistic-science.json",
+        root / "automation-science.json",
+    ]
+    for path in paths:
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        layout = state.get("layout") if isinstance(state, dict) else None
+        if not isinstance(state, dict):
+            continue
+        layout = state.get("layout")
+        if path.name == "automation-science.json":
+            block = "automation_science"
+            if not isinstance(layout, dict) and isinstance(state.get("science"), dict):
+                from .science_layout import legacy_record
+
+                layout = legacy_record(state)
+            proof = isinstance((layout or {}).get("verified_tick"), int)
+        else:
+            block = "logistic_science" if path.name == "logistic-science.json" else f"produce:{state.get('item')}"
+            proof = state.get("phase") == "verified"
         if not isinstance(layout, dict) or not layout.get("variant"):
             continue
-        block = "logistic_science" if path.name == "logistic-science.json" else f"produce:{state.get('item')}"
         chosen, verified = layout.get("chosen_tick"), layout.get("verified_tick")
         seconds = None
         if isinstance(chosen, int) and isinstance(verified, int) and verified >= chosen:
@@ -308,7 +352,8 @@ def run_layouts(root: Path) -> list[dict]:
                 "genome": layout.get("genome"),
                 "explored": bool(layout.get("explored")),
                 "build_seconds": seconds,
-                "proof": state.get("phase") == "verified",
+                "proof": proof,
+                "followup_seconds": followup_seconds(block, verified, milestones) if proof else None,
                 "power_kw": descriptor.get("power_kw"),
                 "pollution_per_min": descriptor.get("pollution_per_min"),
             }
@@ -317,7 +362,7 @@ def run_layouts(root: Path) -> list[dict]:
 
 
 def variant_summary(rows: list[dict]) -> dict:
-    """``(block, variant) -> runs, median build seconds, proofs, explored, power, pollution, genome``."""
+    """``(block, variant) -> runs, proofs, proof rate, median build / follow-up seconds, explored, power, pollution``."""
     import statistics
 
     out: dict = {}
@@ -327,6 +372,7 @@ def variant_summary(rows: list[dict]) -> dict:
             {
                 "runs": 0,
                 "seconds": [],
+                "followups": [],
                 "proofs": 0,
                 "explored": 0,
                 "genome": row.get("genome"),
@@ -339,22 +385,56 @@ def variant_summary(rows: list[dict]) -> dict:
         entry["explored"] += int(row["explored"])
         if row.get("build_seconds") is not None:
             entry["seconds"].append(row["build_seconds"])
+        if row.get("followup_seconds") is not None:
+            entry["followups"].append(row["followup_seconds"])
     for entry in out.values():
-        seconds = entry.pop("seconds")
+        seconds, followups = entry.pop("seconds"), entry.pop("followups")
         entry["median_build_seconds"] = round(statistics.median(seconds)) if seconds else None
+        entry["median_followup_seconds"] = round(statistics.median(followups)) if followups else None
+        entry["proof_rate"] = round(entry["proofs"] / entry["runs"], 2) if entry["runs"] else 0.0
     return dict(sorted(out.items()))
 
 
+MIN_RUNS_TO_LEAD = 2  # a variant needs this many runs before the report names it the leader
+
+
+def leader(variants: dict) -> str | None:
+    """The variant the data favours within one block: proof rate, then the quicker follow-up, then build time."""
+    eligible = {k: e for k, e in variants.items() if e["runs"] >= MIN_RUNS_TO_LEAD}
+    if len(variants) < 2 or not eligible:
+        return None
+
+    def key(item):
+        name, e = item
+        follow = e["median_followup_seconds"]
+        build = e["median_build_seconds"]
+        return (-e["proof_rate"], follow if follow is not None else 1e9, build if build is not None else 1e9, name)
+
+    return min(eligible.items(), key=key)[0]
+
+
 def format_variants(rows: list[dict]) -> list[str]:
-    """The compact ``fleet.py report`` section "layout variants used"."""
+    """The ``fleet.py report`` section "layout variants used": the variants of each block side by side."""
     summary = variant_summary(rows)
-    lines = ["layout variants used (block, variant, runs, median build game-s, proofs, explored, kW, pollution/min):"]
+    lines = [
+        "layout variants used, per block (variant, runs, proofs, proof rate, median build game-s, median proof ->"
+        " next milestone game-s, explored, kW, pollution/min):"
+    ]
+    blocks: dict = {}
     for (block, variant), e in summary.items():
-        build = "-" if e["median_build_seconds"] is None else str(e["median_build_seconds"])
-        power = "-" if e["power_kw"] is None else f"{e['power_kw']:g}"
-        pollution = "-" if e["pollution_per_min"] is None else f"{e['pollution_per_min']:g}"
-        lines.append(
-            f"  {block[:28].ljust(28)} {variant[:30].ljust(30)} {e['runs']:3d} {build:>6} "
-            f"{e['proofs']:3d}/{e['runs']:<3d} {e['explored']:3d} {power:>7} {pollution:>6}"
-        )
+        blocks.setdefault(block, {})[variant] = e
+    for block, variants in blocks.items():
+        lines.append(f"  {block}")
+        for variant, e in sorted(variants.items(), key=lambda kv: (-kv[1]["runs"], kv[0])):
+            build = "-" if e["median_build_seconds"] is None else str(e["median_build_seconds"])
+            follow = "-" if e["median_followup_seconds"] is None else str(e["median_followup_seconds"])
+            power = "-" if e["power_kw"] is None else f"{e['power_kw']:g}"
+            pollution = "-" if e["pollution_per_min"] is None else f"{e['pollution_per_min']:g}"
+            lines.append(
+                f"    {variant[:32].ljust(32)} {e['runs']:3d} {e['proofs']:3d}/{e['runs']:<3d} {e['proof_rate']:4.0%}"
+                f" {build:>6} {follow:>6} {e['explored']:3d} {power:>7} {pollution:>6}"
+            )
+        best = leader(variants)
+        if best:
+            lines.append(f"    -> leading: {best}")
     return lines if summary else lines + ["  none recorded"]

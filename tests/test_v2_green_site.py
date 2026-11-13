@@ -271,7 +271,7 @@ class GreenSitePlanTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             world = World(root, None)
-            with patch("factorio_agent.green_science.planned_green_clusters", return_value=[]):
+            with patch("factorio_agent.green_science.planned_green_layouts", return_value=[]):
                 full = world.prepare()
             self.assertEqual(full["reason"], "no_green_science_district_block")
             (root / "shallow").mkdir()

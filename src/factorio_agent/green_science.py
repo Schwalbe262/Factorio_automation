@@ -71,9 +71,150 @@ def green_cluster(catalog, origin, output_side=None):
     return plan
 
 
-def planned_green_clusters(site, world_id, catalog, lab_port):
+SPLIT_NAME = "logistic_science_split"  # allocation name of the split geometry (held beside the cluster's)
+
+
+def planned_green_layouts(site, world_id, catalog, lab_port, *, rate, tick=None, root=None):
+    """Green cores of every audited candidate (``green_layout``: the cluster, the split row), best first.
+
+    Each candidate is probed on one allocation: ``layout_selection.score`` with the plate ports'
+    ``site.fit`` cost plus the distance from the pack port to the lab entry (``W_PORT`` per tile).
+    The horizon is the request: green has no growth capability yet, so reserved slots earn nothing
+    now. Exploration (``layout_selection.settings``) may pick a close runner-up. Every core
+    carries its ``layout`` record; the caller keeps one allocation (``settle_green``).
+    """
+    from . import green_layout as gl
+    from . import layout_selection as selection
+    from .blocks.cluster_audit import audit_cluster
+
+    demand = selection.demand_for(rate, tick=tick)
+    demand = selection.Demand(demand.now, demand.now, demand.plates_scarce)
+    target = (lab_port["position"]["x"], lab_port["position"]["y"])
+
+    def distance(plan):
+        p = plan["ports"][-1]["position"]
+        return abs(p["x"] - target[0]) + abs(p["y"] - target[1])
+
+    candidates = []
+    probe = green_cluster(catalog, (0.5, 0.5))
+    if not audit_cluster(catalog, probe):
+        record = green_layout_record(catalog, probe)
+        descriptor = dict(gl.describe(catalog, gl.GreenGenome("cluster"), probe, rate), id=record["variant"])
+        candidates.append(("cluster", _Genome(record["genome"]), descriptor))
+    try:
+        split = gl.split_block(catalog)
+        findings = gl.audit_split(catalog, split)
+    except ValueError as exc:
+        split, findings = None, [str(exc)[:120]]
+    if split is not None and not findings:
+        genome = gl.GreenGenome("split", frame=split["frame"])
+        candidates.append(("split", genome, gl.describe(catalog, genome, split, rate)))
+    options = []
+    for form, genome, descriptor in candidates:
+        cores = (
+            planned_green_clusters(site, world_id, catalog, lab_port, count=1)
+            if form == "cluster"
+            else planned_green_split(site, world_id, catalog, count=1)
+        )
+        settle_green(site, world_id, None)
+        if not cores:
+            continue
+        cost = cores[0].get("port_cost", 0.0) + selection.W_PORT * distance(cores[0])
+        scored = descriptor
+        if descriptor["growth"].get("capability") == "not_implemented":
+            # Reserved slots nothing builds yet earn no ceiling credit (the record keeps the real one).
+            scored = dict(descriptor, growth=dict(descriptor["growth"], max_rate_in_place=descriptor["rate_now"]))
+        candidate = {
+            "genome": genome,
+            "descriptor": scored,
+            "compact": gl.compact(descriptor),
+            "niche": f"{form}/{descriptor['port_relation']}",
+            "source": "generated",
+        }
+        options.append(selection.option(candidate, demand, cost, form=form))
+    options = selection.ranked(options)
+    if not options:
+        return []
+    config = selection.settings(root) if root is not None else selection.Settings()
+    index, pool = selection.choose(
+        [o["score"] for o in options], config, selection.seed_for(world_id, "logistic_science")
+    )
+    chosen = options[index]
+    found = []
+    for option in [chosen] + [o for o in options if o is not chosen]:
+        if option["form"] == "cluster":
+            cores = planned_green_clusters(site, world_id, catalog, lab_port)
+        else:
+            cores = planned_green_split(site, world_id, catalog)
+        record = selection.record(options, option, config=config, pool_size=pool, tick=tick)
+        for core in cores:
+            core["layout"] = dict(record, source="generated")
+        found += cores
+    return found
+
+
+class _Genome:
+    """A stored genome dict with the ``to_dict`` the layout record calls."""
+
+    def __init__(self, data):
+        self.data = dict(data)
+
+    def to_dict(self):
+        return dict(self.data)
+
+
+def settle_green(site, world_id, keep):
+    """Keep allocation ``keep`` among both green candidates' allocations (None: release all)."""
+    settle(site, world_id, "logistic_science", keep)
+    settle(site, world_id, SPLIT_NAME, keep)
+
+
+def planned_green_split(site, world_id, catalog, *, count=None):
+    """Allocator blocks for the split green row (``green_layout.split_block``): plate ports to the bus edge."""
+    from .green_layout import split_block
+    from .site.placement import DEFAULT_COUNT
+
+    probe = split_block(catalog)
+    (x0, y0), (x1, y1) = probe["reserved_area"]
+    size = (int(x1 - x0), int(y1 - y0))
+
+    def build(bx, by):
+        return split_block(catalog, origin=(bx, by))
+
+    def inputs(plan):
+        return [p for p in plan["ports"] if p["direction"] == "input"]
+
+    placements = []
+    for shape in ((size[1], size[0]), size):
+        placements = allocated_placements(
+            site,
+            world_id,
+            kind="science",
+            name=SPLIT_NAME,
+            size=size,
+            block=shape,
+            build=build,
+            inputs=inputs,
+            count=count or DEFAULT_COUNT,
+        )
+        if placements:
+            break
+    found = []
+    for allocation, placement in placements:
+        core = placement.plan
+        core["site_transform"] = placement.transform.to_dict()
+        core["allocation"] = allocation
+        core["port_cost"] = placement.score
+        core["connections"] = []
+        found.append(core)
+    return found
+
+
+def planned_green_clusters(site, world_id, catalog, lab_port, count=None):
     """Allocator blocks for the green unit; plate ports face the bus edge, the product side is the one
     (among the compact layout's free sides) whose port lands nearest the lab entry ``lab_port``."""
+    from .site.placement import DEFAULT_COUNT
+
     from .production_layout import _even_turn
 
     probe = green_cluster(catalog, (0.5, 0.5))
@@ -102,6 +243,7 @@ def planned_green_clusters(site, world_id, catalog, lab_port):
         block=(size[1], size[0]),
         build=build_side(probe["output_side"]),
         inputs=inputs,
+        count=count or DEFAULT_COUNT,
     )
     target = (lab_port["position"]["x"], lab_port["position"]["y"])
     for allocation, placement in placements:
@@ -117,6 +259,7 @@ def planned_green_clusters(site, world_id, catalog, lab_port):
         core = best[1]
         core["site_transform"] = placement.transform.to_dict()
         core["allocation"] = allocation
+        core["port_cost"] = placement.score
         core["layout"] = green_layout_record(catalog, core)
         core["connections"] = []
         core["cells"] = {"cluster": {"entities": core["entities"]}}
@@ -129,8 +272,9 @@ def green_layout_record(catalog, plan) -> dict:
 
     The green tree has one cluster topology under ``blocks.cluster`` (the pack machine
     needs two belt-fed neighbours and a free side: only the 4 x 2 turned grid); the
-    output side is chosen per placement (nearest the lab entry), so there is no
-    candidate ranking here yet (``docs/v2/LAYOUT_PRINCIPLES.md``).
+    output side is chosen per placement (nearest the lab entry). The other candidate is
+    the split row (``green_layout``); ``planned_green_layouts`` ranks both and replaces
+    this record with the ranked one.
     """
     from .layout_variants import Genome, energy_metrics
 
@@ -305,7 +449,15 @@ class LogisticScience:
         # Sites come from the master plan; the fixed development-map anchors
         # are only for a controller built without a site service.
         if self.site is not None:
-            cores = planned_green_clusters(self.site, obs["world_id"], self.catalog, lab_port)
+            cores = planned_green_layouts(
+                self.site,
+                obs["world_id"],
+                self.catalog,
+                lab_port,
+                rate=parameters["rate_per_minute"],
+                tick=obs.get("tick"),
+                root=self.path.parent,
+            )
             if not cores:
                 return self.no_allocation(obs["world_id"])
         else:
@@ -315,7 +467,7 @@ class LogisticScience:
                 candidates.append(core)
         survey = survey_slots(self.game, [[c["reserved_area"]] for c in candidates])
         if not survey.get("ok"):
-            settle(self.site, obs["world_id"], "logistic_science", None)
+            settle_green(self.site, obs["world_id"], None)
             return survey
         failures = []
         for index in survey.get("legal", []):
@@ -387,7 +539,7 @@ class LogisticScience:
                 clearance_world_id=obs["world_id"],
                 layout_policy="pcb-green-science-cells-v1",
             )
-            settle(self.site, obs["world_id"], "logistic_science", core.get("allocation"))
+            settle_green(self.site, obs["world_id"], core.get("allocation"))
             return {
                 "ok": True,
                 "world_id": obs["world_id"],
@@ -405,7 +557,7 @@ class LogisticScience:
                 "taps": taps,
                 "layout": dict(core.get("layout") or {}, chosen_tick=obs.get("tick")) if core.get("layout") else None,
             }
-        settle(self.site, obs["world_id"], "logistic_science", None)
+        settle_green(self.site, obs["world_id"], None)
         return {"ok": False, "reason": "no_green_science_site_with_clean_connections", "failures": failures}
 
     def _taps(self, obs, bus, core, inputs, entities, span, demand):
