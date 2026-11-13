@@ -143,9 +143,96 @@ def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=Non
         "commands": {k: {"count": v["count"], "seconds": round(v["seconds"], 1)} for k, v in commands.items()},
         "kernel_totals": kernel,
         "query_load": query_load(kernel, len(actions)),
+        "build_throughput": build_throughput(job_events, capability),
         "per_job": per_job,
         **incident_report(root, controller),
         **test_mode_label(root),
+    }
+
+
+# Hand logistics of the transitional (hand-fed) layer, by action reason prefix.
+HAND_LOGISTICS_REASONS = (
+    "fuel starter production",
+    "collect live construction stocks",
+    "feed the supply cell",
+    "collect produced",
+    "hand-fed boiler",
+)
+ACTOR_GAP_CAP_TICKS = 3600  # one action's actor time: ticks to the next action, at most one game minute
+WINDOW_MINUTES = 10
+
+
+def _paired(job_events):
+    """(intent, result) per action, matched by job key in event order."""
+    open_intents = {}
+    for row in job_events:
+        if row.get("event") == "action_intent":
+            open_intents[row.get("key")] = row
+        elif row.get("event") == "action_result" and row.get("key") in open_intents:
+            yield open_intents.pop(row.get("key")), row
+
+
+def _placed(action, result):
+    """Entities newly placed by one build/build_many receipt."""
+    result = result.get("result") or {}
+    if action.get("type") == "build_many":
+        return int(result.get("built") or 0)
+    if action.get("type") == "build" and result.get("ok") and result.get("status") == "succeeded":
+        return 0 if result.get("reused") else 1
+    return 0
+
+
+def build_throughput(job_events, capability):
+    """Construction speed: entities placed per actor-minute of the jobs that place entities.
+
+    Actor time of an action is the game time to the next action of any job, capped
+    at ACTOR_GAP_CAP_TICKS (so a long idle wait is not charged in full). Build jobs are
+    the jobs that placed at least one entity; all their actions count (stock trips too).
+    ``hand_logistics`` is the share of actions per WINDOW_MINUTES game-minute window
+    whose reason is transitional hand logistics (HAND_LOGISTICS_REASONS) against
+    permanent building (build/build_many).
+    """
+    pairs = [(i, r) for i, r in _paired(job_events) if isinstance(i.get("tick"), int)]
+    pairs.sort(key=lambda p: p[0]["tick"])
+    placed, batched = Counter(), Counter()
+    for intent, result in pairs:
+        n = _placed(intent.get("action") or {}, result)
+        placed[intent.get("key")] += n
+        if (intent.get("action") or {}).get("type") == "build_many":
+            batched[intent.get("key")] += n
+    builders = {key for key, n in placed.items() if n > 0}
+    actor_ticks = 0
+    for (intent, _), following in zip(pairs, pairs[1:] + [None]):
+        if intent.get("key") in builders and following is not None:
+            actor_ticks += min(ACTOR_GAP_CAP_TICKS, max(0, following[0]["tick"] - intent["tick"]))
+    total = sum(placed.values())
+    by_capability = Counter()
+    for key in builders:
+        by_capability[capability.get(key) or "?"] += placed[key]
+    windows = defaultdict(Counter)
+    for intent, _ in pairs:
+        action = intent.get("action") or {}
+        reason = str(action.get("reason") or "")
+        window = int(intent["tick"] / 3600 // WINDOW_MINUTES) * WINDOW_MINUTES
+        windows[window]["actions"] += 1
+        if any(reason.startswith(prefix) for prefix in HAND_LOGISTICS_REASONS):
+            windows[window]["hand_logistics"] += 1
+        elif action.get("type") in ("build", "build_many"):
+            windows[window]["building"] += 1
+    return {
+        "entities_placed": total,
+        "build_many_share": round(sum(batched.values()) / total, 2) if total else None,
+        "entities_per_actor_minute": round(total / (actor_ticks / 3600), 1) if actor_ticks else None,
+        "by_capability": dict(by_capability.most_common(8)),
+        "hand_logistics": [
+            {
+                "window": f"{w}-{w + WINDOW_MINUTES}",
+                "actions": row["actions"],
+                "hand_logistics_share": round(row["hand_logistics"] / row["actions"], 2),
+                "building_share": round(row["building"] / row["actions"], 2),
+            }
+            for w, row in sorted(windows.items())
+        ],
     }
 
 
@@ -258,6 +345,16 @@ def main(argv=None):
                 print(
                     "  {capability:24s} {status:10s} actions={actions:4d} plan={planning_seconds:7.1f}s "
                     "exec={execution_seconds:6.1f}s  {reason}".format(**job)
+                )
+        elif key == "build_throughput":
+            print(
+                "build_throughput: {entities_placed} entities, {entities_per_actor_minute} per actor-minute, "
+                "build_many share {build_many_share}  {by_capability}".format(**value)
+            )
+            for row in value["hand_logistics"]:
+                print(
+                    "  {window:>7s} min  actions={actions:4d}  hand logistics {hand_logistics_share:.0%}"
+                    "  building {building_share:.0%}".format(**row)
                 )
         elif key == "incidents":
             print("incidents:")

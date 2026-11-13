@@ -111,5 +111,38 @@ class IncidentRunTests(Fixture):
         self.assertIn("not on the menu", row["rejected"])
 
 
+class BuildThroughputTests(unittest.TestCase):
+    def test_entities_per_actor_minute_and_hand_logistics_share(self):
+        def act(key, tick, action, result):
+            return [
+                {"key": key, "event": "action_intent", "tick": tick, "time": tick, "action": action},
+                {"key": key, "event": "action_result", "tick": tick, "time": tick, "result": result},
+            ]
+
+        many = {"type": "build_many", "actions": [{}] * 4}
+        events = (
+            act("d", 0, many, {"ok": True, "status": "succeeded", "built": 3, "reused": 1})
+            + act("d", 60, {"type": "build", "name": "stone-furnace"}, {"ok": True, "status": "succeeded"})
+            + act(
+                "d", 120, {"type": "take_many", "reason": "collect live construction stocks iron-plate"}, {"ok": True}
+            )
+            + act("s", 9000, {"type": "insert", "reason": "fuel starter production"}, {"ok": True})
+            + act(
+                "d",
+                99000,
+                {"type": "build", "name": "transport-belt"},
+                {"ok": True, "status": "succeeded", "reused": True},
+            )
+        )
+        data = report_run.build_throughput(events, {"d": "smelting_district", "s": "starter"})
+        self.assertEqual((data["entities_placed"], data["build_many_share"]), (4, 0.75))
+        # d's actor time: 60 + 60 + 3600 (capped gap to the next action) ticks = 62 s
+        self.assertEqual(data["entities_per_actor_minute"], round(4 / (3720 / 3600), 1))
+        self.assertEqual(data["by_capability"], {"smelting_district": 4})
+        first = data["hand_logistics"][0]
+        self.assertEqual((first["window"], first["actions"]), ("0-10", 4))
+        self.assertEqual((first["hand_logistics_share"], first["building_share"]), (0.5, 0.5))
+
+
 if __name__ == "__main__":
     unittest.main()
