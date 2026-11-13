@@ -49,6 +49,9 @@ def science_row(x, y, count):
         entity("inserter", x - 6, y + 7, 12),
         entity("inserter", x - 4, y + 4, 8),
         entity("small-electric-pole", x - 6, y + 6),
+        # Links the gear pole to the row poles: they are 10 tiles apart, past
+        # small-pole wire reach, and the gear cell stayed unpowered on a fresh map.
+        entity("small-electric-pole", x - 2, y + 4),
     ]
     es += [entity("transport-belt", x - 7, y + dy, 0) for dy in range(4, 9)]
     es += [entity("transport-belt", x - 4, y + dy, 0 if dy > -1 else 4) for dy in range(-1, 4)]
