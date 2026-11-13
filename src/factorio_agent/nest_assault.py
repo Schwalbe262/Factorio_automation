@@ -17,6 +17,7 @@ from .defense_perimeter import protected_factory_areas
 from .nearby_threats import NearbyThreats
 from .planning import overlap, preflight
 from .resource_policy import mining_reservations
+from .actor_client import CHUNK_CHARTED_LUA
 from factorio_agent.core.world_catalog import _yield
 
 MAX_STAGES = 3
@@ -321,7 +322,9 @@ return {ok=true,status="succeeded",started_tick=op.started_tick,deadline_tick=op
 """
 
 
-CANDIDATE_SURVEY_LUA = r"""
+CANDIDATE_SURVEY_LUA = (
+    CHUNK_CHARTED_LUA
+    + r"""
 if not d or d.world_id~=x.world_id or s.name~="nauvis"then return {ok=false,reason="assault_candidate_world_changed"}end
 local listener=script.get_event_handler(defines.events.on_entity_died)
 if listener and listener~=_G.__factorio_nest_death_handler then return {ok=false,reason="assault_existing_death_handler_requires_safe_integration"}end
@@ -330,7 +333,7 @@ for i,q in ipairs(x.candidates)do local legal=true
  for _,spec in ipairs(q.entities)do local h=spec.name=="gun-turret"and 1 or .5;local p=spec.position
   local area={{p.x-h,p.y-h},{p.x+h,p.y+h}}
   for cx=math.floor(area[1][1]/32),math.floor((area[2][1]-.0001)/32)do
-   for cy=math.floor(area[1][2]/32),math.floor((area[2][2]-.0001)/32)do if not f.is_chunk_charted(s,{x=cx,y=cy})then legal=false end end
+   for cy=math.floor(area[1][2]/32),math.floor((area[2][2]-.0001)/32)do if not chunk_charted(cx,cy)then legal=false end end
   end
   if legal and(s.count_entities_filtered{area=area,type="resource"}>0 or not s.can_place_entity{
    name=spec.name,position=p,direction=0,force=f,build_check_type=defines.build_check_type.manual_ghost,forced=true})then legal=false end
@@ -345,6 +348,7 @@ for i,q in ipairs(x.candidates)do local legal=true
 end
 return {ok=true,tick=game.tick,legal=rows}
 """
+)
 
 
 INSPECT_ASSAULT_LUA = r"""

@@ -44,6 +44,7 @@ def execute(argv=None, services=None):
         "actor-status",
         "checkpoint",
         "detach-client",
+        "client-free-presence",
     ):
         commands.add_parser(command)
     recovery = commands.add_parser("recover-actor")
@@ -110,6 +111,11 @@ def execute(argv=None, services=None):
             result = detach(root, game, services.catalog(root, game))
             if result.get("status") == "succeeded":
                 Ledger(root).event("actor-lifecycle", "actor_detached", tick=(result.get("record") or {}).get("tick"))
+    elif args.command == "client-free-presence":
+        from .actor_client import presence
+
+        with RunLock(root / "writer.lock"):
+            result = presence(root, services.game(root))
     elif args.command == "watch":
         from factorio_agent.core.deterministic_character import set_client_visibility
 

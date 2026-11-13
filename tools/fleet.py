@@ -8,14 +8,13 @@ Usage: python -B tools/fleet.py start --count N [--seeds a,b,c | random] [--minu
 
 Each run is a new folder ``runtime/v2/<name>-<seed>`` with its own seed and its
 own server/RCON port pair (allocated above the interactive range). By default
-(``--client always``) a run is the three processes of ``lifecycle start
---no-gui``: a dedicated server, the per-run automation client with its window
-hidden and a ``--planner none`` supervisor. ``--client none`` makes a
-client-free TEST run (server + supervisor only, labelled ``test_mode:
-client_free``, the lab trigger script-credited after the real craft; a
-player-less actor charts nothing, so it is equivalent only up to the
-electric-mining-drill research, docs/v2/HEADLESS.md); ``until_lab_trigger``
-closes the client once the lab trigger fired. ``runtime/active-runtime.json`` and every existing runtime are never
+(``--client none``) a run is a client-free TEST run: a dedicated server and a
+``--planner none`` supervisor only, labelled ``test_mode: client_free`` (the
+lab trigger is script-credited after the real craft and the map is charted and
+generated around the actor as a player would, docs/v2/HEADLESS.md).
+``--client always`` (``--keep-client``, proof runs) adds the per-run automation
+client with its window hidden, as ``lifecycle start --no-gui`` does;
+``until_lab_trigger`` closes it once the lab trigger fired. ``runtime/active-runtime.json`` and every existing runtime are never
 touched; the manifest is ``runtime/fleets/<name>.json``. ``stop`` uses the
 lifecycle safe stop per run (supervisor ACK, world paused and saved, server
 ``/quit``, own client closed); nothing is deleted.
@@ -480,7 +479,7 @@ class Fleet:
         # server and the supervisor; labelled test_mode client_free), "always" =
         # a hidden client for the whole run, "until_lab_trigger" = client until
         # the lab trigger fired (docs/v2/HEADLESS.md).
-        self.client = "always"
+        self.client = "none"
 
     # manifest ----------------------------------------------------------
     def manifest_path(self, name):
@@ -879,9 +878,9 @@ def main(argv=None):
     start.add_argument(
         "--client",
         choices=actor_client.MODES,
-        default=actor_client.ALWAYS,
-        help="always (default): a hidden client per run; none: client-free TEST run (lab trigger script-credited"
-        " after the real craft; no charting, see HEADLESS.md); until_lab_trigger: client until the lab trigger",
+        default=actor_client.NONE,
+        help="none (default): client-free TEST run (lab trigger script-credited after the real craft, map charted"
+        " around the actor as a player would); always: a hidden client per run (proof runs); until_lab_trigger",
     )
     start.add_argument("--keep-client", action="store_true", help="same as --client always")
     for command in ("status", "report", "stop", "watch"):

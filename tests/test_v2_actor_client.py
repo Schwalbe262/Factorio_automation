@@ -290,6 +290,46 @@ labtech.researched=true""")
         self.assertTrue(verify["detached"])
         self.assertFalse(verify["actor_owned"])
 
+    def test_presence_charts_start_area_once_then_only_around_the_actor(self):
+        self.lua.execute("""charts={};generated={}
+f.chart=function(surface,area)charts[#charts+1]=area end
+f.get_spawn_position=function()return{x=0,y=0}end
+s.request_to_generate_chunks=function(p,r)generated[#generated+1]=r end
+storage={}""")
+        payload = actor_client.presence_action("w")
+        self.assertEqual(
+            self.run_lua(actor_client.PRESENCE_LUA, payload)["reason"], "presence_requires_client_free_actor"
+        )
+        self.run_lua(actor_client.ADOPT_LUA, dict(world_id="w"))
+        first = self.run_lua(actor_client.PRESENCE_LUA, payload)
+        self.assertTrue(first["first"])
+        self.assertTrue(
+            self.lua.eval("#charts==2 and charts[1][1][1]==-200 and charts[1][2][2]==200 and s.daytime==0.7")
+        )
+        self.assertTrue(self.lua.eval("charts[2][1][1]==-96 and charts[2][2][1]==127 and generated[1]==10"))
+        self.lua.execute("a.position={x=1000,y=-40};s.daytime=0.2")
+        again = self.run_lua(actor_client.PRESENCE_LUA, payload)
+        self.assertFalse(again["first"])
+        self.assertTrue(self.lua.eval("#charts==3 and charts[3][1][1]==(31-3)*32 and charts[3][1][2]==(-2-3)*32"))
+        self.assertTrue(self.lua.eval("s.daytime==0.2 and d.presence_emulation.updates==2"))
+        self.assertTrue(self.lua.eval("d.presence_emulation.charted_count==196+49"))
+        self.lua.execute("f.is_chunk_charted=function()return false end")
+        probe = actor_client.CHUNK_CHARTED_LUA + " return {ok=true,a=chunk_charted(31,-2),b=chunk_charted(40,40)}"
+        self.assertEqual({k: v for k, v in self.run_lua(probe).items() if k != "ok"}, {"a": True, "b": False})
+        self.lua.execute("d.detached_actor.mode='until_lab_trigger'")
+        self.assertFalse(self.run_lua(probe)["a"])
+
+    def test_presence_refuses_outside_client_free_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = runtime_dir(directory)
+            game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root), expected_world="w", query=Mock())
+            receipt = actor_client.execute_presence(game, actor_client.presence_action("w"))
+            self.assertEqual(receipt["reason"], "presence_requires_client_free_mode")
+            bigger = dict(actor_client.presence_action("w"), move_chart_radius_chunks=40)
+            actor_client.set_mode(root, "none")
+            self.assertEqual(actor_client.execute_presence(game, bigger)["reason"], "presence_action_shape")
+            game.query.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

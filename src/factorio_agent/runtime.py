@@ -51,13 +51,19 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self, action: dict) -> dict:
-        if action.get("type") in ("detach_actor", "adopt_playerless_actor", "credit_hand_craft_trigger"):
+        if action.get("type") in (
+            "detach_actor",
+            "adopt_playerless_actor",
+            "credit_hand_craft_trigger",
+            "emulate_player_presence",
+        ):
             from . import actor_client
 
             body = {
                 "detach_actor": actor_client.execute_detach,
                 "adopt_playerless_actor": actor_client.execute_adopt,
                 "credit_hand_craft_trigger": actor_client.execute_credit,
+                "emulate_player_presence": actor_client.execute_presence,
             }[action["type"]]
             return self._record_action(action, body(self, action))
         if action.get("type") == "seed_paid_burner":

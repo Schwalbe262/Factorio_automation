@@ -8,6 +8,7 @@ import json
 import math
 
 from .defense_coverage import coverage_cells, native_candidate_survey
+from .actor_client import CHUNK_CHARTED_LUA
 
 
 PRODUCERS = {
@@ -29,7 +30,9 @@ THREAT_RADIUS = 96
 NEVER_RELAXED = frozenset({"bus", "rail", "corridor"})
 # Ranked producers tried as a post's focus before the step reports no site.
 FOCUS_TRIES = 8
-SURVEY_LUA = r"""
+SURVEY_LUA = (
+    CHUNK_CHARTED_LUA
+    + r"""
 local x=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=x.world_id or s.name~="nauvis"then return {ok=false,reason="defense_policy_world_or_surface_changed"}end
 local enemy=game.forces.enemy;local proto=prototypes.entity["gun-turret"]
@@ -52,7 +55,7 @@ local targets={};local seen={}
 local hostile=not f.get_friend(enemy)and not f.get_cease_fire(enemy)
 if hostile then for _,asset in ipairs(assets)do
  for _,e in pairs(s.find_entities_filtered{position=asset.position,radius=96,force=enemy,type={"unit","unit-spawner","turret"},limit=129})do
-  if e.valid and not seen[e.unit_number]and f.is_chunk_charted(s,{x=math.floor(e.position.x/32),y=math.floor(e.position.y/32)})then
+  if e.valid and not seen[e.unit_number]and chunk_charted(math.floor(e.position.x/32),math.floor(e.position.y/32))then
    if #targets>=128 then truncated=true;break end
    seen[e.unit_number]=true
    local attack=e.prototype.attack_parameters
@@ -66,6 +69,7 @@ end
 return {ok=true,world_id=d.world_id,tick=game.tick,surface_index=s.index,force_index=f.index,assets=assets,guns=guns,targets=targets,
  evolution_factor=enemy.get_evolution_factor(s),gun_range=proto.attack_parameters.range,technologies=technologies,truncated=truncated,ammo_machine_observed=ammo_machine}
 """
+)
 
 
 def _distance(a, b):

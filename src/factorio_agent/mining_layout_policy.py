@@ -39,6 +39,7 @@ from .power_grid import plan_connection as power_connection
 from .resource_policy import MINING_EXIT_LUA, annotate_mining_exit, mining_exit_candidates
 from .site.transform import Transform, apply
 from .smelting import merge_entities
+from .actor_client import CHUNK_CHARTED_LUA
 
 
 FLOWS = {"west_to_east": 4, "east_to_west": 12, "north_to_south": 8, "south_to_north": 0}
@@ -339,13 +340,15 @@ def validate_extension_contract(bank, new_plan):
     return {"ok": True, "policy_id": contract["policy"]["policy_id"], "native_identity_and_lane_recheck_required": True}
 
 
-PATCH_SURVEY_LUA = r"""
+PATCH_SURVEY_LUA = (
+    CHUNK_CHARTED_LUA
+    + r"""
 if not d or d.world_id~=x.world_id or s.name~="nauvis"then return {ok=false,reason="mining_patch_world_or_surface_changed"}end
 local drill=prototypes.entity["electric-mining-drill"];local belt=prototypes.entity["transport-belt"]
 local resource=prototypes.entity[x.resource];local tiles={};local truncated=false;local charted=0
 for cx=math.floor(x.area[1][1]/32),math.floor((x.area[2][1]-.0001)/32)do
  for cy=math.floor(x.area[1][2]/32),math.floor((x.area[2][2]-.0001)/32)do
-  if f.is_chunk_charted(s,{x=cx,y=cy})then charted=charted+1
+  if chunk_charted(cx,cy)then charted=charted+1
    local area={{math.max(x.area[1][1],cx*32),math.max(x.area[1][2],cy*32)},
                {math.min(x.area[2][1]-.0001,(cx+1)*32-.0001),math.min(x.area[2][2]-.0001,(cy+1)*32-.0001)}}
    local remaining=x.maximum_tiles-#tiles
@@ -360,6 +363,7 @@ return {ok=true,tick=game.tick,world_id=d.world_id,surface_index=s.index,area=x.
  native={mining_speed=drill.mining_speed,mining_radius=drill.mining_drill_radius,mining_time=resource.mineable_properties.mining_time,
  belt_speed=belt.belt_speed,force_productivity_bonus=f.mining_drill_productivity_bonus}}
 """
+)
 
 
 def survey_patch(game, obs, catalog, resource, area, *, maximum_tiles=MAX_TILES):

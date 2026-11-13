@@ -4,15 +4,18 @@
 happened, the recorded transition. A missing file is ``always``: the
 interactive map and every older runtime behave as before.
 
-``none`` (client-free test runs, ``tools/fleet.py start --client none``): no client ever.
+``none`` (client-free test runs, ``tools/fleet.py start`` default): no client ever.
 ``adopt`` records the server-created character (no player) as the actor
 (``d.detached_actor`` with ``mode="none"``). The engine does not credit a hand
 craft of a player-less character, so a ``craft-item`` trigger that needs a hand
-craft never fires. The one written exception to "nothing granted" (AGENTS.md):
-after the real craft (recorded in the world by the ``craft`` action with the
-items it consumed), ``credit_hand_craft_trigger`` marks exactly that technology
-researched. The run is labelled ``test_mode: client_free`` (``run.json``, this
-file, reports) with every credit and its tick.
+craft never fires. The written test-mode exception to "nothing granted"
+(AGENTS.md) has two parts: (a) after the real craft (recorded in the world by
+the ``craft`` action with the items it consumed), ``credit_hand_craft_trigger``
+marks exactly that technology researched; (b) ``emulate_player_presence``
+charts (recorded, since the engine charts nothing for a force without players)
+and generates the map around the actor as a connected player would. The run is
+labelled ``test_mode: client_free`` (``run.json``, this file, reports) with
+every credit and its tick and the presence radii.
 
 ``until_lab_trigger`` (fleet runs, ``tools/fleet.py start``): the run starts as
 today (client connected, actor bound to its player). A hand craft is credited
@@ -48,6 +51,26 @@ UNTIL_LAB_TRIGGER = "until_lab_trigger"
 MODES = (ALWAYS, NONE, UNTIL_LAB_TRIGGER)
 TEST_MODE = "client_free"
 CREDIT_ACTION = "credit_hand_craft_trigger"
+PRESENCE_ACTION = "emulate_player_presence"
+# What a connected player causes around itself (measured on detach-gui-1193005910
+# against detach-none-1193005910, HEADLESS.md "Player presence"):
+# - freeplay's on_player_created charts the starting area once: a square of
+#   storage.chart_distance (default 200) tiles around the force spawn (196 chunks)
+#   and sets the daytime to 0.7; its crash site holds items and is not recreated;
+# - the map generator generates chunks around the player progressively: sampled
+#   every 10 s on detach-gui2 (player at the spawn) 419 chunks at tick 2.5k, 767
+#   at 18.4k and 1964 (46x46) at 78.7k, i.e. a radius of about
+#   10 + tick / 6900 chunks, capped at 22; a script request generates at once,
+#   so the requested radius follows that curve;
+# - a player charts around its character as it moves; the assisted actor never
+#   leaves the spawn chunk in those runs, so the radius is the commonly cited
+#   3 chunks (inside the start square, it adds nothing there).
+START_CHART_TILES = 200
+JOIN_DAYTIME = 0.7
+GENERATE_RADIUS_CHUNKS = 22
+GENERATE_BASE_CHUNKS = 10
+GENERATE_TICKS_PER_CHUNK = 6900
+MOVE_CHART_RADIUS_CHUNKS = 3
 LAB_TRIGGER = "automation-science-pack"
 DEAD_WITHOUT_PLAYER = "actor_dead_without_player"
 DISCONNECT_WAIT_SECONDS = 30
@@ -191,6 +214,60 @@ return {ok=true,status="succeeded",reason="hand_craft_trigger_credited_test_mode
 """
 )
 
+PRESENCE_LUA = (
+    r"""
+local x=helpers.json_to_table(PAYLOAD)
+"""
+    + DETACHED_ACTOR_LUA
+    + r"""
+local function refuse(reason)return {ok=false,status="blocked",reason=reason,tick=game.tick}end
+local r=d and d.detached_actor
+if not d or d.world_id~=x.world_id then return refuse("presence_world_changed")end
+if type(r)~="table"or r.mode~="none"or not detached_actor()then return refuse("presence_requires_client_free_actor")end
+local p=d.presence_emulation
+local first=false
+local function mark(x0,y0,x1,y1)
+ for i=x0,x1 do for j=y0,y1 do local k=i..","..j
+  if not p.charted[k]then p.charted[k]=true;p.charted_count=p.charted_count+1 end end end
+end
+if not p then
+ first=true
+ local range=storage.chart_distance or x.start_chart_tiles
+ local o=f.get_spawn_position(s)
+ f.chart(s,{{o.x-range,o.y-range},{o.x+range,o.y+range}})
+ s.daytime=x.join_daytime
+ p={kind="player-presence-emulation-v1",test_mode="client_free",start_tick=game.tick,start_chart_tiles=range,
+  spawn=pos(o),join_daytime=x.join_daytime,generate_radius_chunks=x.generate_radius_chunks,
+  move_chart_radius_chunks=x.move_chart_radius_chunks,updates=0,charted={},charted_count=0}
+ d.presence_emulation=p
+ mark(math.floor((o.x-range)/32),math.floor((o.y-range)/32),math.floor((o.x+range)/32),math.floor((o.y+range)/32))
+end
+local cx=math.floor(a.position.x/32);local cy=math.floor(a.position.y/32);local m=x.move_chart_radius_chunks
+local g=math.min(x.generate_radius_chunks,math.floor(x.generate_base_chunks+game.tick/x.generate_ticks_per_chunk))
+s.request_to_generate_chunks(a.position,g);p.generate_radius_now=g
+f.chart(s,{{(cx-m)*32,(cy-m)*32},{(cx+m+1)*32-1,(cy+m+1)*32-1}})
+mark(cx-m,cy-m,cx+m,cy+m)
+p.updates=p.updates+1;p.last_tick=game.tick;p.last_chunk={x=cx,y=cy}
+local summary={}
+for k,v in pairs(p)do if k~="charted"then summary[k]=v end end
+return {ok=true,status="succeeded",reason=first and"presence_emulation_started"or"presence_emulation_updated",
+ first=first,record=summary,tick=game.tick}
+"""
+)
+
+# Factorio processes chart requests only for forces with players: in client-free
+# mode force.chart stays requested forever. Every reader of "charted" uses this
+# helper: the engine chart, or (client-free mode only) the chunks the presence
+# emulation recorded as charted by a player at that radius.
+CHUNK_CHARTED_LUA = r"""
+local function chunk_charted(cx,cy)
+ if f.is_chunk_charted(s,{x=cx,y=cy})then return true end
+ local r=d and d.detached_actor;local p=d and d.presence_emulation
+ return type(r)=="table"and r.mode=="none"and type(p)=="table"and type(p.charted)=="table"
+  and p.charted[cx..","..cy]==true or false
+end
+"""
+
 VERIFY_LUA = (
     DETACHED_ACTOR_LUA
     + r"""
@@ -241,12 +318,14 @@ def set_mode(root, client: str) -> dict:
     return value
 
 
-def _label_run(root, credits):
+def _label_run(root, credits, presence=None):
     path = Path(root) / "run.json"
     if not path.exists():
         return
     run = json.loads(path.read_text(encoding="utf-8"))
     run.update(test_mode=TEST_MODE, script_credited_triggers=credits)
+    if presence is not None:
+        run["presence_emulation"] = presence
     _atomic_json(path, run)
 
 
@@ -258,7 +337,11 @@ def test_mode(root) -> dict | None:
         return None
     if value.get("client") != NONE:
         return None
-    return dict(test_mode=TEST_MODE, script_credited_triggers=list(value.get("script_credited_triggers") or []))
+    return dict(
+        test_mode=TEST_MODE,
+        script_credited_triggers=list(value.get("script_credited_triggers") or []),
+        presence_emulation=value.get("presence_emulation"),
+    )
 
 
 def _world(root):
@@ -443,7 +526,57 @@ def execute_credit(game, action) -> dict:
         rows.append(row)
         value["script_credited_triggers"] = rows
         _atomic_json(root / OPTION_FILE, value)
-        _label_run(root, rows)
+        _label_run(root, rows, presence=value.get("presence_emulation"))
+    return receipt
+
+
+def presence_action(world):
+    return dict(
+        type=PRESENCE_ACTION,
+        world_id=world,
+        start_chart_tiles=START_CHART_TILES,
+        join_daytime=JOIN_DAYTIME,
+        generate_radius_chunks=GENERATE_RADIUS_CHUNKS,
+        generate_base_chunks=GENERATE_BASE_CHUNKS,
+        generate_ticks_per_chunk=GENERATE_TICKS_PER_CHUNK,
+        move_chart_radius_chunks=MOVE_CHART_RADIUS_CHUNKS,
+    )
+
+
+def execute_presence(game, action) -> dict:
+    """Body of ``emulate_player_presence`` (``WorldBoundGame.act``): exception (b) of the test mode.
+
+    Refuses outside client-free mode; charts/generates only what a connected
+    player would (fixed radii above); never grants items or research."""
+    root = Path(game.cfg.runtime_dir).resolve()
+    world = getattr(game, "expected_world", None) or _world(root)
+    if action != presence_action(action.get("world_id")) or action.get("world_id") != world:
+        return dict(ok=False, status="blocked", reason="presence_action_shape")
+    if mode(root) != NONE:
+        return dict(ok=False, status="blocked", reason="presence_requires_client_free_mode")
+    return game.query(PRESENCE_LUA.replace("PAYLOAD", _payload(action)))
+
+
+def presence(root, game) -> dict:
+    """Client-free: keep the map charted/generated around the actor as a connected player would."""
+    root = Path(root).resolve()
+    world = getattr(game, "expected_world", None) or _world(root)
+    receipt = game.act(presence_action(world))
+    if receipt.get("status") == "succeeded" and receipt.get("first"):
+        record = receipt.get("record") or {}
+        block = dict(
+            on=True,
+            start_tick=record.get("start_tick"),
+            start_chart_tiles=record.get("start_chart_tiles"),
+            join_daytime=JOIN_DAYTIME,
+            generate_radius_chunks=f"min({GENERATE_RADIUS_CHUNKS}, {GENERATE_BASE_CHUNKS} + tick/{GENERATE_TICKS_PER_CHUNK})",
+            move_chart_radius_chunks=MOVE_CHART_RADIUS_CHUNKS,
+            charting="emulated: force.chart is not processed without players; readers use chunk_charted",
+        )
+        value = read(root)
+        value["presence_emulation"] = block
+        _atomic_json(root / OPTION_FILE, value)
+        _label_run(root, value.get("script_credited_triggers") or [], presence=block)
     return receipt
 
 
