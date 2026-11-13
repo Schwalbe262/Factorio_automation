@@ -16,11 +16,26 @@ posts do not become producer references or expand the threat horizon themselves.
 
 | Native conditions | Active targets | Initial magazines / refill below |
 | --- | ---: | ---: |
-| Quiet, no approach within 64 tiles, evolution < `QUIET_EVOLUTION` (0.1) | 0 | - |
+| Quiet, no approach within 64 tiles, no attack source, evolution < `QUIET_EVOLUTION` (0.1) | 0 | - |
 | Quiet, evolution >= 0.1 | 0 early / 1 mid / 2 advanced tier | 10 / 5 |
-| Approaching units/nests within 64 tiles | 2 | 10 / 5 |
+| Approaching units/nests within 64 tiles, or an attack expected (`attack_sources`) | 2 | 10 / 5 |
 | Units within 40, close threats, damage under pressure, or stronger evolution nearby | 3 | 20 / 10 |
 | Strong unit within 24 or severe damage under pressure | 4 | 20 / 10 |
+
+Attack expected (`attack_sources`, since all-1114-0107-1075833632: its
+client-free actor died at the spawn at 30.7 game min, evolution 0.007, every
+survey "quiet, no enemy within 96 tiles of a producer", no turret and no
+gun-turret research): an attack group forms at a nest the pollution cloud
+reaches, wherever it is, so the survey also lists, around the force spawn and
+in charted chunks only, every spawner within `ATTACK_SOURCE_RADIUS` (384) whose
+position has pollution > 0 (`polluted_spawner`) and every enemy unit within
+`GROUP_RADIUS` (192) farther than `GROUP_NEST_RADIUS` (24) from any nest
+(`moving_group`: an attack or expansion party). Any such source, or a truncated
+source list, makes the risk at least `approaching` (2 posts, sited toward the
+sources when nothing is within 96 tiles; `sizing` "attack expected: ...").
+That level also pulls `research_gun_turret` and then `defense_perimeter` ahead
+of their roadmap `after` steps (`progression.defense_urgency_nodes`,
+`URGENT_DEFENSE_PRIORITY`, one node at a time, same node ids as the roadmap).
 
 A quiet low-evolution map buys no turret: `defense_perimeter` succeeds with
 reason `quiet map, no posts required` and the risk's `sizing` line in its

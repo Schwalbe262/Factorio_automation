@@ -67,6 +67,14 @@ class WorldBoundGame(DeterministicGame):
                 "emulate_player_presence": actor_client.execute_presence,
             }[action["type"]]
             return self._record_action(action, body(self, action))
+        if action.get("type") in ("respawn_client_free_actor", "recover_client_free_belongings"):
+            from . import actor_death
+
+            body = {
+                "respawn_client_free_actor": actor_death.execute_respawn,
+                "recover_client_free_belongings": actor_death.execute_belongings,
+            }[action["type"]]
+            return self._record_action(action, body(self, action))
         if action.get("type") == "seed_paid_burner":
             from .paid_burner_seed import execute_paid_burner_seed
 

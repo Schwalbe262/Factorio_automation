@@ -33,6 +33,10 @@ overlap, they are views, not a partition):
   roadmap ``after`` steps; only the requires are checked).
 - ``rework``: an entity built and then mined at the same position (any job)
   within ``REWORK_WINDOW`` (both actions' actor seconds).
+- ``actor_death``: per actor death (``factorio_agent.actor_death.deaths``), the
+  seconds from the death to its recovery (respawn, then the corpse items back or
+  given up), or to the run end when it was never recovered; the example names
+  the cause seen at the corpse and the items lost.
 - ``idle_with_work``: the supervisor's idle watchdog (``logs/controller-events.jsonl``
   event ``idle_with_work``, ``bottleneck_audit``): actor seconds without an action
   beyond ``IDLE_SECONDS`` while a bottleneck, an untried remedy or ready queue work
@@ -445,6 +449,8 @@ def analyse(root: Path) -> dict:
                     },
                 )
 
+    actor_death_waste(root, end, w)
+
     return {
         "run": str(root),
         "seed": seed,
@@ -452,6 +458,31 @@ def analyse(root: Path) -> dict:
         "waste": w.as_dict(),
         "remedies": remedies,
     }
+
+
+def actor_death_waste(root, end, w) -> list[dict]:
+    """``actor_death`` rows: game seconds from each death to its recovery (respawn, then the corpse items
+    back or given up), or to the run end when never recovered; ``items_lost`` = corpse items not recovered."""
+    try:
+        from factorio_agent.actor_death import deaths
+    except ImportError:
+        return []
+    rows = deaths(root, end_tick=end or None)
+    for d in rows:
+        lost = d.get("items_lost")
+        w.add(
+            "actor_death",
+            max(0.0, d.get("lost_seconds") or 0.0),
+            {
+                "tick": d["death_tick"],
+                "job": "actor",
+                "reason": f"{d.get('cause')}; belongings {d.get('belongings') or '-'}"
+                + (f", {lost} items lost" if lost else "")
+                + ("" if d.get("recovered_tick") is not None else ", never recovered"),
+                "items_lost": lost,
+            },
+        )
+    return rows
 
 
 def idle_with_work(root) -> list[dict]:

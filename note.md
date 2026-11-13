@@ -252264,6 +252264,13 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - result: v2 c9acd07; GUI map eval-1575138435 and long fleet long-1114-0039 running.
 - next: verify the ladder on the GUI map; read all-1114-0020 and the long fleet.
 
+## 2026-11-14 04:30 Part 54 - actor death never hangs a run; attack-expected defense timing
+- goal: run all-1114-0107-1075833632 hung 75+ real min after the client-free actor died at 30.6 game min (observe agent_dead, error loop, watcher waits for the target minute).
+- evidence: all 72 presence updates say actor chunk (0,0) (assisted backend, never moved): it died at the spawn, not on a trip; no turret, gun-turret not researched (defense_perimeter is after logistic science); every survey (ticks 49877/67754/71854) "quiet, no enemy within 96 tiles of a producer, evolution 0.004-0.007"; no survey or log names the killer (no cause logged). The old actor_dead_without_player rule never fired: observe failed before actor-status.
+- actions: actor_death.py (client-free respawn emulation: 600-tick delay, empty character at the force spawn, corpse untouched; paid corpse recovery deferred while enemies within 32 tiles; death records); supervisor agent_dead state (respawn/rebind, reconcile unknown outcomes, belongings between slices, no error backoff); move trip_target_threatened check; defense attack_sources (polluted charted nest within 384, moving group within 192) -> level >= 1 -> defense_urgency_nodes pull gun-turret research + defense_perimeter forward; fleet watcher stall timeout (5x fleet pace, >= 10 real min), triage "errored: agent_dead", report "actor deaths", waste_report actor_death.
+- metrics: test_v2_actor_death 20 tests (lupa Lua included); waste_report on the incident: actor_death 4629 s.
+- result: offline; no server or fleet started.
+- next: fleet round to see (1) how often attack_sources fire and what the earlier turrets cost on the critical path, (2) a live respawn + belongings trip; AGENTS.md exception (b) wording should name the respawn (owner).
 ## 2026-11-14 Part 54 - green science grows with its labs (pack_growth, lab feed audit)
 - goal: eval-1575138435 at ~185 min: 8 labs, red 24/min backing up, green 5/min, nothing grew green.
 - hypothesis/cause: (1) no capability built the split row's 5 reserved slots, and selection gave them no ceiling (so a 30/min request could also pick the 5/min cluster); (2) the red receipt counted red only: labs missing green read as "the lab feed"; (3) research_capacity priced green as "+1 assembler" with a plate cap from a measured net of ~0.
@@ -252276,3 +252283,4 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: rocket_plan.rocket_bill (rocket-silo closure 1000x3 packs; SA silo 50 parts of PU+LDS+RF; payload starter pack; flow to ores/crude/water, coproduct rule), tools/rocket_plan.py, tail rows -> observe receipt rocket_plan -> progression.roadmap_for; produce rows match by item, satisfied at >= rate.
 - result: 25-step tail on the real 2.1.20 catalog; 13 research, 4 produce rows (EC, pipe, foundation), inert rows for missing capabilities. Gate passed (worktree, lupa skipped).
 - next: fluid_assembly (PU, RF, concrete, EEU), chemical_product (solid fuel), produce_merged (LDS), wire advanced_petroleum/fluid_products, rocket_silo/parts/launch; verify on a long fleet.
+- follow-up (coordinator): respawn emulation behind actor-client.json respawn (default false, fleet.py start --respawn, header "respawn emulation on"); off = death recorded, safe stop, watcher ends the run at once, triage errored: agent_dead; merged v2 1c13a77 (idle watch, growth pass, rocket tail: defense_urgency_nodes uses roadmap_for steps).

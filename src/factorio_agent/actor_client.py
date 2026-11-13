@@ -31,9 +31,13 @@ continues server-only. Checks that pinned the connected player accept the
 detached actor through ``DETACHED_ACTOR_LUA`` (same unit number and world id
 as recorded at the detach).
 
-Death after the detach: the corpse keeps the inventory but nothing respawns
-without a player, so the supervisor records ``actor_dead_without_player`` and
-stops the run (no replacement character, no granted items).
+Death after the detach (``until_lab_trigger``): the corpse keeps the inventory
+but nothing respawns without a player, so the supervisor records
+``actor_dead_without_player`` and stops the run (no replacement character, no
+granted items). In client-free mode a death ends the run ``errored: agent_dead``
+unless the optional respawn emulation is switched on (``respawn: true``, off by
+default, owner approval pending; ``actor_death``: a new empty character at the
+spawn after the respawn delay; the corpse keeps every item).
 """
 
 from __future__ import annotations
@@ -242,6 +246,7 @@ if not p then
  d.presence_emulation=p
  mark(math.floor((o.x-range)/32),math.floor((o.y-range)/32),math.floor((o.x+range)/32),math.floor((o.y+range)/32))
 end
+d.actor_last_known_position=pos(a.position)
 local cx=math.floor(a.position.x/32);local cy=math.floor(a.position.y/32);local m=x.move_chart_radius_chunks
 local g=math.min(x.generate_radius_chunks,math.floor(x.generate_base_chunks+game.tick/x.generate_ticks_per_chunk))
 s.request_to_generate_chunks(a.position,g);p.generate_radius_now=g
@@ -329,6 +334,28 @@ def _label_run(root, credits, presence=None):
     _atomic_json(path, run)
 
 
+RESPAWN_OPTION = "respawn"
+
+
+def respawn_enabled(root) -> bool:
+    """``actor-client.json`` ``respawn: true``: the optional client-free respawn emulation (``actor_death``).
+
+    Off by default: it needs the owner's approval as part of the written test-mode exception."""
+    try:
+        value = read(root)
+    except (OSError, ValueError):
+        return False
+    return value.get("client") == NONE and value.get(RESPAWN_OPTION) is True
+
+
+def set_respawn(root, on: bool) -> dict:
+    """Written before the run starts (``fleet.py start --respawn``); only meaningful in client-free mode."""
+    value = read(root)
+    value[RESPAWN_OPTION] = bool(on)
+    _atomic_json(Path(root) / OPTION_FILE, value)
+    return value
+
+
 def test_mode(root) -> dict | None:
     """``{"test_mode": "client_free", "script_credited_triggers": [...]}`` for a client-free run, else None."""
     try:
@@ -341,6 +368,7 @@ def test_mode(root) -> dict | None:
         test_mode=TEST_MODE,
         script_credited_triggers=list(value.get("script_credited_triggers") or []),
         presence_emulation=value.get("presence_emulation"),
+        respawn_emulation=value.get(RESPAWN_OPTION) is True,
     )
 
 

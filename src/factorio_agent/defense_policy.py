@@ -26,6 +26,19 @@ PRODUCERS = {
 QUIET_EVOLUTION = 0.1
 # Enemy search radius around each producer in ``SURVEY_LUA``.
 THREAT_RADIUS = 96
+# Attack sources beyond that radius (``attack_sources``): an attack group forms at a nest the
+# pollution cloud reaches, wherever it is; a group of units away from any nest is already on
+# its way (attack or expansion). Charted chunks only, around the force spawn.
+ATTACK_SOURCE_RADIUS = 384
+GROUP_RADIUS = 192
+GROUP_NEST_RADIUS = 24
+ATTACK_SOURCE_LIMIT = 32
+SURVEY_ARGUMENTS = dict(
+    source_radius=ATTACK_SOURCE_RADIUS,
+    group_radius=GROUP_RADIUS,
+    nest_radius=GROUP_NEST_RADIUS,
+    source_limit=ATTACK_SOURCE_LIMIT,
+)
 # Site-plan area kinds a defense post may never occupy, even as a fallback.
 NEVER_RELAXED = frozenset({"bus", "rail", "corridor"})
 # Ranked producers tried as a post's focus before the step reports no site.
@@ -63,11 +76,30 @@ if hostile then for _,asset in ipairs(assets)do
   end
  end
 end end
+local sources={};local sources_truncated=false;local origin=f.get_spawn_position(s)
+if hostile then
+ for _,e in pairs(s.find_entities_filtered{position=origin,radius=x.source_radius,force=enemy,type="unit-spawner",limit=257})do
+  if #sources>=x.source_limit then sources_truncated=true;break end
+  if e.valid and chunk_charted(math.floor(e.position.x/32),math.floor(e.position.y/32))then
+   local p=s.get_pollution(e.position)
+   if p>0 then sources[#sources+1]={unit_number=e.unit_number,name=e.name,type=e.type,kind="polluted_spawner",
+    position={x=e.position.x,y=e.position.y},pollution=p}end
+  end
+ end
+ for _,e in pairs(s.find_entities_filtered{position=origin,radius=x.group_radius,force=enemy,type="unit",limit=65})do
+  if #sources>=x.source_limit then sources_truncated=true;break end
+  if e.valid and not seen[e.unit_number]and chunk_charted(math.floor(e.position.x/32),math.floor(e.position.y/32))
+   and s.count_entities_filtered{position=e.position,radius=x.nest_radius,force=enemy,type="unit-spawner",limit=1}==0 then
+   sources[#sources+1]={unit_number=e.unit_number,name=e.name,type=e.type,kind="moving_group",position={x=e.position.x,y=e.position.y}}
+  end
+ end
+end
 local technologies={};for _,name in ipairs{"automation","military","military-2","logistic-science-pack","chemical-science-pack"}do
  technologies[name]=f.technologies[name]and f.technologies[name].researched or false
 end
 return {ok=true,world_id=d.world_id,tick=game.tick,surface_index=s.index,force_index=f.index,assets=assets,guns=guns,targets=targets,
- evolution_factor=enemy.get_evolution_factor(s),gun_range=proto.attack_parameters.range,technologies=technologies,truncated=truncated,ammo_machine_observed=ammo_machine}
+ evolution_factor=enemy.get_evolution_factor(s),gun_range=proto.attack_parameters.range,technologies=technologies,truncated=truncated,ammo_machine_observed=ammo_machine,
+ attack_sources=sources,attack_sources_truncated=sources_truncated}
 """
 )
 
@@ -160,6 +192,13 @@ def assess_risk(facts, world_id):
             or row["max_health"] <= 0
         ):
             raise ValueError("native producer/threat health unavailable")
+    sources = facts.get("attack_sources") or []
+    if not isinstance(sources, list) or len(sources) > ATTACK_SOURCE_LIMIT:
+        raise ValueError("bounded attack source survey required")
+    for row in sources:
+        p = row.get("position", {}) if isinstance(row, dict) else {}
+        if set(p) != {"x", "y"} or any(type(p[k]) not in (int, float) or not math.isfinite(p[k]) for k in p):
+            raise ValueError("native attack source position unavailable")
     units = [r for r in targets if r["type"] == "unit"]
     nests = [r for r in targets if r["type"] == "unit-spawner"]
     nearest = lambda rows: min((_distance(a["position"], t["position"]) for a in assets for t in rows), default=None)
@@ -183,6 +222,12 @@ def assess_risk(facts, world_id):
         or (near_nest is not None and near_nest <= 64)
     ):
         level = 1
+    # An attack is expected (a polluted charted nest, a moving group): the threatened side gets
+    # its posts before the group arrives, whatever the evolution (all-1114-0107-1075833632 lost
+    # its actor at the spawn at 30.7 min on a "quiet" map: no enemy within 96 tiles, no post).
+    expected = [r for r in sources if r.get("kind") in ("polluted_spawner", "moving_group")]
+    if expected or facts.get("attack_sources_truncated"):
+        level = max(level, 1)
     pressure = bool(facts.get("recent_damage_units")) or (near_any is not None and near_any <= 64)
     if (
         (damaged and pressure)
@@ -201,10 +246,20 @@ def assess_risk(facts, world_id):
     # survey radius are likely; a quiet low-evolution map buys no turret.
     if level == 0 and facts["evolution_factor"] >= QUIET_EVOLUTION:
         minimum = {"early": 0, "mid": 1, "advanced": 2}[tier]
+    sizing = sizing_note(level, minimum, facts["evolution_factor"], tier)
+    nearest_source = min((_distance(a["position"], q["position"]) for a in assets for q in expected), default=None)
+    if expected and level == 1 and (near_any is None or near_any > 64):
+        kinds = sorted({q["kind"] for q in expected})
+        sizing = (
+            f"attack expected: {len(expected)} {'/'.join(kinds)} beyond {THREAT_RADIUS} tiles"
+            f" (nearest {nearest_source:.0f}): {minimum} post(s) toward them"
+        )
     return dict(
         risk=("quiet", "approaching", "high", "critical")[level],
         level=level,
-        sizing=sizing_note(level, minimum, facts["evolution_factor"], tier),
+        sizing=sizing,
+        attack_sources=len(expected),
+        nearest_attack_source=nearest_source,
         minimum_posts=minimum,
         maximum_posts=minimum,
         ammo_target=10 if level < 2 else 20,
@@ -248,11 +303,11 @@ class DefensePolicy:
             and 0 <= obs["tick"] - self.cache["observed_tick"] < self.cache["interval"]
         ):
             return deepcopy(self.cache["facts"])
-        payload = json.dumps(json.dumps({"world_id": obs["world_id"]}, separators=(",", ":")))
+        payload = json.dumps(json.dumps(dict(SURVEY_ARGUMENTS, world_id=obs["world_id"]), separators=(",", ":")))
         facts = self.game.query(SURVEY_LUA.replace("PAYLOAD", payload))
         # Factorio serializes an empty Lua sequence as an empty JSON object.
         # No enemies is a valid quiet survey, not unavailable threat evidence.
-        for field in ("assets", "guns", "targets"):
+        for field in ("assets", "guns", "targets", "attack_sources"):
             if facts.get(field) == {}:
                 facts[field] = []
         previous = {a["unit_number"]: a["health"] for a in self.cache["facts"].get("assets", [])} if self.cache else {}
@@ -345,7 +400,10 @@ class DefensePolicy:
             paid = [
                 p for p in posts if p.get("unit_number") in live and p["position"] == live[p["unit_number"]]["position"]
             ]
-            targets = facts["targets"]
+            # Nothing within the survey radius: the expected attack's sources give the threatened side.
+            targets = facts["targets"] or [
+                dict(q, health=1, max_health=1, range=0) for q in facts.get("attack_sources") or []
+            ]
 
             def rank(asset):
                 near = min((_distance(asset["position"], t["position"]) for t in targets), default=10000)

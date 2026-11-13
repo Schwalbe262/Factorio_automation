@@ -38,6 +38,14 @@ proof uses `verified_postcondition`. Terminal receipts remain historical.
   through native inventory transfer, preserving ammunition and tool metadata.
   It keeps at most one carried repair tool; surplus tools remain in the owned
   corpse for a later recovery. The actor stays at its current position.
+  Client-free runs (no player owns the corpse): `recover_client_free_belongings`
+  (`actor_death`): the recorded death's corpse, `waiting` while an enemy is
+  within 32 tiles of it, the assisted actor moves there and back, counts conserved.
+- `respawn-actor` (client-free runs with `actor-client.json` `respawn: true` only; optional, owner
+  approval pending, off by default; else `respawn_emulation_off`): one step of the emulated player
+  respawn after a death (`waiting` `respawn_delay` for 600 ticks after the death,
+  then a new empty character at the force spawn bound as the actor; the corpse
+  keeps every item). HEADLESS.md "Death and respawn".
 - `return-to-base --world-id <id> --expected-actor-unit <unit>`: normally move
   the pinned operator to a native-clear, quiet force-spawn position in assisted
   mode. Fails if the owner/world changed, a repair is pending or the base is unsafe.
