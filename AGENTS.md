@@ -94,4 +94,5 @@ Non-negotiable:
 - Never hand-edit `jobs.json`, state files or the live game; fix the rule, add a test, `lifecycle new-map`.
 - Run `powershell -ExecutionPolicy Bypass -File tools/check.ps1` from PowerShell before every commit.
 - `git add` specific files only; keep the working tree clean (commit or discard, never leave WIP unstaged for days).
+- A built block is not frozen (owner, 2026-11-13): when demand, a better layout or a neighbour needs it, part of a factory may be rebuilt: paid guarded removal (`mine`) and rebuild, the plan republished first, the cost (materials, actor time, lost output) inside the same wait-vs-spend time comparison, never cutting a critical consumer off without a replacement. "Keep every installed unit / never reroute what is built" is a default for cheap growth, not a prohibition.
 - Merge finished worktrees promptly and delete them.

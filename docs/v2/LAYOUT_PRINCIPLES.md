@@ -22,6 +22,16 @@ Shape bounds (`cluster_audit`): at most `MAX_BELTS_PER_SLOT = 16` belts per
 built or reserved machine slot, and machine tiles (reserved slots counted) at
 least `MIN_DENSITY = 0.12` of the bounding box.
 
+## Rebuilding is allowed
+
+A built block is not frozen. Growth into reserved slots is the cheap default, but when the
+ratio, the flow or the neighbours change (a second pack machine turns a direct-insertion edge
+into a belt edge; a row has to move for a bus lane), the affected part is dismantled by paid
+`mine` actions and rebuilt from a new plan. The decision uses the same time comparison as
+every expansion, with the dismantling, the rebuild and the lost output counted as cost, and
+it never removes the only supply of a critical consumer. Not implemented as a general
+capability yet; the retirement code (`obsolete.py`) has the guarded dismantle it needs.
+
 ## The cluster (`blocks/cluster.py`)
 
 Machines on a square grid with a one-tile gap (pitch = machine size + 1);
