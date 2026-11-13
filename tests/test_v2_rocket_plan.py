@@ -1,9 +1,12 @@
-"""The rocket bill from the catalog (``rocket_plan``)."""
+"""The rocket bill from the catalog and the roadmap tail generated from it (``rocket_plan``)."""
 
 import unittest
 
+from factorio_agent import progression as pg
 from factorio_agent import rocket_plan as rp
 from factorio_agent.core.world_catalog import WorldCatalog
+from factorio_agent.jobs import CAPABILITIES, Request
+from factorio_agent.production_rows import validate_parameters
 
 
 def _rows(values, kind="item"):
@@ -224,6 +227,111 @@ class RocketBillTests(unittest.TestCase):
     def test_rejects_a_bad_window(self):
         with self.assertRaises(ValueError):
             bill(minutes=0)
+
+
+class RocketTailTests(unittest.TestCase):
+    def tail(self, **kwargs):
+        return rp.tail(bill(**kwargs), existing=[s.id for s in pg.ROADMAP], researched_by=rp.roadmap_research())
+
+    def test_research_rows_skip_researched_triggers_and_roadmap_research(self):
+        rows = self.tail()
+        research = [r["parameters"]["technology"] for r in rows if r["capability"] == "research"]
+        self.assertNotIn("oil-processing", research)  # trigger
+        self.assertNotIn("plastics", research)  # researched
+        self.assertNotIn("advanced-material-processing", research)
+        self.assertEqual(research[-1], "rocket-silo")
+        for row in rows:
+            if row["capability"] == "research":
+                self.assertIn(rp.TAIL_ANCHOR, row["after"])
+
+    def test_production_rows_use_produce_where_a_row_fits(self):
+        rows = {r["id"]: r for r in self.tail(minutes=30)}
+        pipe = rows["rocket_produce_pipe"]
+        validate_parameters(pipe["parameters"])
+        Request("k", "w", 0, pipe["capability"], pipe["parameters"]).validate()
+        self.assertEqual(pipe["parameters"]["rate_per_minute"], round(100 / 30, 1))
+        self.assertIn("rocket_produce_electronic_circuit", rows)
+        # copper cable is only a sub-row of the circuit row: no row of its own
+        self.assertNotIn("rocket_produce_copper_cable", rows)
+        self.assertIn("rocket_produce_electronic_circuit", rows["rocket_fluid_assembly_processing_unit"]["after"])
+
+    def test_stage_rows_end_the_tail_and_after_refers_to_earlier_ids(self):
+        rows = self.tail()
+        self.assertEqual([r["id"] for r in rows[-3:]], ["rocket_silo", "rocket_parts", "rocket_launch"])
+        seen = {s.id for s in pg.ROADMAP}
+        for row in rows:
+            self.assertTrue(set(row["after"]) <= seen, row["id"])
+            self.assertRegex(pg.NODE_PREFIX + row["id"], r"^[A-Za-z0-9_-]{1,64}$")
+            seen.add(row["id"])
+
+    def test_receipt_is_cached_and_compact(self):
+        catalog = space_age_catalog()
+        observation = {"technologies": {name: True for name in RESEARCHED}}
+        first = rp.receipt(catalog, observation, capabilities=CAPABILITIES)
+        self.assertIs(first, rp.receipt(catalog, observation, capabilities=CAPABILITIES))
+        self.assertEqual(first["parts_per_rocket"], 50)
+        self.assertEqual(first["remaining_technologies"], 5)
+        self.assertTrue(first["tail"])
+
+
+class RoadmapTailTests(unittest.TestCase):
+    def observation(self):
+        catalog = space_age_catalog()
+        researched = {name: True for name in RESEARCHED}
+        return {"technologies": researched, "rocket_plan": rp.receipt(catalog, {"technologies": researched})}
+
+    def done(self):
+        return [
+            {"capability": s.capability, "parameters": dict(s.parameters), "status": "succeeded"} for s in pg.ROADMAP
+        ]
+
+    def test_tail_steps_append_to_the_roadmap(self):
+        steps = pg.roadmap_for(self.observation())
+        self.assertEqual(steps[: len(pg.ROADMAP)], pg.ROADMAP)
+        self.assertEqual(steps[-1].capability, "rocket_launch")
+
+    def test_malformed_or_clashing_rows_are_dropped(self):
+        observation = {
+            "rocket_plan": {
+                "tail": [
+                    {"id": "starter", "capability": "starter", "parameters": {}, "after": []},
+                    {"id": "Bad-Id", "capability": "research", "parameters": {}, "after": []},
+                    {"id": "ok_row", "capability": "research", "parameters": {"technology": "x"}, "after": ["nowhere"]},
+                    "row",
+                ]
+            }
+        }
+        steps = pg.tail_steps(observation)
+        self.assertEqual([s.id for s in steps], ["ok_row"])
+        self.assertEqual(steps[0].after, ())
+
+    def test_autopilot_proposes_the_tail_after_the_roadmap(self):
+        nodes = pg.autopilot_nodes(self.done(), [], self.observation(), CAPABILITIES, limit=3)
+        proposed = [n["id"] for n in nodes]
+        self.assertTrue(proposed, proposed)
+        self.assertTrue(all(i.startswith("auto_research_") or i.startswith("auto_rocket_produce_") for i in proposed))
+        for node in nodes:
+            Request("k", "w", 0, node["capability"], node["parameters"]).validate()
+
+    def test_unregistered_tail_capabilities_are_never_proposed(self):
+        observation = self.observation()
+        jobs = self.done()
+        for _ in range(12):
+            nodes = pg.autopilot_nodes(jobs, [], observation, CAPABILITIES, limit=3)
+            if not nodes:
+                break
+            for node in nodes:
+                self.assertIn(node["capability"], CAPABILITIES)
+                jobs.append({"capability": node["capability"], "parameters": node["parameters"], "status": "succeeded"})
+        self.assertNotIn("rocket_silo", CAPABILITIES)  # until (d) registers it
+
+    def test_a_faster_produce_row_satisfies_a_tail_row(self):
+        step = pg.Step("rocket_produce_pipe", "produce", {"item": "pipe", "rate_per_minute": 8.3})
+        fast = {"capability": "produce", "parameters": {"item": "pipe", "rate_per_minute": 20}, "status": "succeeded"}
+        slow = dict(fast, parameters={"item": "pipe", "rate_per_minute": 2})
+        self.assertTrue(pg._Progress((fast,), frozenset()).satisfied(step))
+        self.assertFalse(pg._Progress((slow,), frozenset()).satisfied(step))
+        self.assertTrue(pg._same(slow, step))
 
 
 if __name__ == "__main__":

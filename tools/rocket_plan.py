@@ -21,7 +21,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from factorio_agent.core.world_catalog import WorldCatalog  # noqa: E402
-from factorio_agent.rocket_plan import DEFAULT_MINUTES, rocket_bill  # noqa: E402
+from factorio_agent.progression import ROADMAP  # noqa: E402
+from factorio_agent.rocket_plan import DEFAULT_MINUTES, roadmap_research, rocket_bill, tail  # noqa: E402
 
 
 def _plan_lanes(run: Path):
@@ -53,8 +54,9 @@ def main(argv=None) -> int:
         rockets=args.rockets,
         bus_lanes=_plan_lanes(args.runtime),
     )
+    rows = tail(bill, existing=[step.id for step in ROADMAP], researched_by=roadmap_research())
     if args.json:
-        print(json.dumps({"bill": bill}, indent=1, sort_keys=True))
+        print(json.dumps({"bill": bill, "tail": rows}, indent=1, sort_keys=True))
         return 0
     print(f"catalog {catalog.version}, mods {', '.join(sorted(catalog.active_mods))}")
     print(
@@ -91,6 +93,9 @@ def main(argv=None) -> int:
     print("\ngaps (capability: status: items):")
     for gap in bill["gaps"]:
         print(f"  {gap['capability']}: {gap['status']}: {', '.join(gap['items'])}")
+    print(f"\ngenerated roadmap tail ({len(rows)} steps after {ROADMAP[-1].id}):")
+    for row in rows:
+        print(f"  {row['id']:<46} {row['capability']:<20} {row['parameters']} after {row['after']}")
     return 0
 
 

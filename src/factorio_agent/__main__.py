@@ -289,6 +289,12 @@ def execute(argv=None, services=None):
             except Exception as exc:  # a demand estimate must never break observe
                 obs["bulk_item_demand"] = {}
                 obs["bulk_item_demand_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .rocket_plan import receipt as rocket_receipt
+
+            try:  # the generated roadmap tail to a launch (progression.roadmap_for)
+                obs["rocket_plan"] = rocket_receipt(services.catalog(root, game), obs, capabilities=CAPABILITIES)
+            except Exception as exc:  # a plan estimate must never break observe
+                obs["rocket_plan_error"] = f"{type(exc).__name__}: {exc}"[:200]
             from .production_sources import plate_sources
 
             try:  # where a new produce row's plates would come from (progression.produce_nodes)

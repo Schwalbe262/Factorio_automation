@@ -23,6 +23,12 @@ item:
   row (``production_layout.plan_sources``), or the missing capability that
   would have to exist (``fluid_assembly``, ``chemical_product``, ...), each with
   status ``roadmap`` / ``wired`` / ``unwired`` / ``missing``.
+
+``tail(plan)`` turns the bill into roadmap step rows (research, production,
+silo, parts, launch); ``progression.roadmap_for`` appends them to ``ROADMAP``
+from the observe receipt ``rocket_plan`` (``receipt``). A step whose
+capability is not registered is listed but never proposed, so the tail grows
+by itself when a missing capability is added.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 import math
+import re
 from typing import Any
 
 from .core.world_catalog import CatalogError, _amount, _material, _yield
@@ -604,3 +611,144 @@ def _belt_rate() -> float:
     from .mine_trunk import BELT_RATE_PER_MINUTE
 
     return BELT_RATE_PER_MINUTE[BELT]
+
+
+# ----- roadmap tail ------------------------------------------------------------------
+
+
+def step_id(*parts: str) -> str:
+    """A node-id-safe step id (``auto_`` + id stays within the 64-character queue id rule)."""
+    text = "_".join(parts)
+    return re.sub(r"[^a-z0-9_]", "_", text.lower())[:MAX_STEP_ID]
+
+
+def research_id(technology: str) -> str:
+    return "research_" + technology.replace("-", "_")
+
+
+def roadmap_research(steps=None) -> dict[str, str]:
+    """Technology -> id of the roadmap step that researches it (``technology`` parameter or ``STEP_TECHNOLOGY``)."""
+    from .progression import ROADMAP, STEP_TECHNOLOGY
+
+    found: dict[str, str] = {}
+    for step in ROADMAP if steps is None else steps:
+        name = step.parameters.get("technology") or STEP_TECHNOLOGY.get(step.capability)
+        if isinstance(name, str):
+            found.setdefault(name, step.id)
+    return found
+
+
+def tail(bill: Mapping, *, existing: Iterable[str] = (), researched_by: Mapping[str, str] | None = None) -> list[dict]:
+    """Roadmap step rows after ``TAIL_ANCHOR``: research, production, silo, parts, launch.
+
+    Rows: ``{"id", "capability", "parameters", "after"}``. ``existing``: step ids
+    already in the roadmap (``after`` may name them); ``researched_by``:
+    technology -> the roadmap step researching it (``roadmap_research``), never
+    repeated. Trigger technologies are milestones, not research rows. Research
+    rows follow ``bill["technologies"]`` (``research_order``), each after the
+    anchor and its prerequisites' steps. Production rows follow the
+    production order (ingredients first) for every item whose producer is the
+    generic ``produce`` row or a capability that is not a block of the roadmap
+    (``fluid_assembly``, ``chemical_product``, ``advanced_petroleum``, ...),
+    after the anchor and the research that unlocks the recipe. ``produce`` rates
+    come from the bill (total over ``minutes``) in ``[PRODUCE_MIN_RATE,
+    PRODUCE_MAX_RATE]``. Raw sources and roadmap blocks get no row (their growth
+    rules size them from claims).
+    """
+    known = set(existing)
+    by_tech = dict(researched_by or {})
+    rows: list[dict] = []
+
+    def add(row: dict) -> None:
+        if row["id"] in known:
+            return
+        known.add(row["id"])
+        rows.append(row)
+
+    for tech in bill["technologies"]:
+        if tech["trigger"] or tech["name"] in by_tech:
+            continue
+        after = sorted({by_tech[p] for p in tech["prerequisites"] if by_tech.get(p) in known})
+        if TAIL_ANCHOR in known and TAIL_ANCHOR not in after:
+            # The lab lane belongs to the hand-written roadmap until its last stage; idle labs
+            # may still research these earlier (research_policy.choose_research).
+            after.insert(0, TAIL_ANCHOR)
+        node = research_id(tech["name"])
+        add({"id": node, "capability": "research", "parameters": {"technology": tech["name"]}, "after": after})
+        by_tech[tech["name"]] = node
+    produced: dict[str, str] = {}
+    makers = {r["recipe"]: r["producer"] for r in bill["items"] if r.get("recipe")}
+    for row in bill["items"]:
+        producer = row["producer"]
+        if producer["kind"] != "generic" or producer["status"] == "roadmap":
+            continue
+        if producer["capability"] == PRODUCE and all(_makes_own_inputs(makers.get(c)) for c in row["consumers"]):
+            continue  # every consumer is a row (one-level sub-row) or a block that makes it itself
+        parameters = dict(producer["parameters"])
+        if producer["capability"] in (PRODUCE, "fluid_assembly"):
+            parameters["rate_per_minute"] = round(
+                min(PRODUCE_MAX_RATE, max(PRODUCE_MIN_RATE, row["rate_per_minute"])), 1
+            )
+        after = [TAIL_ANCHOR]
+        tech = row.get("technology")
+        if tech and by_tech.get(tech) in known:
+            after.append(by_tech[tech])
+        after += sorted({produced[c] for c in _inputs(bill, row) if c in produced})
+        node = step_id("rocket", producer["capability"], row["item"])
+        produced[row["item"]] = node
+        add({"id": node, "capability": producer["capability"], "parameters": parameters, "after": after})
+    silo_after = [TAIL_ANCHOR]
+    if by_tech.get(bill["target_technology"]) in known:
+        silo_after.append(by_tech[bill["target_technology"]])
+    add({"id": STAGE_SILO, "capability": STAGE_SILO, "parameters": {}, "after": silo_after})
+    add({"id": STAGE_PARTS, "capability": STAGE_PARTS, "parameters": {}, "after": [STAGE_SILO]})
+    add({"id": STAGE_LAUNCH, "capability": STAGE_LAUNCH, "parameters": {}, "after": [STAGE_PARTS]})
+    return rows
+
+
+def _makes_own_inputs(producer: Mapping | None) -> bool:
+    """A consumer that needs no separate stock row: a produce row (sub-row) or a roadmap block."""
+    return producer is not None and (producer["capability"] == PRODUCE or producer["kind"] == "block")
+
+
+def _inputs(bill: Mapping, row: Mapping) -> list[str]:
+    """Items consumed by ``row``'s recipe (from the bill's consumer lists)."""
+    recipe = row.get("recipe")
+    return [r["item"] for r in bill["items"] if recipe and recipe in r["consumers"]]
+
+
+# ----- observe receipt ------------------------------------------------------------------
+
+_CACHE: dict[tuple, dict] = {}
+
+
+def receipt(
+    catalog, observation: Mapping, *, capabilities: Mapping | None = None, minutes: float = DEFAULT_MINUTES
+) -> dict:
+    """Compact receipt for the autopilot: the tail rows, the gaps, the remaining research count.
+
+    Cached per catalog fingerprint, researched set and capability names (the
+    bill does not depend on anything else in the observation).
+    """
+    if capabilities is None:
+        from .jobs import CAPABILITIES as capabilities  # noqa: N811
+    researched = frozenset(_names(observation.get("technologies")))
+    key = (catalog.fingerprint, researched, frozenset(capabilities), float(minutes))
+    if key in _CACHE:
+        return _CACHE[key]
+    from .progression import ROADMAP
+
+    bill = rocket_bill(catalog, researched=researched, minutes=minutes, capabilities=capabilities)
+    rows = tail(bill, existing=[step.id for step in ROADMAP], researched_by=roadmap_research())
+    result = {
+        "minutes": bill["minutes"],
+        "parts_per_rocket": bill["parts_per_rocket"],
+        "remaining_technologies": len(bill["technologies"]),
+        "science_packs": bill["science_packs"],
+        "tail": rows,
+        "gaps": [{"capability": g["capability"], "status": g["status"]} for g in bill["gaps"]],
+    }
+    if len(_CACHE) > 8:
+        _CACHE.clear()
+    _CACHE[key] = result
+    return result
