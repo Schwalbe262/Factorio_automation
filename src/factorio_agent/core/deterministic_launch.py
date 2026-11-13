@@ -3,6 +3,16 @@
 LAUNCH_LUA is an action fragment for DeterministicGame.act. It expects its
 existing locals x, a, inv, s, f, d and target/success/failure helpers. The
 observation fragment is a query body using d/f. No progress fields are written.
+
+Space Age 2.1 flow (runtime-api.json of the install, docs/v2/ROCKET_LAUNCH.md):
+the carried starter pack goes into the rocket inventory (paid: removed from the
+actor), ``LuaForce.create_space_platform`` makes the platform request the
+player's "new platform" button makes (free; it needs ``is_space_platforms_unlocked``,
+which the rocket-silo technology's ``unlock-space-platforms`` effect sets, and it
+has no hub until a starter pack is applied), and ``LuaEntity.launch_rocket`` with
+``defines.cargo_destination.space_platform`` sends the pack to it. The hub is
+built only from the delivered pack; ``apply_starter_pack`` (a grant) is never
+called, and a hub that exists before the launch fails the action.
 """
 
 from __future__ import annotations
@@ -35,8 +45,6 @@ if silo.rocket_silo_status~=defines.rocket_silo_status.rocket_ready then
  return success{status="waiting",reason="rocket_not_ready",rocket_parts=silo.rocket_parts}
 end
 local cargo=nil
---[[ In 2.1 the rocket inventory is virtual (its size can be zero). Inserting
-through it prepares launch cargo; the attached unit alone does not do so. ]]
 for _,name in ipairs({"rocket_silo_rocket","rocket_silo_attached_cargo_unit"}) do
  local index=defines.inventory[name]
  if index then local good,value=pcall(function() return silo.get_inventory(index) end);if good and value then cargo=value;break end end
@@ -57,9 +65,11 @@ if not state then
  d.first_rocket_launch=state
 end
 if not state.platform then
+ if not f.is_space_platforms_unlocked() then return failure("space_platforms_locked") end
  state.platform=f.create_space_platform{name=x.platform_name or "Autonomous first launch",planet=s.name,starter_pack=pack}
  if not state.platform then return failure("platform_request_rejected") end
 end
+if state.platform.hub and state.platform.hub.valid then return failure("platform_hub_exists_before_delivery") end
 if not silo.launch_rocket({type=defines.cargo_destination.space_platform,space_platform=state.platform}) then
  return success{status="waiting",reason="launch_not_ready",platform_index=state.platform.index}
 end

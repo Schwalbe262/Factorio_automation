@@ -252291,3 +252291,10 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - actions: produce belt output + lane-merge adapter (7a174bd); advanced_petroleum/fluid_product/fluid_distribution wired, fluid_distribution resync fixed, crack_balance (e221cf0); fluid rows with risers onto a header (f5c228f); block_growth.growth_options + bus lane demand.
 - metrics: 2.1.20 bill: no fluid surplus, crude 767 -> 464/min; every bill item has a registered producer except electric-engine-unit (engine row is stock-only) and the three rocket stages.
 - failure/next: fluid rows block production_row_fluid_input_unrouted (no typed route + handoff to the header yet); acid iron tap is dev-map bus only; advanced circuits / chemical science have no rate parameter (growth kind fixed).
+## 2026-11-14 rocket tail stages (worktree agent-a0355b868db7d77d8)
+- part: rocket_silo / rocket_parts / rocket_launch capabilities.
+- goal: the generated roadmap tail can finish with a verified launch.
+- actions: rocket_stages.py (silo spec, StageSupply leaf collection with named waits, rocket_stages receipt gate, RocketSilo: 13x13 site with feed ring, power headroom POWER_LUA, paid hand craft, proof powered + recipe), rocket_feed.py (RocketParts: guarded feed_rocket_silo into crafter_input, belt feed by feed_choice; RocketLaunch over LaunchStage; launch_verified), LAUNCH_LUA unlock + hub-before-delivery guards, summary rocket_launch_verified/rocket_plan/rocket_stages, progression gate, DRY_RUN + RELAXATIONS, report_run final milestone, fleet launch column.
+- result: tests/test_v2_rocket_stages.py (lupa one-line bodies, reconcile, no-grant scan) pass; create_space_platform = free player button (hub only from the delivered pack).
+- failure/risk: no repeatable power growth capability; production rows for PU/LDS/RF/concrete/EEU still missing; unproven live.
+- next: merge, then a long fleet past chemical science once fluid_assembly exists.

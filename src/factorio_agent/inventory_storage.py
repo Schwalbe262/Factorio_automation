@@ -216,14 +216,19 @@ return {ok=false,reason="no_clear_storage_site_outside_reserved_blocks"}
             if stack.get("quality") == "normal" and stack.get("type") == "item":
                 held[stack["name"]] = held.get(stack["name"], 0) + stack["count"]
         chests = snapshot.get("chests", []) or []
-        surplus_items = {item: held.get(item, 0) - keep for item, keep in KEEP.items() if held.get(item, 0) > keep}
+        # Carried materials an active job collected on purpose (rocket stages: ``evidence.needs``)
+        # stay carried; storing them would only send the job to fetch them again.
+        hook = getattr(self, "keep_extra", None)
+        extra = hook(obs) if callable(hook) else {}
+        keeps = {item: keep + int((extra or {}).get(item, 0) or 0) for item, keep in KEEP.items()}
+        surplus_items = {item: held.get(item, 0) - keep for item, keep in keeps.items() if held.get(item, 0) > keep}
         if not surplus_items and not self.state.get("pending_build"):
             return {
                 "status": "blocked",
                 "reason": "insufficient_unreserved_plain_items_for_requested_headroom",
                 "minimum_slots": minimum_slots,
             }
-        for item, keep in KEEP.items():
+        for item, keep in keeps.items():
             surplus = held.get(item, 0) - keep
             if surplus <= 0:
                 continue
