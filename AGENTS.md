@@ -78,6 +78,10 @@ Read first: `docs/v2/ARCHITECTURE.md`, then `docs/v2/ADDING_A_CAPABILITY.md`,
 
 Non-negotiable:
 - No granted items or research: every effect is a paid Lua body in `DeterministicGame.act`.
+  Single written exception (owner, 2026-11-13): client-free TEST runs (`actor-client.json`
+  `client: none`, `tools/fleet.py start --client none`) may script-credit a hand-craft trigger technology
+  (`credit_hand_craft_trigger`, today only `automation-science-pack`) after the real hand craft; nothing
+  else. Such runs are labelled `test_mode: client_free` and are never proof runs (`docs/v2/HEADLESS.md`).
 - Store `pending_action` before acting; never retry an unknown outcome, only `reconcile`.
 - Every query is world-bound (`WorldBoundGame`); a changed world or a tick rollback blocks all jobs.
 - Never build on ore except annotated mining entities (`resource_policy`, `planning.preflight`).

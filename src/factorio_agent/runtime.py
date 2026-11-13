@@ -51,6 +51,15 @@ class WorldBoundGame(DeterministicGame):
         return super().query(body)
 
     def act(self, action: dict) -> dict:
+        if action.get("type") in ("detach_actor", "adopt_playerless_actor", "credit_hand_craft_trigger"):
+            from . import actor_client
+
+            body = {
+                "detach_actor": actor_client.execute_detach,
+                "adopt_playerless_actor": actor_client.execute_adopt,
+                "credit_hand_craft_trigger": actor_client.execute_credit,
+            }[action["type"]]
+            return self._record_action(action, body(self, action))
         if action.get("type") == "seed_paid_burner":
             from .paid_burner_seed import execute_paid_burner_seed
 
@@ -391,7 +400,35 @@ def game_for(root: Path) -> DeterministicGame:
 
 def connect_player(root: Path) -> dict:
     from factorio_agent.core.deterministic_character import ensure_crafting_player
+    from factorio_agent import actor_client
 
+    if actor_client.mode(root) == actor_client.NONE:
+        # Client-free test run: never start a client; adopt the player-less actor.
+        game = game_for(root)
+        with RunLock(root / "writer.lock"):
+            receipt = actor_client.adopt(root, game)
+        if receipt.get("status") != "succeeded":
+            return dict(status="blocked", reason=receipt.get("reason"), receipt=receipt)
+        return dict(
+            status="ready",
+            detached=True,
+            client_mode=actor_client.NONE,
+            test_mode=actor_client.TEST_MODE,
+            reason="client_free_actor_adopted",
+            character_unit_number=(receipt.get("record") or {}).get("unit_number"),
+            pid=None,
+        )
+    record = actor_client.detached(root)
+    if record:
+        # Server-only after the recorded transition: never start a client again.
+        return dict(
+            status="ready",
+            detached=True,
+            reason="actor_detached_server_only",
+            character_unit_number=record.get("unit_number"),
+            player_index=record.get("player_index"),
+            pid=None,
+        )
     game = game_for(root)
     with RunLock(root / "writer.lock"):
         deadline = time.monotonic() + 125

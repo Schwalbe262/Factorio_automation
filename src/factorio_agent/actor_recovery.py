@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+from .actor_client import DETACHED_ACTOR_LUA
+
 
 def _payload(value):
     return json.dumps(json.dumps(value, separators=(",", ":")))
@@ -81,6 +83,7 @@ if not d or not d.world_id then return {ok=false,reason="actor_recovery_framewor
 if args.expected_world and d.world_id~=args.expected_world then return {ok=false,reason="actor_recovery_world_changed"}end
 """
     + ACTOR_RECOVERY_COMMON_LUA
+    + DETACHED_ACTOR_LUA
     + r"""
 local owner,owner_error=pinned_owner();local old=d.crafting_actor_unit_number
 local old_pointer=character_row(d.actor);local successor=character_row(owner and owner.character)
@@ -135,6 +138,7 @@ return {ok=true,tick=game.tick,world_id=d.world_id,surface_index=s.index,pinned_
  matching_owner_corpses=matches,corpse_survey={center=pos(center),center_source=center_source,radius=radius,
   force_filter=false,matched_player_index=owner and owner.index or nil,truncated=#corpses>=33},
  classification=classification,recovery_ready=ready,native_repair_pending=pending,
+ detached=detached_actor(),detached_record=d.detached_actor,
  pending_native_repair=type(repair)=="table"and {actor_unit=repair.actor_unit,world_id=repair.world_id,request=repair.request,phase=repair.phase}or nil,
  scope="read-only owner succession evidence; a corpse identifies its player, not the old character unit; absence does not prove no death"}
 """
@@ -146,6 +150,7 @@ ACTOR_RECOVERY_EXECUTE_LUA = (
 local args=helpers.json_to_table(PAYLOAD)
 if not d or d.world_id~=args.expected_world then return {ok=false,status="blocked",tick=game.tick,reason="actor_recovery_world_changed"}end
 if d.native_repair then return {ok=false,status="blocked",tick=game.tick,reason="actor_recovery_pending_native_repair_requires_separate_review"}end
+if d.detached_actor~=nil then return {ok=false,status="blocked",tick=game.tick,reason="actor_recovery_detached_actor_has_no_player_successor"}end
 """
     + ACTOR_RECOVERY_COMMON_LUA
     + r"""

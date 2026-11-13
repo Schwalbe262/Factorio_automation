@@ -36,7 +36,7 @@ read incrementally and a missing or half-written JSON keeps its last good value.
 ## Fleet runs (N maps in parallel, one report)
 
 ```
-python -B tools/fleet.py start --count 8 --minutes 30 [--seeds random | a,b,c] [--name NAME]
+python -B tools/fleet.py start --count 8 --minutes 30 [--seeds random | a,b,c] [--name NAME] [--client none|always|until_lab_trigger]
 python -B tools/fleet.py status [--name NAME]          # one line per run
 python -B tools/fleet.py report [--name NAME] [--window 0-30] [--json]
 python -B tools/fleet.py stop   [--name NAME]          # lifecycle safe stop + server /quit per run
@@ -56,23 +56,40 @@ dashboard can still look at one fleet run with `--runtime runtime/v2/<run> --por
 passes M minutes; `status`/`report` do the same check when the watcher is gone.
 Stopped runs keep their folders; nothing is deleted.
 
-Each run is what `lifecycle start --no-gui` runs: a dedicated server, the
-run's own automation client (`agent-client/`, window hidden, very-low graphics,
-no audio) and a `--planner none` supervisor (`Lifecycle._start(select=False)`).
-The client is required: the actor is the server-created character bound to the
-client's connected player (`deterministic_character.BIND_CRAFTING_PLAYER_LUA`);
-hand crafts must run through a player for the engine's research trigger
-(`deterministic_bootstrap`: "engine crafting requires an associated player"),
-and `supervisor.actor_binding` refuses a character without its pinned player.
-Factorio has no headless client, so "no GUI" means one hidden client per run.
-A player-less actor was probed on a headless server: everything works except
-the hand-crafted lab that triggers `automation-science-pack`
-([HEADLESS.md](HEADLESS.md)).
+`start --client always|none|until_lab_trigger` (default `always`;
+`--keep-client` = `always`) picks the actor client mode of every run
+(`actor-client.json`, `factorio_agent.actor_client`, [HEADLESS.md](HEADLESS.md)):
+
+- `none` (TEST runs): only the dedicated server and a `--planner none`
+  supervisor. The server-created character has no player; `connect-player`
+  adopts it (`adopt_playerless_actor`). The engine does not credit a
+  player-less hand craft, so after the real lab craft the framework
+  script-credits `automation-science-pack` (`credit_hand_craft_trigger`, the
+  single exception in AGENTS.md). `run.json`, `report_run.py`, `fleet.py
+  status/report` and the dashboard header say `TEST MODE client_free`.
+  Not the default yet: a player-less actor charts no chunks, so the mining
+  outposts' patch survey finds nothing and the run stalls after the
+  electric-mining-drill research (HEADLESS.md "Equivalence").
+- `always` (default, proof runs, and what `lifecycle start --no-gui` runs): the run's
+  own automation client too (`agent-client/`, window hidden, very-low
+  graphics, no audio), bound to the actor
+  (`deterministic_character.BIND_CRAFTING_PLAYER_LUA`).
+- `until_lab_trigger`: `always` until the lab trigger fired, then the
+  supervisor detaches the actor (`detach-client`: spectator controller, client
+  closed by pid + creation time) and the run continues server-only.
+
+`status` shows the client column as `o` (live), `n` (none by design) or `d`
+(detached); `report` has a `cli` column and a TEST MODE header note plus the
+credited triggers with their ticks.
 
 Cost measured on this machine (Ryzen 9 7950X3D, 32 logical cpus, 64 GB):
 a fresh run is server ~350 MB + client ~690 MB + supervisor ~50 MB, ~0.4
 cores in steady state (the client's start-up asset load briefly takes ~4
-cores); the 90-minute interactive map uses ~1.2 GB and ~1.5 cores. `start`
+cores); the 90-minute interactive map uses ~1.2 GB and ~1.5 cores. A
+client-free run (`--client none`) measured 420 MB (server 371 + supervisor 49)
+and 0.19 cores at game minute ~6, against 1367 MB and 0.67 cores for the same
+seed with its hidden client (client 941 MB); `start` still budgets with the
+larger measured/default cost. `start`
 uses the larger of the last measured fleet run (`runtime/fleets/cost.json`,
 written by `status`) and 1500 MB / 1.5 cores, keeps 6 GB and 4 cpus free, and
 refuses more runs than fit (`--force` overrides): with ~36 GB free that is

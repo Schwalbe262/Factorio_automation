@@ -156,6 +156,7 @@ function renderHeader(d) {
     h("span", { class: "chip" }, "마지막 성공 후 ", h("b", {}, fmtMin(hd.minutes_since_last_success))),
     h("span", { class: "chip" }, "유휴 비율 ", h("b", {}, hd.idle_gap_share != null ? Math.round(hd.idle_gap_share * 100) + "%" : "-")),
     h("span", { class: "chip" }, "로드맵 ", h("b", {}, d.done.roadmap_done + " / " + d.done.roadmap_total)),
+    hd.test_mode ? h("span", { class: "chip s-blocked" }, "TEST MODE " + hd.test_mode + " (트리거 스크립트 인정, 증명 런 아님)") : null,
     hd.game_pause ? h("span", { class: "chip" }, "게임 ", badge("paused", hd.game_pause === "paused" ? "일시정지" : hd.game_pause)) : null,
     sup.last_error ? h("span", { class: "chip s-blocked" }, "오류: " + sup.last_error) : null,
     hd.report_error ? h("span", { class: "chip s-blocked" }, "리포트 오류: " + hd.report_error) : null,

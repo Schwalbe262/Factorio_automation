@@ -630,6 +630,7 @@ class NestAssault:
         if not (
             report.get("actor", {}).get("character_controller")
             or report.get("actor", {}).get("remote_character_controller")
+            or report.get("actor", {}).get("detached_character")
         ):
             return {"ok": False, "reason": "assault_actor_character_controller_required"}
         close = [q for q in report["targets"] if q.get("dangerously_close") and q["role"] in ("worm", "spawner")]

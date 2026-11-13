@@ -24,6 +24,7 @@ from factorio_agent.errors import CLIError
 from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane
 from factorio_agent.early_start import admission_requires, parked
 from factorio_agent import incidents as incident_rules
+from factorio_agent import actor_client
 
 
 STATE_FILE = Path("logs/controller-state.json")
@@ -567,10 +568,53 @@ class CLIBridge:
             raise ValueError("typed request batch rejected")
 
 
+class ActorDeadWithoutPlayer(ValueError):
+    """The detached actor died: no player can respawn it (actor_client)."""
+
+
+def _detached_binding(value, old, owner):
+    """The actor recorded at the client detach, with the identity checks of the pinned-owner case."""
+    record = value.get("detached_record") or {}
+    if not old.get("valid"):
+        raise ActorDeadWithoutPlayer(actor_client.DEAD_WITHOUT_PLAYER)
+    if (
+        value.get("detached") is not True
+        or type(old.get("unit_number")) is not int
+        or old["unit_number"] < 1
+        or value.get("old_unit") != old["unit_number"]
+        or record.get("unit_number") != old["unit_number"]
+        or record.get("world_id") != value.get("world_id")
+        or old.get("player_index") is not None
+        or record.get("player_index") != value.get("pinned_owner_index")
+        or (
+            # client-free (mode none) never had a player; until_lab_trigger keeps the offline owner
+            value.get("pinned_owner_index") is not None
+            and (owner.get("index") != value.get("pinned_owner_index") or not owner.get("name"))
+        )
+        or old.get("surface_index") != value.get("surface_index")
+        or record.get("surface_index") != old.get("surface_index")
+        or record.get("force_index") != old.get("force_index")
+        or not old.get("force_index")
+    ):
+        raise ValueError("current framework actor is not the exact detached actor recorded at the client detach")
+    return dict(
+        unit_number=old["unit_number"],
+        owner_index=owner.get("index"),
+        owner_name=owner.get("name"),
+        surface_index=old["surface_index"],
+        force_index=old["force_index"],
+        native_repair_pending=bool(value.get("native_repair_pending")),
+        detached=True,
+        client_mode=record.get("mode") or actor_client.UNTIL_LAB_TRIGGER,
+    )
+
+
 def actor_binding(value, world):
     if value.get("ok") is not True or value.get("world_id") != world:
         raise ValueError("native actor/world inspection failed")
     old = value.get("old_pointer", {})
+    if value.get("detached_record") is not None:
+        return _detached_binding(value, old, value.get("owner") or {})
     successor = value.get("successor", {})
     owner = value.get("owner", {})
     if (
@@ -791,6 +835,7 @@ class Supervisor:
                         "resume",
                         "retry",
                         "checkpoint",
+                        "detach-client",
                         "stop-worker",
                     }
                 ),
@@ -866,9 +911,16 @@ class Supervisor:
     def _snapshot(self):
         self._world_guard()
         observation = self.cli.invoke(["observe"])
+        if actor_client.detach_due(self.root, observation):
+            self._detach_client()
         status = self.cli.invoke(["status"])
         capabilities = self.cli.invoke(["capabilities"])
-        actor = actor_binding(self.cli.invoke(["actor-status"]), self.world)
+        inspected = self.cli.invoke(["actor-status"])
+        try:
+            actor = actor_binding(inspected, self.world)
+        except ActorDeadWithoutPlayer:
+            self._actor_dead_without_player(inspected)
+            raise
         if observation.get("world_id") != self.world or status.get("world_id") not in (None, self.world):
             raise ValueError("native observation/jobs disagree with installed world")
         tick = observation.get("tick")
@@ -890,6 +942,35 @@ class Supervisor:
         )
         self._note_technologies(observation)
         return observation, status, capabilities, actor
+
+    def _detach_client(self):
+        """until_lab_trigger: detach the actor and close the client once the lab trigger fired."""
+        receipt = self.cli.invoke(["detach-client"])
+        reason = receipt.get("reason")
+        if receipt.get("status") == "succeeded" or reason != self.state.get("last_detach_reason"):
+            record = receipt.get("record") or {}
+            self._event(
+                "actor_detach",
+                status=receipt.get("status"),
+                reason=reason,
+                tick=record.get("tick") or receipt.get("tick"),
+                unit_number=record.get("unit_number"),
+                closed_client=record.get("closed_client"),
+            )
+            self._save(last_detach_reason=reason)
+
+    def _actor_dead_without_player(self, inspected):
+        """Death after the detach: record the terminal state and stop the run (actor_client)."""
+        dead = actor_client.record_dead(self.root, inspected)
+        self._event("actor_dead_without_player", **{k: dead.get(k) for k in ("tick", "unit_number", "rule")})
+        if not self.stopping:
+            self.stop_marker = {
+                "request_id": "actor-dead-" + self.controller_id,
+                "world_id": self.world,
+                "source": actor_client.DEAD_WITHOUT_PLAYER,
+            }
+            self.stopping = True
+            self._save(status="stopping", stop_reason=actor_client.DEAD_WITHOUT_PLAYER)
 
     def _note_technologies(self, observation):
         """Researched technologies in the order this controller first saw them; receipts list them sorted."""

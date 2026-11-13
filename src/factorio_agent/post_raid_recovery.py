@@ -10,6 +10,7 @@ import uuid
 from factorio_agent.core.deterministic_state import _atomic_json
 from factorio_agent.core.deterministic_repair_control import pending_repair
 from .infrastructure_repair import _hash, _read, _payload, _same_frame
+from .actor_client import DETACHED_ACTOR_LUA
 
 FILE = "post-raid-recovery.json"
 ACTION = "recover_raid_post"
@@ -462,15 +463,22 @@ class PostRaidRecovery:
             return None
 
 
-RECOVERY_GUARD_LUA = r"""
+RECOVERY_GUARD_LUA = (
+    DETACHED_ACTOR_LUA
+    + r"""
 local marker=nil
 local function reject(reason)return {ok=false,reason=reason,effects_started=marker~=nil}end
 local frame=x.frame
 if not d or d.world_id~=frame.expected_world_id or not a or not a.valid or a.unit_number~=frame.expected_actor_unit or a.force~=f or a.surface~=s then return reject("raid_recovery_actor_or_world_changed")end
 local player=a.player
-if not player or player.name~="FactoryAutomaton"or not player.connected or player.character~=a or d.actor~=a
+local detached=detached_actor()
+if detached then player=d.crafting_player_index and game.get_player(d.crafting_player_index)or nil end
+if detached and not player and d.crafting_player_index==nil then
+ if d.actor~=a or d.crafting_actor_unit_number~=a.unit_number then return reject("raid_recovery_pinned_owner_changed")end
+elseif not player or player.name~="FactoryAutomaton"or (not detached and (not player.connected or player.character~=a))or d.actor~=a
  or d.crafting_player_index~=player.index or d.crafting_actor_unit_number~=a.unit_number then return reject("raid_recovery_pinned_owner_changed")end
 if a.unit_number~=x.original_actor then
+ if not player then return reject("raid_recovery_owner_succession_missing")end
  local key=d.world_id..":"..player.index..":"..x.original_actor..":"..a.unit_number
  local change=d.actor_successions and d.actor_successions[key]
  if not change or change.kind~="owner-character-succession-v1"or change.old_unit~=x.original_actor or change.new_unit~=a.unit_number
@@ -605,6 +613,7 @@ local function remaining_cover(removed)
  for name in pairs(live)do if name~=removed and not reached[name]then return false end end;return true
 end
 """
+)
 
 INSPECT_RECOVERY_LUA = r"""
 local rows={};local rear={x=0,y=0}

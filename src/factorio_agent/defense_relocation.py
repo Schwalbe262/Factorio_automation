@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 
 from factorio_agent.core.deterministic_state import _atomic_json
+from .actor_client import DETACHED_ACTOR_LUA
 from .defense_coverage import coverage_report, native_candidate_survey
 from .defense_perimeter import AMMO_TARGET, protected_factory_areas
 from .engine_production import SCOPE_ID, engine_core
@@ -340,7 +341,9 @@ def _action_context(game, action, kind):
     return payload
 
 
-POST_GUARD_LUA = r"""
+POST_GUARD_LUA = (
+    DETACHED_ACTOR_LUA
+    + r"""
 local function reject(reason)return {ok=false,status="blocked",reason=reason}end
 if not d or d.world_id~=x.expected_world_id then return reject("defense_relocation_world_changed")end
 if not a or not a.valid or a.force~=f or a.surface~=s or a.unit_number~=x.expected_actor_unit then return reject("defense_relocation_actor_changed")end
@@ -384,9 +387,9 @@ if x.history then
   or original.position.x~=h.current_post.position.x or original.position.y~=h.current_post.position.y then return reject("continuation_original_paid_marker_changed")end
  if target(h.old.position,"gun-turret")or not exact(h.current_post)then return reject("continuation_historical_post_identity_changed")end
  if s.count_entities_filtered{position=h.old.position,radius=2,type="item-entity"}>0 then return reject("continuation_historical_ground_items_changed")end
- local owner=game.get_player(d.crafting_player_index)
+ local owner=d.crafting_player_index and game.get_player(d.crafting_player_index)or nil
  if not owner or not owner.valid or owner.name~="FactoryAutomaton"or game.get_player("FactoryAutomaton")~=owner
-  or owner.character~=a or a.player~=owner or not owner.connected or owner.force~=f
+  or (not detached_actor() and (owner.character~=a or a.player~=owner or not owner.connected)) or owner.force~=f
   or d.actor~=a or d.crafting_actor_unit_number~=a.unit_number then return reject("continuation_pinned_owner_changed")end
  local k=d.world_id..":"..owner.index..":"..h.original_actor_unit..":"..a.unit_number
  local record=d.actor_successions and d.actor_successions[k]
@@ -404,6 +407,7 @@ if x.history then
   return reject("continuation_reviewed_native_history_changed")end
 end
 """
+)
 
 
 BUILD_REPLACEMENT_LUA = (

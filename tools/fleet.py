@@ -7,11 +7,15 @@ Usage: python -B tools/fleet.py start --count N [--seeds a,b,c | random] [--minu
        python -B tools/fleet.py cost
 
 Each run is a new folder ``runtime/v2/<name>-<seed>`` with its own seed and its
-own server/RCON port pair (allocated above the interactive range). A run is the
-same three processes as ``lifecycle start --no-gui``: a dedicated server, the
-per-run automation client with its window hidden (the framework actor is that
-client's character, see docs/v2/README.md "Fleet runs") and a ``--planner none``
-supervisor. ``runtime/active-runtime.json`` and every existing runtime are never
+own server/RCON port pair (allocated above the interactive range). By default
+(``--client always``) a run is the three processes of ``lifecycle start
+--no-gui``: a dedicated server, the per-run automation client with its window
+hidden and a ``--planner none`` supervisor. ``--client none`` makes a
+client-free TEST run (server + supervisor only, labelled ``test_mode:
+client_free``, the lab trigger script-credited after the real craft; a
+player-less actor charts nothing, so it is equivalent only up to the
+electric-mining-drill research, docs/v2/HEADLESS.md); ``until_lab_trigger``
+closes the client once the lab trigger fired. ``runtime/active-runtime.json`` and every existing runtime are never
 touched; the manifest is ``runtime/fleets/<name>.json``. ``stop`` uses the
 lifecycle safe stop per run (supervisor ACK, world paused and saved, server
 ``/quit``, own client closed); nothing is deleted.
@@ -41,6 +45,7 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tools"))
 from factorio_agent.core.deterministic_character import _identity  # noqa: E402
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json  # noqa: E402
+from factorio_agent import actor_client  # noqa: E402
 
 # Fleet ports start above the interactive lifecycle range (34261+/27061+, 100 slots).
 UDP_BASE, TCP_BASE, PORT_SPAN = 34400, 27400, 400
@@ -282,14 +287,25 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
         f"fleet {fleet.get('name')}: {len(runs)} runs, target {fleet.get('target_minutes') or '-'} game min,"
         f" critical-path window {window_text} min; milestone cells = game minute the step succeeded"
     ]
+    tests = [r for r in runs if r.get("test_mode")]
+    if tests:
+        lines[0] += f" | TEST MODE client_free in {len(tests)} runs (script-credited hand-craft triggers; not a proof)"
     lines.append(
-        "seed".ljust(11) + " up " + " gmin" + "".join(h.rjust(6) for h in heads) + "  lab_idle crit/slack_s  furthest"
+        "seed".ljust(11)
+        + " up "
+        + " cli "
+        + " gmin"
+        + "".join(h.rjust(6) for h in heads)
+        + "  lab_idle crit/slack_s  furthest"
     )
+    short = dict(live="on", none="none", detached="det", down="-")
     for r in runs:
         far = r.get("furthest")
         lines.append(
             str(r["seed"]).ljust(11)
             + (" ok " if r.get("alive") else " -- ")
+            + short.get(r.get("client"), "-").rjust(4)
+            + " "
             + _cell(r.get("game_minutes"), 5)
             + "".join(_cell(r["milestones"].get(step), 6) for _, step in COLUMNS)
             + _cell(r.get("lab_idle_seconds"), 10)
@@ -302,9 +318,9 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
         cells = [(agg["columns"][h] or {}).get(key) for h in heads]
         lab = (agg["lab_idle_seconds"] or {}).get(key)
         gmin = (agg["game_minutes"] or {}).get(key)
-        lines.append(key.ljust(15) + _cell(gmin, 5) + "".join(_cell(c, 6) for c in cells) + _cell(lab, 10))
+        lines.append(key.ljust(20) + _cell(gmin, 5) + "".join(_cell(c, 6) for c in cells) + _cell(lab, 10))
     reached = [(agg["columns"][h] or {}).get("n", 0) for h in heads]
-    lines.append("reached".ljust(20) + "".join(_cell(n, 6) for n in reached))
+    lines.append("reached".ljust(25) + "".join(_cell(n, 6) for n in reached))
     lines.append(f"blocked/failed jobs now (reason -> count -> example seed), top {top}:")
     rows = list(agg["blocked_reasons"].items())[:top]
     lines += [f"  {v['count']:3d}  {reason}  [{v['capability']}] e.g. {v['seeds'][0]}" for reason, v in rows] or [
@@ -313,6 +329,13 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     lines.append("controller errors (count -> example seed), top 5:")
     rows = list(agg["controller_errors"].items())[:5]
     lines += [f"  {v['count']:3d}  {reason}  e.g. {v['seeds'][0]}" for reason, v in rows] or ["  none"]
+    if tests:
+        credits = [
+            f"{r['seed']}:"
+            + ",".join(f"{c.get('technology')}@{c.get('tick')}" for c in r.get("script_credited_triggers") or [])
+            for r in tests
+        ]
+        lines.append("test-mode credits (seed:technology@tick): " + " ".join(credits)[:400])
     failed = [r for r in runs if r.get("launch_error")]
     for r in failed[:4]:
         lines.append(f"launch failed {r['seed']}: {r['launch_error'][:100]}")
@@ -334,11 +357,27 @@ def alive(record):
 def run_records(root):
     """The run's own process registries (the lifecycle's source of truth)."""
     root = Path(root)
+    client = _read(root / "agent-client" / "client-process.json", {}) or {}
+    if actor_client.is_closed_client(root, client):
+        client = {}  # closed on purpose by the recorded detach
     return dict(
         server=_read(root / "server.json", {}) or {},
-        client=_read(root / "agent-client" / "client-process.json", {}) or {},
+        client=client,
         supervisor=_read(root / "supervisor-process.json", {}) or {},
     )
+
+
+def client_column(root, records):
+    """'live', 'none' (client-free test run), 'detached' (closed by the transition) or 'down'."""
+    return actor_client.client_state(root, alive(records.get("client")))
+
+
+def run_alive(root, records):
+    """Every expected process is alive; a client-free or detached run expects no client."""
+    if not any(records.values()):
+        return False
+    needed = [k for k in records if k != "client" or not actor_client.client_free(root)]
+    return all(alive(records.get(k)) for k in needed)
 
 
 class _Counters(ctypes.Structure):
@@ -426,6 +465,11 @@ class Fleet:
         # "none" = rules in code only; "luna" = the low-tier model answers incidents
         # (needed only to compare the two on the same seeds).
         self.planner = "none"
+        # actor_client mode of every run: "none" = client-free test run (only the
+        # server and the supervisor; labelled test_mode client_free), "always" =
+        # a hidden client for the whole run, "until_lab_trigger" = client until
+        # the lab trigger fired (docs/v2/HEADLESS.md).
+        self.client = "always"
 
     # manifest ----------------------------------------------------------
     def manifest_path(self, name):
@@ -538,6 +582,7 @@ class Fleet:
             created_at=time.time(),
             target_minutes=minutes,
             planner=self.planner,
+            client=self.client,
             runs=[
                 dict(seed=s, runtime=str(r), server_port=u, rcon_port=t, status="planned")
                 for s, r, (u, t) in zip(seeds, roots, pairs)
@@ -562,6 +607,8 @@ class Fleet:
                         rcon_port=run["rcon_port"],
                         automation_config=options,
                     )
+                if self.client != actor_client.ALWAYS:
+                    actor_client.set_mode(root, self.client)
                 self._set_run(name, run["seed"], status="starting")
                 result = self.lifecycle()._start(root, visible=False, automation_config=options, select=False)
                 records = run_records(root)
@@ -620,13 +667,16 @@ class Fleet:
             records = run_records(root)
             up = {k: alive(v) for k, v in records.items()}
             row = dict(seed=run["seed"], runtime=run["runtime"], status=run["status"], processes=up)
+            row["client"] = client_column(root, records)
             if root.exists():
                 row.update(quick_summary(root))
-            if all(up.values()):
-                first = [process_cost(v) for v in records.values()]
+                row.update(actor_client.test_mode(root) or {})
+            if run_alive(root, records):
+                live = [v for k, v in records.items() if up[k]]
+                first = [process_cost(v) for v in live]
                 # Start-up (map load, client assets) is not the steady cost.
                 if all(first) and min(c["seconds"] for c in first) >= STEADY_SECONDS:
-                    measured.append((list(records.values()), first))
+                    measured.append((live, first))
             rows.append(row)
         costs = []
         if measured:
@@ -728,13 +778,17 @@ class Fleet:
             seed=run["seed"],
             runtime=run["runtime"],
             status=run["status"],
-            alive=all(alive(v) for v in records.values()) if any(records.values()) else False,
+            alive=run_alive(root, records),
+            client=client_column(root, records),
             launch_error=run.get("launch_error"),
             milestones={},
             furthest=None,
             blocked_reasons=[],
             controller_errors={},
         )
+        label = actor_client.test_mode(root) if root.exists() else None
+        if label:
+            row.update(label)
         if not (root / "jobs.json").exists():
             return row
         tick = run_tick(root)
@@ -776,9 +830,15 @@ class Fleet:
 
 def _status_lines(value):
     lines = [f"fleet {value['name']} (target {value.get('target_minutes') or '-'} game min)"]
+    if any(r.get("test_mode") for r in value["runs"]):
+        lines[0] += " TEST MODE client_free (C: n = no client by design, d = detached)"
     lines.append("seed        state          S C V  gmin  act blk done  last milestone")
     for r in value["runs"]:
-        up = "".join("o " if r["processes"].get(k) else "- " for k in ("server", "client", "supervisor"))
+        mark = dict(none="n ", detached="d ")
+        up = "".join(
+            "o " if r["processes"].get(k) else (mark.get(r.get("client"), "- ") if k == "client" else "- ")
+            for k in ("server", "client", "supervisor")
+        )
         lines.append(
             f"{str(r['seed']).ljust(11)} {r['status'][:14].ljust(14)} {up}"
             f"{_cell(r.get('game_minutes'), 5)} {_cell(r.get('active'), 4)}{_cell(r.get('blocked'), 4)}"
@@ -805,6 +865,14 @@ def main(argv=None):
         default="none",
         help="controller planner for every run of this fleet (compare by starting two fleets on the same --seeds)",
     )
+    start.add_argument(
+        "--client",
+        choices=actor_client.MODES,
+        default=actor_client.ALWAYS,
+        help="always (default): a hidden client per run; none: client-free TEST run (lab trigger script-credited"
+        " after the real craft; no charting, see HEADLESS.md); until_lab_trigger: client until the lab trigger",
+    )
+    start.add_argument("--keep-client", action="store_true", help="same as --client always")
     for command in ("status", "report", "stop", "watch"):
         one = sub.add_parser(command)
         one.add_argument("--name")
@@ -818,6 +886,7 @@ def main(argv=None):
     out = (lambda *_: None) if quiet else print
     if args.command == "start":
         fleet.planner = args.planner
+        fleet.client = actor_client.ALWAYS if args.keep_client else args.client
         value = fleet.start(
             args.count,
             args.seeds,

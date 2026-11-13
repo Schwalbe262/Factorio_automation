@@ -23,7 +23,7 @@ from factorio_agent.core.deterministic_character import _identity, set_client_vi
 from factorio_agent.core.factorio import no_mod_save_path
 from factorio_agent.core.rcon import FactorioRconClient
 from factorio_agent.core.process_launch import independent_process_options
-from . import runtime
+from . import actor_client, runtime
 from .automation_config import load_automation_config
 
 DEFAULT_RUNTIME = Path("runtime/v2/eval-1053994892")
@@ -218,6 +218,9 @@ class Lifecycle:
     def _record(self, root, kind):
         name = {"server": "server.json", "client": "agent-client/client-process.json", "supervisor": PROCESS}[kind]
         value = read(root / name, {})
+        if kind == "client" and actor_client.is_closed_client(root, value):
+            # Closed on purpose by the recorded detach: no client is owned any more.
+            return {}
         if kind == "supervisor" and not value:
             state = read(root / STATE, {})
             if state.get("runtime") == str(root) and state.get("world_id") == read(
@@ -278,6 +281,11 @@ class Lifecycle:
         result = runtime.connect_player(root)
         if result.get("status") != "ready":
             raise RuntimeError("client/actor connection not ready: " + str(result.get("reason")))
+        if result.get("detached"):
+            # Server-only run (actor_client: client-free mode or after the detach): healthy without a client.
+            if visible:
+                raise RuntimeError("server-only run has no client to show: " + str(result.get("reason")))
+            return result
         if not self._owned(root, "client"):
             raise RuntimeError("client process identity cannot be verified")
         if visible:
@@ -705,7 +713,11 @@ class Lifecycle:
                 processes[kind] = dict(pid=record["pid"], running=True) if record else dict(running=False)
             except (RuntimeError, OSError) as exc:
                 processes[kind] = dict(running=False, reason=str(exc))
+        if not processes["client"].get("running") and actor_client.client_free(root):
+            processes["client"].update(expected=False, state=actor_client.client_state(root, False))
+        label = actor_client.test_mode(root)
         return dict(
+            **(label or {}),
             runtime=str(root),
             seed=cfg["seed"],
             world_id=read(root / "world-settings.json", {}).get("world_id"),

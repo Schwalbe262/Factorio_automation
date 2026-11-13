@@ -44,6 +44,134 @@ Cost: the headless server alone measured 367 MB and 0.13 cores (fresh map,
 zero players); the hidden client is ~690 MB and a GPU context
 ([README.md](README.md) "Fleet runs").
 
+## Client modes (implemented, `factorio_agent.actor_client`)
+
+`actor-client.json` in the runtime folder: `{"client": "always" | "none" |
+"until_lab_trigger"}`. A missing file is `always` (the interactive map and
+every older runtime: unchanged). `tools/fleet.py start` writes it after
+`runtime.create`, default `--client always` (see "Equivalence" for why `none`
+is opt-in).
+
+### `none`: client-free TEST runs (owner exception, 2026-11-13)
+
+Only the dedicated server and the supervisor run, from tick 0. `connect-player`
+adopts the server-created character (`adopt_playerless_actor`): it records
+`d.detached_actor = {kind="detached-actor-v1", mode="none", world_id,
+unit_number, ...}` and pins `d.crafting_actor_unit_number`. It refuses a
+character that has a player or a world whose actor was ever bound to one.
+
+The single written exception to "nothing granted" (AGENTS.md): the engine does
+not credit a player-less hand craft, so the craft-item triggers that need a
+hand craft never fire. `hand_trigger_technologies(catalog)` derives that set
+from the catalog: roadmap technologies and their prerequisites whose trigger
+is `craft-item` of an item some hand-craftable recipe makes (character
+crafting categories); `mine-entity` is machine work; any other trigger type
+counts as needing a player. On today's roadmap the set is exactly
+`automation-science-pack` (craft 1 lab); `steam-power`/`electronics` are
+furnace plates and `oil-processing` is a pumpjack mine.
+
+1. The normal `craft` action records, in client-free mode only, a craft whose
+   product is the item of a researchable craft-item trigger
+   (`d.trigger_crafts`: recipe, count, tick, items consumed at queue time,
+   item count before, minimum craft ticks).
+2. The bootstrap, at the `automation-science-pack` step, crafts a lab for real
+   if there is no such record with the lab still in hand, waits while it is
+   queued, then returns `credit_hand_craft_trigger`.
+3. `credit_hand_craft_trigger` (`WorldBoundGame.act`, receipt in
+   `actions.jsonl` and `job-events.jsonl`) refuses unless ALL hold:
+   Python: the action has only `technology`/`item`/`reason`; the runtime mode
+   is `none`; the catalog trigger of that technology is `craft-item` of that
+   item; the technology is in `hand_trigger_technologies`.
+   World (same Lua command): same world id; the actor is the adopted
+   client-free actor (`detached_actor()`); the technology exists and is not
+   researched; its trigger is `craft-item` of that item; all prerequisites are
+   researched; a craft record for it exists with count >= trigger count and
+   consumed items; its minimum craft time elapsed; no queue entry of that
+   recipe remains; the actor holds at least one more of the item than before
+   the craft. Then it sets `technology.researched = true` (the engine applies
+   the effects, e.g. the `automation-science-pack` recipe unlock, as for a
+   fired trigger) and stores `d.trigger_credits[name]`.
+4. Labels: `actor-client.json` and `run.json` carry `test_mode:
+   "client_free"` and `script_credited_triggers` (technology, item, credit
+   tick, craft tick); `report_run.py` prints `TEST MODE` and labels the
+   milestones; `fleet.py status/report` show it in the header, a `cli` column
+   (`none`) and a credits line; the dashboard header shows a TEST MODE chip.
+   Results of such runs are test-mode results, never proof-run results.
+
+No item is granted, no other research is touched, lab research stays real.
+
+### `until_lab_trigger`
+
+The run starts as `always`. When an observation shows
+`automation-science-pack` researched, the supervisor calls `detach-client`:
+`detach_actor` refuses unless the hand-trigger set is researched, the crafting
+queue is empty and the actor is still the pinned connected owner's
+character; it sets the owner's controller to spectator and records
+`d.detached_actor` (with `player_index`). Then the client is closed by pid +
+creation time (`stop_crafting_client`), the actor is checked valid and
+unowned after the server sees the disconnect, and the transition is recorded
+in `actor-client.json` (`detached`, `closed_client`). Every step is re-entrant;
+a lost receipt is reconciled from the world record. Unit-tested (fake game and
+Lua); the live equivalence proof was done for `none` only.
+
+### Player-pin checks with a detached actor (both modes)
+
+`DETACHED_ACTOR_LUA` (`detached_actor()`): the recorded unit number and world
+id, still `d.actor`, and no player. Adapted: `supervisor.actor_binding`
+(`_detached_binding`, plus `detached`/`client_mode` in the binding),
+`actor-status` (`detached`, `detached_record`), `connect-player` (no client,
+`detached: true`), `recover-actor` (refuses: no player successor),
+`corpse_recovery` (offline owner + detached actor), `nearby_threats` and
+`nest_assault` (`detached_character`), `defense_relocation` and
+`post_raid_recovery` (owner-control checks), native repair control (no
+controller to check), the `_HELPERS` re-bind (off once detached),
+`BIND_CRAFTING_PLAYER_LUA` (refuses: `actor_detached_server_only`), the
+bootstrap guard (client-free: the credit path; detached before the trigger:
+blocked), lifecycle (`_client`, `_record` of the closed client, `status`
+reports `client.expected=false`), `tools/fleet.py` (alive, cost, client
+column). `checkpoint` reads only the world id and tick (unchanged).
+
+Death after the detach / in client-free mode: the corpse keeps the inventory
+and nothing respawns, so the supervisor writes `actor_dead` (reason
+`actor_dead_without_player`) to `actor-client.json`, logs
+`actor_dead_without_player` and safe-stops the run. No replacement character
+is created.
+
+Production statistics after the detach / in client-free mode count only
+machine output: the observation reads iron/copper plates, coal, science packs,
+circuits and rocket parts. Plates and science come from furnaces/assemblers
+and labs (credited); `construction_supply.production_rate("coal")` sizes coal
+haul batches from drill output (a player-less hand-mined coal would not
+count; the rate is then the drills' real rate); circuit rates in
+`supply_options` lose hand-crafted circuits, which they measure as factory
+output anyway; science `products_finished` proofs are machine-side.
+
+### Equivalence (seed 1193005910, 21 game minutes, same worktree code)
+
+`fleet.py report --name detach-none` (client-free) / `--name detach-gui`
+(`always`), milestone = game minute the step succeeded:
+
+| run | power | auto | emd | iron | copr | coal | blocked now | RAM / cores |
+|---|---|---|---|---|---|---|---|---|
+| `none` | 8.2 | 11.8 | 17.6 | - | - | - | 3x `mining_patch_native_receipt_changed` [mining_outpost] | 420 MB / 0.19 |
+| `always` | 8.6 | 12.2 | 18.2 | 19.2 | 19.6 | 20.4 | 1x `bulk_starter_capacity_requires_electric_mining_after_unlock` | 1367 MB / 0.67 |
+
+The scripted credit fired once: lab craft queued at tick 15915, credit at
+tick 17286 (first attempt, no refusal), `automation-science-pack` recipe
+enabled by it; no other research was touched.
+
+Up to the electric-mining-drill research the modes match (client-free 0.4-0.6
+min earlier). After it they do not: the save of the client-free run has 0
+charted chunks (400 generated) against 196 charted (1964 generated) in the
+`always` run. A connected player charts and generates chunks around its
+character; a player-less character does neither. `mining_layout_policy.
+survey_patch` reads only charted chunks, gets an empty tile list and every
+mining outpost blocks. So `none` is not the fleet default. Closing the gap
+would need a second test-mode emulation (chart and generate around the actor
+with a connected player's radius, e.g. `force.chart` /
+`surface.request_to_generate_chunks`), which is outside the single written
+exception and needs the owner's decision.
+
 ## Cheapest honest alternatives
 
 1. **Client only for the lab craft (proven by the probe, not implemented).**

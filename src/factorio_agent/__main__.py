@@ -36,7 +36,15 @@ def execute(argv=None, services=None):
     create.add_argument("--seed", type=int, default=101)
     create.add_argument("--server-port", type=int, default=34260)
     create.add_argument("--rcon-port", type=int, default=27060)
-    for command in ("start", "connect-player", "observe", "capabilities", "actor-status", "checkpoint"):
+    for command in (
+        "start",
+        "connect-player",
+        "observe",
+        "capabilities",
+        "actor-status",
+        "checkpoint",
+        "detach-client",
+    ):
         commands.add_parser(command)
     recovery = commands.add_parser("recover-actor")
     recovery.add_argument("--world-id", required=True)
@@ -94,6 +102,14 @@ def execute(argv=None, services=None):
             game.save()
             Ledger(root).event("world-lifecycle", "checkpoint_requested", tick=obs["tick"], world_id=obs["world_id"])
             result = {"status": "checkpoint_requested", "world_id": obs["world_id"], "observed_tick": obs["tick"]}
+    elif args.command == "detach-client":
+        from .actor_client import detach
+
+        with RunLock(root / "writer.lock"):
+            game = services.game(root)
+            result = detach(root, game, services.catalog(root, game))
+            if result.get("status") == "succeeded":
+                Ledger(root).event("actor-lifecycle", "actor_detached", tick=(result.get("record") or {}).get("tick"))
     elif args.command == "watch":
         from factorio_agent.core.deterministic_character import set_client_visibility
 

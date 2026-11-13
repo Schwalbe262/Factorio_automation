@@ -282,6 +282,7 @@ class Dashboard:
             "wall_minutes": metrics.get("wall_minutes"),
             "game_minutes": metrics.get("game_minutes"),
             "planner_mode": metrics.get("planner_mode") or state.get("planner"),
+            "test_mode": metrics.get("test_mode") or run.get("test_mode"),
             "jobs_succeeded": metrics.get("jobs_succeeded"),
             "idle_gap_share": metrics.get("idle_gap_share"),
             "minutes_since_last_success": round((now - last_success) / 60, 1) if last_success else None,

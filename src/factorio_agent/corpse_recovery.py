@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+from .actor_client import DETACHED_ACTOR_LUA
+
 
 def _payload(value):
     return json.dumps(json.dumps(value, separators=(",", ":")))
@@ -34,7 +36,9 @@ def execute_corpse_recovery(game, expected_world, expected_actor_unit, death_tic
     return game.query(CORPSE_RECOVERY_EXECUTE_LUA.replace("PAYLOAD", _payload(args)))
 
 
-CORPSE_RECOVERY_COMMON_LUA = r"""
+CORPSE_RECOVERY_COMMON_LUA = (
+    DETACHED_ACTOR_LUA
+    + r"""
 local args=helpers.json_to_table(PAYLOAD)
 local function reject(reason)return {ok=false,status="blocked",reason=reason,tick=game.tick}end
 local function same_position(p,q)return p.x==q.x and p.y==q.y end
@@ -43,11 +47,12 @@ local function context()
  if type(d.crafting_player_index)~="number"or d.crafting_player_index<1 then return nil,"corpse_recovery_pinned_owner_changed"end
  local owner=game.get_player(d.crafting_player_index)
  local expected_name=d.crafting_player_name or"FactoryAutomaton"
- if not owner or not owner.valid or owner.name~=expected_name or not owner.connected or owner.force~=f
+ local detached=detached_actor()
+ if not owner or not owner.valid or owner.name~=expected_name or (not owner.connected and not detached) or owner.force~=f
   or game.get_player(expected_name)~=owner then return nil,"corpse_recovery_pinned_owner_changed"end
  local actor=d.actor
  if not actor or not actor.valid or actor.name~="character"or actor.unit_number~=args.actor_unit
-  or d.crafting_actor_unit_number~=args.actor_unit or owner.character~=actor or actor.player~=owner
+  or d.crafting_actor_unit_number~=args.actor_unit or (not detached and (owner.character~=actor or actor.player~=owner))
   or actor.force~=f or actor.surface~=s then return nil,"corpse_recovery_exact_owned_actor_required"end
  return owner,nil
 end
@@ -142,6 +147,7 @@ local function read_marker(owner,corpse)
  return marker,nil
 end
 """
+)
 
 
 CORPSE_RECOVERY_INSPECT_LUA = (
