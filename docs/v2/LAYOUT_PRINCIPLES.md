@@ -79,8 +79,8 @@ the belt, inserter and magazine stock rows and engines (G -> E <- P).
 * `produce` (`production_layout.design_line`): a row line first; when no row
   can carry the tree (three solids, a two-level intermediate such as the
   inserter), a cluster line ending in a stock chest (`cluster_line`).
-* `logistic_science` on a planned world: one cluster on an iron and a copper
-  bus tap, packs routed to the lab entry; no district branch (blocked
+* `logistic_science` on a planned world: the cluster (or the split row, see "Green
+  science" below) on iron and copper bus taps, packs routed to the lab entry; no district branch (blocked
   `green_science_needs_planned_bus` without a published bus). `green_core`
   is kept only for a controller without a site service.
 
@@ -136,7 +136,8 @@ stored as entities.
   pollution.
 
 Used by `produce` (and through it the planned `ammo_production` and
-`engine_production` rows) and by red science (`science_layout`, below). Smelting banks are still a single-variant generator; giving them genomes needs
+`engine_production` rows), by red science (`science_layout`) and green science
+(`green_layout`), both below. Smelting banks are still a single-variant generator; giving them genomes needs
 the same three things: parameters on the generator (bank length / pairing), a descriptor,
 and their own place loop calling `layout_selection.score`.
 
@@ -197,6 +198,31 @@ frame 2, square 40x40                 sci-direct-row 263, sci-direct-bothsides 2
 frame 2, shallow 44 x 28              sci-direct-bothsides 282, sci-direct-row 295 (turned, port 48)
 frame 6, 48x48, horizon 60/min        sci-direct-row (its ceiling 36/min passes the row's gear arm 30/min)
 ```
+
+### Green science (`green_layout.py`)
+
+Two audited candidates, ranked by `green_science.planned_green_layouts` (one probe allocation
+each: plate ports' `site.fit` cost + `W_PORT` x the pack port's distance to the lab entry +
+`layout_selection.score`), both placed (allocation names `logistic_science#i` and
+`logistic_science_split#i`, `settle_green` keeps one), best first, the record on every core:
+
+| candidate | geometry | start | growth story |
+|---|---|---|---|
+| `cl-am1-4x2t-...` (cluster) | one pack machine + one machine per intermediate, all direct insertion, plates on one two-lane belt | 6 machines, 23 x 14, 5/min | none in place: a second pack machine flips the gear / inserter / belt edges to belts (`grow_decision`): a second cluster or a rebuild |
+| `green-split-6` (split row) | the inserter cluster (cable -> circuit -> inserter <- gear) and the belt cluster (gear -> belt, mirrored below) as their own direct-insertion clusters sized for the frame, dropping onto one intermediate belt (inserter on one lane, belt on the other: the inserter cluster's port tile feeds straight into the belt cluster's, no side-load), a pack row along it (1 built, 5 slots reserved), packs to a port at the far end | 7 machines, 46 x 16, 5/min | in place up to 30/min (each sub-cluster's one output arm, `inserter_rate`) by building the reserved pack slots; beyond: a second split row |
+
+Audit of the split (`audit_split`): no overlap, every inserter between a belt and a machine,
+the two intermediates on different lanes, every pack slot (built or reserved) reaching the
+output port, the pack row's poles one chain, the sub-clusters' rates and the pack arms carry
+the frame; each sub-cluster also passes `audit_cluster`. The split's ports: three plate inputs
+(the inserter cluster's iron and copper, the belt cluster's iron, each its own tap) on the bus
+edge and the pack port opposite.
+
+Default: the horizon is the request (no green growth capability builds reserved slots yet), and
+the split's ceiling is not credited (`capability: not_implemented`), so the cheaper cluster wins
+unless the site favours the split (pack port much nearer the lab entry). With a growth
+capability the in-place slots would count (`demand_for`'s horizon). The inserter produce row
+keeps one geometry (its tree is a chain; the split's inserter sub-cluster is the same cluster).
 
 Not yet: twin machine rows sharing one plate belt. Their two output belts put red packs on
 both lanes of the lab belt (an inserter always drops on the far lane, a side-load moves
