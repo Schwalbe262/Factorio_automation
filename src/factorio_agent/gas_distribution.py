@@ -232,11 +232,17 @@ class GasDistribution:
         snapshot = self._source_snapshot(budget.game, source)
         if not snapshot.get("ok"):
             return snapshot
+        from . import block_sites
+
+        # Source-relative header at the refinery outlet, checked against every unbuilt external plan
+        # (board blocks, the planned bus, unboarded plans) so it never claims another block's tile.
+        planned = block_sites.planned_tiles(self.builder, obs, self.path.parent, board, exclude=("gas_distribution",))
         for x, y, side in candidates:
             if budget.expired():
                 return budget.failure(candidate_failures=failures[-6:])
             core = gas_manifold_core(x, y, side)
             if any(overlap(core["reserved_area"], b["reserved_area"]) for b in blocks):
+                failures.append({"anchor": core["anchor"], "reason": "gas_manifold_area_meets_reserved_block"})
                 continue
             if any(
                 overlap([[p["x"] - 0.49, p["y"] - 0.49], [p["x"] + 0.49, p["y"] + 0.49]], b["reserved_area"])
@@ -244,13 +250,31 @@ class GasDistribution:
                 for p in path
                 for b in blocks
             ):
+                failures.append({"anchor": core["anchor"], "reason": "gas_manifold_access_meets_reserved_block"})
+                continue
+            clash = block_sites.first_clash(self.builder, core["entities"] + core["output_access"], planned)
+            if clash is not None:
+                failures.append(
+                    {"anchor": core["anchor"], "reason": "gas_manifold_meets_unbuilt_external_plan", "blocker": clash}
+                )
                 continue
             land = survey_slots(budget.game, [[core["reserved_area"]]])
             if not land.get("ok") or 1 not in land.get("legal", []):
+                failures.append({"anchor": core["anchor"], "reason": "gas_manifold_area_not_buildable"})
                 continue
             route = plan_typed_fluid_connection(budget.game, self.builder, obs, source, core["inlet"], core, future)
             if not route.get("ok"):
                 failures.append({"anchor": core["anchor"], "stage": "inlet_route", "reason": route.get("reason")})
+                continue
+            clash = block_sites.first_clash(self.builder, route["entities"], planned)
+            if clash is not None:
+                failures.append(
+                    {
+                        "anchor": core["anchor"],
+                        "reason": "gas_inlet_route_meets_unbuilt_external_plan",
+                        "blocker": clash,
+                    }
+                )
                 continue
             by = {xy(e): e for e in route["entities"]}
             landing = by.get(xy(core["inlet"]))
@@ -320,6 +344,9 @@ class GasDistribution:
             "ok": False,
             "reason": "no_isolated_two_outlet_gas_manifold",
             "evidence": {"candidate_failures": failures[-8:]},
+            "plan_needs": block_sites.header_needs(
+                "gas_distribution", "no_isolated_two_outlet_gas_manifold", source, failures
+            ),
         }
 
     def _capacity(self, upstream):

@@ -217,8 +217,9 @@ class LiveReceiptTests(unittest.TestCase):
         validate_growth(nodes[0]["parameters"])
         stalled = jobs + [{"capability": "science_growth", "status": "blocked", "parameters": nodes[0]["parameters"]}]
         self.assertEqual(prog.science_growth_nodes(stalled, [], observation, CAPABILITIES), [])
+        validate_growth({"pack": "chemical-science-pack", "machines": 3})  # ChemicalScience.grow extends in place
         with self.assertRaises(ValueError):
-            validate_growth({"pack": "chemical-science-pack", "machines": 2})  # no growing block yet
+            validate_growth({"pack": "utility-science-pack", "machines": 2})  # no growing block yet
 
 
 class GrowControllerTests(unittest.TestCase):

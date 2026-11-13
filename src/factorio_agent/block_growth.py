@@ -12,9 +12,10 @@ it cost?" without knowing each controller. Every option is one row::
   the action is the same ``produce`` request at the higher rate (``ProductionRows._extend``);
   without a slot the kind is ``rebuild`` (``limit`` says why).
 * ``advanced_circuit_production`` / ``chemical_science``: a new block is sized by the job's
-  ``rate_per_minute`` (two to four machines); a built block reports its rate, its reserved slots
-  (``core.growth_slots``) and the slot unit's cost with kind ``rebuild`` (no in-place extension
-  in the controller yet).
+  ``rate_per_minute`` (two to four machines); a verified block with reserved slots
+  (``core.growth_slots``) is kind ``in_place``: the action is the same capability at one machine's
+  rate more, which the controller builds by regenerating its core at the same anchor
+  (``block_sites.extended``: old core a subset, re-audit, republish, build). No slot left: ``rebuild``.
 
 Callers rank and choose; this module never acts.
 """
@@ -117,17 +118,24 @@ def _block_option(capability: str, item: str, state: dict) -> dict:
     unit: dict[str, int] = {}
     for e in slots[0] if slots else ():
         unit[e["name"]] = unit.get(e["name"], 0) + 1
+    built = bool(state.get("plan"))
+    # A built block extends in place (the controller regenerates its core with one machine more at the
+    # same anchor: AdvancedCircuitProduction / ChemicalScience._grow_in_place) while a slot remains.
+    grows = built and bool(slots) and bool(per) and state.get("phase") == "verified"
+    action = None
+    if grows:
+        action = {"capability": capability, "parameters": {"rate_per_minute": round(min(600.0, rate + per), 3)}}
     return {
         "block": capability,
         "capability": capability,
         "item": item,
-        "kind": "rebuild" if state.get("plan") else "new",
+        "kind": "in_place" if grows else ("rebuild" if built else "new"),
         "rate_now": round(rate, 3) if isinstance(rate, (int, float)) else None,
         "step_rate": round(per, 3) if per else None,
         "max_rate_in_place": round(per * (machines + len(slots)), 3) if per else None,
         "slots": len(slots),
         "cost": {"items": unit},
-        "action": None,
-        "limit": "no_in_place_extension" if slots else "no_reserved_slot",
-        "beyond": f"extend {capability} into its reserved slots (not implemented) or a second block",
+        "action": action,
+        "limit": "reserved_slots" if grows else ("block_not_verified" if slots and built else "no_reserved_slot"),
+        "beyond": f"a second {capability} block or a partial rebuild",
     }

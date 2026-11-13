@@ -252314,3 +252314,8 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - fixes: ensure_item waits when a built powered machine has the recipe; scout stands are land (Lua find_non_colliding_position), unreachable target abandoned after 2 moves without progress; power_grid keeps the coarse no-connection reason, A* closed set + 7-tile buckets; repeated_executor_failure -> plan_needs.from_executor_failure (preflight with action/position), _replannable, ladder checks replan first; postmortem row dry run answers saved_row_plan.
 - result: read-only what-if oil_gathering fits (55-hop bridge), water_gathering fits, engine fits; gate OK (3270 tests).
 - next: merge, restart supervisor; watch basic_petroleum (crude pipe ~470 tiles, pipeline extent 320 limit) and chemical stages.
+## 2026-11-14 late fluids on the planned world (worker, worktree agent-a751cb3c666fd66f6)
+- goal: oil/chemistry tail plannable on a fresh planned-bus world (no bus-factory, no fixed engine block).
+- actions: acid iron + advanced-circuit plates from planned-bus taps (block_sites.bus_taps, publish/cutover before ensure_plan); SiteService siting for chemical_production / chemical_science; in-place growth (block_sites.extended) for advanced circuits and blue, blue in PACK_STATES; gas/fluid headers checked against unbuilt plans with plan_needs site; dry runs + remedy rungs (site:more_blocks, waypoints); test_v2_planned_world_tail.
+- result: offline only (fake router/survey); gate passed. failure reason: none offline; live proof pending.
+- next: rocket_plan tail ordering (engine belt row after chemical_science deadlocks blue on a planned world); fleet on a fresh map.

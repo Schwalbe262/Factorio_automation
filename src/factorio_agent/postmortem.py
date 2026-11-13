@@ -277,7 +277,9 @@ DRY_RUN = {
     # Another pack block's reserved slots (science_growth {pack, machines}); the red block's growth has no
     # pure planner (its frame extension writes the widened reservation first).
     "science_growth": DryRun(
-        lambda ex, obs, p: ex.green.plan_growth(obs, p) if (p or {}).get("pack") else {"reason": "no_pure_planner"}
+        lambda ex, obs, p: (
+            _pack_controller(ex, p).plan_growth(obs, p) if (p or {}).get("pack") else {"reason": "no_pure_planner"}
+        )
     ),
     "brick_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "brick")),
     "steel_production": DryRun(lambda ex, obs, p: _furnace_prepare(ex, obs, "steel")),
@@ -305,7 +307,28 @@ DRY_RUN = {
     "advanced_petroleum": DryRun(lambda ex, obs, p: ex._advanced_petroleum().prepare(obs)),
     "fluid_product": DryRun(lambda ex, obs, p: ex._fluid_products().prepare(obs, p)),
     "fluid_distribution": DryRun(lambda ex, obs, p: ex._fluid_distribution(p).prepare(obs)),
+    "advanced_circuit_production": DryRun(lambda ex, obs, p: _sized_prepare(ex, ex.advanced_circuits, p)(obs)),
+    "chemical_production": DryRun(lambda ex, obs, p: ex.chemicals.prepare(obs, p)),
+    "chemical_science": DryRun(lambda ex, obs, p: _sized_prepare(ex, ex.blue, p)(obs)),
+    "gas_distribution": DryRun(lambda ex, obs, p: ex.gas_distribution.prepare(obs)),
 }
+
+
+def _pack_controller(ex, parameters):
+    """The pack block's controller of ``science_growth {pack}`` (``pack_growth.PACK_CONTROLLERS``)."""
+    from .pack_growth import PACK_CONTROLLERS
+
+    return getattr(ex, PACK_CONTROLLERS[parameters["pack"]])
+
+
+def _sized_prepare(ex, controller, parameters):
+    """``controller.prepare`` with the machine count its handler sizes from ``rate_per_minute``."""
+    import importlib
+
+    module = importlib.import_module(type(controller).__module__)
+    rate = (parameters or {}).get("rate_per_minute")
+    controller.count = module.count_for_rate(ex.catalog, rate) if rate else 2
+    return controller.prepare
 
 
 def _furnace_prepare(ex, obs, kind):

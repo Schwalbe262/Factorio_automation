@@ -25,6 +25,7 @@ from .transport import VECTORS, plan_connection, surface_pipe_proof, underground
 
 
 SCOPE_ID = "advanced-circuit-production"
+OWNER = "advanced_circuit_production"  # board block, site allocation and planned-bus tap owner
 TAP_NAMES = {"iron-plate": "advanced-iron", "copper-plate": "advanced-copper"}
 ARM_BUDGETS = {"inserter": 30, "long-handed-inserter": 30, "fast-inserter": 120}
 
@@ -515,8 +516,21 @@ def combine_tap_previews(old_bus, first, second, obs):
 
 
 class AdvancedCircuitProduction:
-    def __init__(self, game, builder, catalog, perimeter, *, bus_factory=None, science=None, green=None, chemical=None):
+    def __init__(
+        self,
+        game,
+        builder,
+        catalog,
+        perimeter,
+        *,
+        bus_factory=None,
+        science=None,
+        green=None,
+        chemical=None,
+        site=None,
+    ):
         self.game, self.builder, self.catalog, self.perimeter = game, builder, catalog, perimeter
+        self.site = site  # planned world: the block from the master plan (block_sites), taps on the planned bus
         self.tap = BusTap(game, builder, catalog, bus_factory=bus_factory, science=science, green=green)
         self.chemical = chemical if chemical is not None else ChemicalProduction(game, builder, catalog, perimeter)
         self.path = Path(game.cfg.runtime_dir) / "advanced-circuits.json"
@@ -592,6 +606,11 @@ class AdvancedCircuitProduction:
         plastic = self._plastic_source(obs)
         if not plastic.get("ok"):
             return plastic
+        from . import block_sites
+
+        bus = block_sites.planned_bus(self.path.parent, obs)
+        if bus is not None:
+            return self._prepare_planned(obs, bus, plastic)
         try:
             docs = self.tap._documents()
             old_bus = docs["factory"]["bus"]
@@ -824,6 +843,248 @@ class AdvancedCircuitProduction:
             "reason": "no_advanced_circuit_site_with_complete_typed_inputs",
             "evidence": {"failures": failures[-8:], "legal_sites": len(contexts), "route_attempts": attempts},
         }
+
+    def _prepare_planned(self, obs, bus, plastic):
+        """Planned world: the block from ``SiteService`` (``block_sites``), iron and copper from planned-bus taps.
+
+        Same core, audits, growth reservation, power and defense as the development-map path; the
+        two plate inputs are ``planned_tap.connect_inputs`` taps on the block's allocation (built
+        first in ``step``), the plastic belt a route from the verified plastic outlet. The state
+        starts in phase ``build`` with ``taps`` and ``site_allocation``.
+        """
+        from . import block_sites
+
+        path = self.path.parent / "pcb-board.json"
+        try:
+            board = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "reason": "advanced_circuit_board_unavailable", "detail": str(exc)}
+        if not self._identity(obs, board):
+            return {"ok": False, "reason": "advanced_circuit_bus_authority_identity_changed"}
+        try:
+            rated = advanced_circuit_rates(self.catalog, self.count)
+            sited = block_sites.blocks(
+                getattr(self, "site", None),
+                obs,
+                OWNER,
+                lambda ax, ay: advanced_circuit_core(self.catalog, ax, ay, self.count),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            return {"ok": False, "reason": "advanced_circuit_preparation_context_unavailable", "detail": str(exc)}
+        if sited is None:
+            return {"ok": False, "reason": "advanced_circuit_requires_site_service"}
+        if not sited:
+            block_sites.keep(self.site, obs, OWNER, None)
+            return {"ok": False, "reason": "advanced_circuit_no_site_allocation", "candidate_failures": []}
+        failures = []
+        future_hard = unbuilt_external_keepouts(self.builder, obs, board.get("blocks", {}))
+        candidates = []
+        for anchor, block in sited:
+            core = advanced_circuit_core(self.catalog, *anchor, self.count)
+            audit = audit_advanced_circuit_core(core, self.catalog)
+            if not audit["ok"]:
+                block_sites.keep(self.site, obs, OWNER, None)
+                return {"ok": False, "reason": "advanced_circuit_core_audit_failed", "evidence": audit}
+            area = core["reserved_area"]
+            if any(
+                overlap(area, b["reserved_area"]) for b in board.get("blocks", {}).values() if b.get("reserved_area")
+            ) or any(
+                area[0][0] < px + 0.49 and px - 0.49 < area[1][0] and area[0][1] < py + 0.49 and py - 0.49 < area[1][1]
+                for px, py in future_hard
+            ):
+                failures.append(
+                    {"stage": "site", "anchor": core["anchor"], "reason": "advanced_area_meets_planned_block"}
+                )
+                continue
+            candidates.append((core, block))
+        budget = PlanningBudget(self.game)
+        vectors = budget.game.query(ADVANCED_ARM_VECTORS_LUA) if candidates else {"ok": True}
+        if not vectors.get("ok"):
+            block_sites.keep(self.site, obs, OWNER, None)
+            return vectors
+        land = survey_slots(budget.game, [[c["reserved_area"]] for c, _ in candidates]) if candidates else {}
+        legal = set(land.get("legal", [])) if land.get("ok") else set()
+        adapter = SimpleNamespace(
+            _occupied_by_plan=self.builder._occupied_by_plan,
+            can_place=lambda es: preflight(budget.game, self.builder, obs, es),
+        )
+        tap_failure = None
+        for index, (core, block) in enumerate(candidates, start=1):
+            if index not in legal:
+                failures.append({"stage": "site", "anchor": core["anchor"], "reason": "advanced_area_not_buildable"})
+                continue
+            if budget.expired():
+                block_sites.keep(self.site, obs, OWNER, None)
+                return budget.failure(candidate_failures=failures[-6:])
+            future = advanced_circuit_core(self.catalog, *xy({"position": core["anchor"]}), 4)
+            ports = {p["item"]: p for p in core["ports"]}
+            reserved = merge_entities(core["entities"], future["entities"]) + _core_keepout(core)
+            plastic_route = plan_connection(
+                budget.game, adapter, obs, plastic["source"], ports["plastic-bar"], reserved
+            )
+            if not plastic_route.get("ok"):
+                failures.append(
+                    dict(
+                        _candidate_failure("plastic_route", plastic_route, anchor=core["anchor"]),
+                        reason=plastic_route.get("reason", "plastic_route_failed"),
+                        item="plastic-bar",
+                        source=plastic["source"]["position"],
+                        destination=ports["plastic-bar"]["position"],
+                    )
+                )
+                continue
+            tapped = block_sites.bus_taps(
+                budget.game,
+                self.builder,
+                obs,
+                bus,
+                block,
+                owner=OWNER,
+                ports=[ports["copper-plate"], ports["iron-plate"]],
+                entities=merge_entities(reserved, plastic_route["entities"]),
+                demand={"iron-plate": rated["iron_per_minute"], "copper-plate": rated["copper_per_minute"]},
+            )
+            if not tapped.get("ok"):
+                tap_failure = tapped
+                failures.append(dict(tapped, anchor=core["anchor"]))
+                continue
+            taps, ignored = tapped["taps"], tuple(tapped["ignored_units"])
+            routes = [plastic_route] + list(tapped["routes"])
+            tap_entities = merge_entities(*(t["entities"] for t in taps)) if taps else []
+            es = block_sites.own_entities(merge_entities(core["entities"], *(r["entities"] for r in routes)), taps)
+            from .engine_production import _clear_planned_power_group
+
+            target = _clear_planned_power_group(budget.game, core)
+            if not target.get("ok"):
+                failures.append(_candidate_failure("power_target", target))
+                continue
+            power = connect_power_groups(
+                budget.game, adapter, obs, [target["group"]], merge_entities(es, future["entities"], tap_entities)
+            )
+            if not power.get("ok"):
+                failures.append(dict(_candidate_failure("power", power), reason=power.get("reason", "power_failed")))
+                continue
+            es = merge_entities(es, power["entities"])
+            whole = preflight(
+                budget.game,
+                self.builder,
+                obs,
+                merge_entities(es, tap_entities, core["output_access"]),
+                ignored_units=ignored,
+            )
+            if not whole.get("ok"):
+                failures.append(dict(_candidate_failure("whole_preflight", whole), reason="advanced_preflight_failed"))
+                continue
+            growth = preflight(
+                budget.game,
+                self.builder,
+                obs,
+                merge_entities(
+                    future["entities"],
+                    *(r["entities"] for r in routes),
+                    power["entities"],
+                    tap_entities,
+                    core["output_access"],
+                ),
+                ignored_units=ignored,
+            )
+            if not growth.get("ok"):
+                failures.append(
+                    dict(_candidate_failure("future_preflight", growth), reason="advanced_preflight_failed")
+                )
+                continue
+            plan = _plan(
+                es,
+                core["ports"],
+                reserved_area=core["reserved_area"],
+                underground_pairs=core["underground_pairs"]
+                + [pair for r in routes for pair in r.get("underground_pairs", [])],
+                output_access=core["output_access"],
+                clear_obstacles=whole["clear_obstacles"],
+                clearance_world_id=obs["world_id"],
+            )
+            defense = self.perimeter.prepare_coverage(obs, SCOPE_ID, [core["reserved_area"]])
+            if not defense.get("ok"):
+                block_sites.keep(self.site, obs, OWNER, None)
+                return {"ok": False, "reason": "advanced_circuit_defense_preflight_failed", "evidence": defense}
+            actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
+            bindings = {
+                _key(e): actual[(e["name"], *xy(e))]["unit_number"] for e in es if (e["name"], *xy(e)) in actual
+            }
+            return {
+                "ok": True,
+                "schema_version": 1,
+                "world_id": obs["world_id"],
+                "catalog_fingerprint": self.catalog.fingerprint,
+                "phase": "build",
+                "bus_kind": "planned",
+                "site_allocation": block.name,
+                "core": core,
+                "plan": plan,
+                "audit": audit_advanced_circuit_core(core, self.catalog),
+                "rated": rated,
+                "bindings": bindings,
+                "plastic_source": plastic["source"],
+                "plastic_plan_revision": plastic["plan_revision"],
+                "parameters": [],
+                "taps": taps,
+                "tap_sources": {},
+                "tap_index": 0,
+                "route_metrics": [r.get("route_metrics") for r in routes],
+                "defense_preview": defense,
+                "prepared_tick": obs.get("tick"),
+            }
+        block_sites.keep(self.site, obs, OWNER, None)
+        out = {
+            "ok": False,
+            "reason": "no_advanced_circuit_site_with_complete_typed_inputs",
+            "evidence": {"failures": failures[-8:], "legal_sites": len(legal)},
+        }
+        if tap_failure is not None and failures and failures[-1].get("reason") == tap_failure.get("reason"):
+            out["plan_needs"] = block_sites.tap_needs(OWNER, tap_failure)
+        return out
+
+    def _planned_taps(self, obs):
+        """Publish and cut over the planned-bus taps, then pin each tap port; None once both stand."""
+        from . import planned_tap
+
+        s = self.state
+        taps = s.get("taps") or []
+        blocked = planned_tap.publish(self.path.parent, obs["world_id"], taps)
+        if blocked:
+            return blocked
+        before = [t.get("built") for t in taps]
+        clear = s["plan"].get("clear_obstacles", [])
+        cut = planned_tap.cutover(self.path.parent, self.builder, obs, taps, clear_obstacles=clear)
+        if [t.get("built") for t in taps] != before:
+            self._save()
+        if cut is not None:
+            return cut
+        if set(s["tap_sources"]) != set(TAP_NAMES):
+            live = {(e["name"], *xy(e)): e for e in obs["entities"]}
+            for tap in taps:
+                spot = live.get(("transport-belt", *xy(tap["port"])))
+                if spot is None or type(spot.get("unit_number")) is not int:
+                    return {"status": "blocked", "reason": "advanced_planned_tap_port_belt_missing", "tap": tap["name"]}
+                s["tap_sources"][tap["item"]] = dict(
+                    tap["port"], name="transport-belt", unit_number=spot["unit_number"], world_id=obs["world_id"]
+                )
+            self._save()
+        return None
+
+    def _planned_bus_proof(self, obs):
+        """The taps of a planned-world block still stand on the published bus (proof bus authority)."""
+        from . import block_sites
+
+        bus = block_sites.planned_bus(self.path.parent, obs)
+        if bus is None:
+            return "advanced_circuit_bus_authority_identity_changed"
+        stations = {st.get("name"): st for st in bus.get("stations", [])}
+        for tap in self.state.get("taps") or []:
+            station = stations.get(tap["name"])
+            if not tap.get("built") or station is None or not station.get("built"):
+                return "advanced_circuit_registered_tap_contract_changed"
+        return None
 
     def _bind(self, obs):
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
@@ -1099,7 +1360,64 @@ class AdvancedCircuitProduction:
             "evidence": result["evidence"],
         }
 
+    # ----- in-place growth into core.growth_slots ------------------------------------
+    def built_count(self) -> int:
+        return len((self.state.get("core") or {}).get("red_machines") or ())
+
+    def plan_growth(self, obs, parameters=None):
+        """Pure: the block regenerated with ``self.count`` red machines at its anchor (``block_sites.extended``)."""
+        from . import block_sites
+
+        s = self.state
+        if not s or not self._identity(obs, s) or not s.get("core", {}).get("anchor"):
+            return {"ok": False, "reason": "advanced_growth_requires_a_built_block"}
+        count = min(4, int((parameters or {}).get("machines") or self.count))
+        if count <= self.built_count():
+            return {"ok": False, "reason": "advanced_growth_nothing_to_add", "built": self.built_count()}
+        try:
+            anchor = s["core"]["anchor"]
+            core = advanced_circuit_core(self.catalog, anchor["x"], anchor["y"], count)
+            audit = audit_advanced_circuit_core(core, self.catalog)
+        except (KeyError, TypeError, ValueError) as exc:
+            return {"ok": False, "reason": "advanced_growth_core_invalid", "detail": str(exc)}
+        if not audit["ok"]:
+            return {"ok": False, "reason": "advanced_growth_core_audit_failed", "evidence": audit}
+        grown = block_sites.extended(s, core)
+        if not grown["ok"]:
+            return grown
+        check = preflight(self.game, self.builder, obs, grown["added"])
+        if not check.get("ok"):
+            return {"ok": False, "reason": "advanced_growth_slot_preflight_failed", "evidence": check}
+        grown["plan"]["clear_obstacles"] = list(grown["plan"].get("clear_obstacles") or []) + list(
+            check.get("clear_obstacles") or []
+        )
+        return dict(grown, core=core, audit=audit, rated=advanced_circuit_rates(self.catalog, count), count=count)
+
+    def _grow_in_place(self, obs):
+        """Commit a planned extension: republish the plan, then build it like a new block (phase build)."""
+        grown = self.plan_growth(obs)
+        if not grown.get("ok"):
+            return {"status": "blocked", **grown}
+        path = self.path.parent / "pcb-board.json"
+        board = json.loads(path.read_text(encoding="utf-8"))
+        if not self._identity(obs, board):
+            return {"status": "blocked", "reason": "advanced_circuit_board_identity_changed"}
+        if board["blocks"].get(OWNER) not in (None, self.state["plan"]):
+            return {"status": "blocked", "reason": "advanced_circuit_reserved_plan_changed"}
+        board["blocks"][OWNER] = grown["plan"]
+        self.state.update(
+            core=grown["core"], plan=grown["plan"], audit=grown["audit"], rated=grown["rated"], phase="build"
+        )
+        self.state.pop("commissioning_proof", None)
+        self._save()
+        _atomic_json(path, board)
+        return None
+
     def step(self, obs):
+        if self.state and self.state.get("phase") == "verified" and self.count > self.built_count():
+            grown = self._grow_in_place(obs)
+            if grown is not None:
+                return grown
         if not self.state:
             ready = self.prepare(obs)
             if not ready.get("ok"):
@@ -1110,6 +1428,10 @@ class AdvancedCircuitProduction:
                 }
             self.state = ready
             self._save()
+            if ready.get("site_allocation"):
+                from . import block_sites
+
+                block_sites.keep(self.site, obs, OWNER, ready["site_allocation"])
         s = self.state
         if not self._identity(obs, s):
             return {"status": "blocked", "reason": "advanced_circuit_world_or_catalog_changed"}
@@ -1139,6 +1461,10 @@ class AdvancedCircuitProduction:
             self._save()
         if s["phase"] == "taps":
             return self._tap_step(obs)
+        if s.get("bus_kind") == "planned" and s["phase"] != "verified":
+            result = self._planned_taps(obs)
+            if result:
+                return result
         result = self._bind(obs)
         if result:
             return result
@@ -1215,17 +1541,26 @@ class AdvancedCircuitProduction:
             or plastic.get("plan_revision") != s["plastic_plan_revision"]
         ):
             return fail("advanced_circuit_plastic_producer_proof_changed", evidence=plastic)
-        try:
-            docs = self.tap._documents()
-            bus = docs["factory"]["bus"]
-            if not all(self._identity(obs, d) for d in docs.values()) or docs["board"].get("shared_main_bus") != bus:
-                return fail("advanced_circuit_bus_authority_identity_changed")
-            for item, source in s["tap_sources"].items():
-                p = next((p for p in bus["ports"] if p.get("name") == TAP_NAMES[item]), None)
-                if not p or any(p.get(k) != source.get(k) for k in p):
-                    return fail("advanced_circuit_registered_tap_contract_changed", item=item)
-        except (OSError, KeyError, TypeError, ValueError):
-            return fail("advanced_circuit_bus_authority_unavailable")
+        if s.get("bus_kind") == "planned":
+            # Planned world: the taps stand on the published planned bus (planned_tap stations, built).
+            broken = self._planned_bus_proof(obs)
+            if broken:
+                return fail(broken)
+        else:
+            try:
+                docs = self.tap._documents()
+                bus = docs["factory"]["bus"]
+                if (
+                    not all(self._identity(obs, d) for d in docs.values())
+                    or docs["board"].get("shared_main_bus") != bus
+                ):
+                    return fail("advanced_circuit_bus_authority_identity_changed")
+                for item, source in s["tap_sources"].items():
+                    p = next((p for p in bus["ports"] if p.get("name") == TAP_NAMES[item]), None)
+                    if not p or any(p.get(k) != source.get(k) for k in p):
+                        return fail("advanced_circuit_registered_tap_contract_changed", item=item)
+            except (OSError, KeyError, TypeError, ValueError):
+                return fail("advanced_circuit_bus_authority_unavailable")
 
         def bound(e):
             return dict(e, unit_number=s["bindings"][_key(e)])

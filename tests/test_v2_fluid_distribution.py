@@ -89,6 +89,41 @@ class DistributionTests(unittest.TestCase):
         self.f.builder.ensure_plan.assert_not_called()
         self.handoff.assert_not_called()
 
+    def test_unbuilt_external_plans_keep_the_header_off_and_return_site_needs(self):
+        from factorio_agent import plan_needs
+
+        def route(game, builder, obs, source, destination, core, prior):
+            (sx, sy), (dx, dy) = source["position"].values(), destination["position"].values()
+            es = [entity("pipe", sx + i, sy) for i in range(1, int(dx - sx) + 1)]
+            step = 1 if dy > sy else -1
+            es += [entity("pipe", dx, sy + j) for j in range(step, int(dy - sy) + step, step)]
+            return dict(
+                ok=True,
+                entities=es,
+                first_neighbor=dict(es[0], fluidbox_index=1),
+                underground_pairs=[],
+                maximum_underground_span=10,
+                route_metrics={},
+            )
+
+        patch("factorio_agent.fluid_distribution.plan_typed_fluid_connection", side_effect=route).start()
+        board_path = self.f.root / "pcb-board.json"
+        blocking = []
+        for _ in range(10):  # each found header is then planned by "another block" (unbuilt), until none fits
+            result = self.c.prepare(self.obs)
+            if not result.get("ok"):
+                break
+            self.assertFalse({xy for xy in map(_key, result["core"]["entities"])} & set(map(_key, blocking)))
+            blocking += result["core"]["entities"]
+            board = json.loads(board_path.read_text(encoding="utf-8"))
+            board["blocks"]["future_feed"] = {"entities": blocking}  # planned elsewhere, nothing built yet
+            board_path.write_text(json.dumps(board), encoding="utf-8")
+        self.assertEqual(result["reason"], "no_isolated_same_fluid_manifold")
+        needs = plan_needs.from_result("fluid_distribution", result)
+        self.assertEqual(needs["kind"], "site")
+        self.assertEqual(needs["blockers"][0]["owner"], "future_feed")
+        self.assertIn("manifold_meets_unbuilt_external_plan", needs["rejected_by"])
+
     def test_claimed_source_blocks_before_any_material_action(self):
         registry = deepcopy(self.f.registry)
         registry["handoffs"] = {"old-basic": {"petroleum-gas": {"source": self.f.source}}}

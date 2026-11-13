@@ -653,6 +653,34 @@ class ChemicalControllerTests(unittest.TestCase):
         self.builder.ensure_plan.assert_not_called()
         self.assertFalse(self.c.path.exists())
 
+    def test_a_site_service_supplies_the_cell_anchor_and_step_settles_it(self):
+        from factorio_agent import block_sites, plan_needs
+        from factorio_agent.chemical_production import chemical_core
+        from factorio_agent.site.geometry import Rect
+
+        _, _, dx, dy = block_sites.footprint(lambda x, y: chemical_core(self.catalog, "plastic-bar", x, y))
+        kept = []
+
+        class Site:
+            def allocate_candidates(self, kind, w, h, *, name, count, returns_to_bus, world_id):
+                return [SimpleNamespace(name=name + "#0", rect=Rect(40, -60, 40 + w, -60 + h))]
+
+            def keep_only(self, prefix, keep, world_id=None):
+                kept.append((prefix, keep))
+
+        self.c.site = Site()
+        entry = self.c.prepare(self.obs, self.params)
+        self.assertTrue(entry["ok"], entry)
+        self.assertEqual(entry["core"]["anchor"], {"x": 40 + dx, "y": -60 + dy})
+        self.assertEqual(entry["site_allocation"], "chemical_production_plastic-bar#0")
+        self.c.step(self.obs, self.params)
+        self.assertIn(("chemical_production_plastic-bar#", "chemical_production_plastic-bar#0"), kept)
+        self.c.state = {}
+        self.c.site = SimpleNamespace(allocate_candidates=lambda *a, **k: [])
+        failed = self.c.prepare(self.obs, self.params)
+        self.assertEqual(failed["reason"], "chemical_no_site_allocation")
+        self.assertEqual(plan_needs.from_result("chemical_production", failed)["kind"], "site")
+
     def test_prepare_readonly_paid_core_complete_sources_and_natural_technology(self):
         with patch("factorio_agent.chemical_production._atomic_json") as write:
             entry = self.c.prepare(self.obs, self.params)

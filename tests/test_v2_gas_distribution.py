@@ -183,6 +183,22 @@ class GasDistributionTests(unittest.TestCase):
         self.builder.ensure_plan.assert_not_called()
         self.handoff.assert_not_called()
 
+    def test_an_unbuilt_external_plan_on_the_header_is_a_named_site_need(self):
+        from factorio_agent import plan_needs
+
+        first = self.c.prepare(self.obs)
+        self.assertTrue(first["ok"], first)
+        board = json.loads((self.root / "pcb-board.json").read_text(encoding="utf-8"))
+        # Another block planned (not built) every tile around the outlet: no candidate header fits.
+        sx, sy = self.source["position"]["x"], self.source["position"]["y"]
+        grid = [entity("stone-wall", sx + i, sy + j) for i in range(1, 30) for j in range(-40, 41)]
+        board["blocks"]["future_feed"] = {"entities": grid}
+        (self.root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+        failed = self.c.prepare(self.obs)
+        self.assertEqual(failed["reason"], "no_isolated_two_outlet_gas_manifold")
+        needs = plan_needs.from_result("gas_distribution", failed)
+        self.assertEqual((needs["kind"], needs["blockers"][0]["owner"]), ("site", "future_feed"))
+
     def test_original_chemical_plan_or_owner_blocks_manifold_before_any_cost(self):
         self.registry["handoffs"] = {"chemical:plastic-bar": {"petroleum-gas": {"source": self.source}}}
         self.c.sources_path.write_text(json.dumps(self.registry))

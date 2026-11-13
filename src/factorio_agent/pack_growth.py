@@ -71,7 +71,9 @@ from .science_growth import (
 
 # Pack -> saved block state of its (non-red) production block. Chemical science has a fixed
 # 2-4 machine core without reserved slots (``chemical_science.py``): no entry until it has one.
-PACK_STATES = {GREEN_PACK: "logistic-science.json"}
+# Blue packs: ChemicalScience.grow extends the fixed block into core.growth_slots in place.
+PACK_STATES = {GREEN_PACK: "logistic-science.json", "chemical-science-pack": "chemical-science.json"}
+PACK_CONTROLLERS = {GREEN_PACK: "green", "chemical-science-pack": "blue"}  # StarterExecutors attribute
 PLATES = ("iron-plate", "copper-plate")
 # Second units / rebuild sizes the beyond-frame comparison tries (machines of the new unit).
 BEYOND_STEP = 2
