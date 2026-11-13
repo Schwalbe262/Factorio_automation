@@ -284,6 +284,25 @@ class CapacityAutopilotTests(unittest.TestCase):
         nodes = self.propose(jobs, observation=iron_short())
         self.assertNotIn("starter_capacity", [n["capability"] for n in nodes])
 
+    def capacity(self, observation):
+        return [
+            n
+            for n in self.propose(done_through("power"), observation=observation)
+            if n["capability"] == "starter_capacity"
+        ]
+
+    def test_after_the_drill_unlock_plate_cells_stop_at_what_the_capability_accepts(self):
+        # pace1: 9 nodes for 3-6 plate cells were proposed around the unlock and blocked
+        # (bulk_starter_capacity_requires_electric_mining_after_unlock).
+        unlocked = dict(iron_short(), technologies={"electric-mining-drill": True})
+        self.assertEqual([n["parameters"] for n in self.capacity(unlocked)], [{"resource": "iron-ore", "cells": 2}])
+        unlocked["resource_supply_options"]["iron-plate"]["evidence"].update(productive_cells=2, installed_live_cells=2)
+        self.assertEqual(self.capacity(unlocked), [])
+
+    def test_no_plate_cell_while_the_drill_research_runs(self):
+        self.assertEqual(self.capacity(dict(iron_short(), research="electric-mining-drill")), [])
+        self.assertEqual(len(self.capacity(dict(iron_short(), research="automation"))), 1)
+
 
 class FakeCatalog:
     """Two recipes and one technology: gear = 2 iron, red pack = 1 copper + 1 gear."""

@@ -535,21 +535,32 @@ def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
         )
     except (ValueError, TypeError, KeyError, AttributeError):
         return []
+    from .mining import BULK_RESOURCES, CELLS_AFTER_UNLOCK, UNLOCK_TECHNOLOGY, closed_by_unlock
+
+    technologies = observation.get("technologies")
+    # The drill research running now: a new plate cell would finish around the unlock and be
+    # closed by it; the outposts already wait for that research (early_start), so none is proposed.
+    unlocking = observation.get("research") == UNLOCK_TECHNOLOGY
     queued_ids = {node.get("id") for node in queue_nodes}
     nodes = []
     for decision in decisions:
-        node_id = f"{NODE_PREFIX}capacity_{decision.resource}_{decision.target_cells}"
+        target = decision.target_cells
+        if closed_by_unlock(decision.resource, target, technologies):
+            target = CELLS_AFTER_UNLOCK  # the capability refuses more (StarterCapacity.step)
+        elif unlocking and decision.resource in BULK_RESOURCES:
+            continue
+        node_id = f"{NODE_PREFIX}capacity_{decision.resource}_{target}"
         if decision.resource in outposts or node_id in queued_ids:
             continue
-        if decision.target_cells <= decision.current_cells:
+        if target <= decision.current_cells:
             continue
-        if _capacity_taken(decision.resource, decision.target_cells, jobs, queue_nodes):
+        if _capacity_taken(decision.resource, target, jobs, queue_nodes):
             continue
         nodes.append(
             {
                 "id": node_id,
                 "capability": CAPACITY_CAPABILITY,
-                "parameters": {"resource": decision.resource, "cells": decision.target_cells},
+                "parameters": {"resource": decision.resource, "cells": target},
                 "priority": CAPACITY_PRIORITY,
                 "depends_on": [],
                 "reason": decision.reason,

@@ -963,6 +963,15 @@ return {ok=true,legal=legal}
             return changed
         if not self.state:
             prepared = self.prepare(obs)
+            if not prepared.get("ok") and (prepared.get("evidence") or {}).get("planning_budget_exhausted"):
+                # The search ran out of its wall-clock budget before trying every candidate: not a
+                # "no site" answer (fleet fixpace1 seed 2692229611 blocked here at 16.5 and 19.0 min
+                # on a loaded machine). Search again next pass; the stall rule still bounds it.
+                return {
+                    "status": "waiting",
+                    "reason": "district site search ran out of planning budget; searching again",
+                    "evidence": prepared["evidence"],
+                }
             if not prepared.get("ok"):
                 return {"status": "blocked", **prepared}
             self.state = prepared
@@ -1021,7 +1030,11 @@ return {ok=true,legal=legal}
             ):
                 return None
         evidence = []
-        for bank in self.state["banks"]:
+        planned = {(e["name"], *xy(e)) for e in self.state["plan"]["entities"]}
+        for saved in self.state["banks"]:
+            # The district plan is what is built: a later splice (bus feed splitter on the
+            # output belt) replaces a bank belt there, so the bank's own list is filtered by it.
+            bank = dict(saved, entities=[e for e in saved["entities"] if (e["name"], *xy(e)) in planned])
             furnaces = [actual[(e["name"], *xy(e))] for e in bank["entities"] if e["name"] in FURNACE_NAMES]
             if not furnaces or any(e.get("products_finished", 0) < 1 for e in furnaces):
                 return None

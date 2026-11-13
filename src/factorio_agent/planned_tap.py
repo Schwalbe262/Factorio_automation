@@ -355,8 +355,15 @@ def connect_inputs(
     def units_of(row):
         return [live.get(("transport-belt", *_tile(p)), {}).get("unit_number") for p in row["remove"]]
 
+    seen_items = Counter()
     for port in inputs:
-        item, name = port["item"], tap_name(owner, port["item"])
+        item = port["item"]
+        # Two input ports of one item (a belt row's plate and gear inputs) get two taps: each
+        # needs its own name, the bus state keys taps by name (fixpace1 seed 3794581402: the
+        # second tap replaced the first in the bus state, the bus rebuilt a trunk belt under
+        # its splitter and blocked "reserved block placement is obstructed").
+        seen_items[item] += 1
+        name = tap_name(owner, item) + ("" if seen_items[item] == 1 else f"#{seen_items[item]}")
         done = next((s for s in view.stations if s.get("name") == name and s.get("built")), None)
         rejected = {}
         if done is not None:  # this consumer's tap is already built (restart after a lost state)
@@ -547,10 +554,14 @@ def cutover(root, builder, obs, taps, *, clear_obstacles=()) -> dict | None:
             result = builder.bootstrap.ensure_item(obs, name, count)
             if result.get("type") or result.get("status") != "succeeded":
                 return result
+    # A tap may put its own belt on a removed trunk tile (the branch crossing the next
+    # lane between two undergrounds): once placed it is tap hardware, not a changed trunk
+    # belt (pace1 seed 2692229611: automation_science blocked planned_bus_tap_trunk_identity_changed).
+    own = {(*xy(e), e.get("direction")) for tap in pending for e in tap["entities"] if e["name"] == "transport-belt"}
     for tap in pending:
         for position, unit in zip(tap["remove"], tap["remove_units"]):
             old = live.get(("transport-belt", *_tile(position)))
-            if old is None:
+            if old is None or (old.get("unit_number") != unit and (*_tile(position), old.get("direction")) in own):
                 continue
             if old.get("unit_number") != unit:
                 return {"status": "blocked", "reason": "planned_bus_tap_trunk_identity_changed", "tap": tap["name"]}

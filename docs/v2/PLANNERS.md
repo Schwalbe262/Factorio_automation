@@ -132,6 +132,25 @@ descending; a decision whose cell cost uses an item already being expanded is
 dropped; a resource is skipped once its `mining_outpost` succeeded. Pinned by
 `tests/test_v2_capacity_planning.py`, `tests/test_v2_progression.py`.
 
+Around the electric-mining-drill unlock (`mining.closed_by_unlock`, `CELLS_AFTER_UNLOCK = 2`):
+
+```
+drill researched  -> iron/copper targets are capped at 2 cells (no node when 2 stand); plate growth is
+                     mining_outpost + smelting_capacity (throughput_growth)
+drill researching -> no new iron/copper cell node (it would finish at the unlock and be closed)
+open job, target > 2 after the unlock -> succeeds as closed: reason starter_capacity_closed_by_electric_mining_unlock,
+                     proof {closed_by_technology, target_cells, productive_cells}; paid cells and the pending site stay
+coal/stone        -> unchanged; a chest receiver the collector emptied proves by its drill's native status
+                     (working / waiting_for_space_in_destination)
+```
+
+Fleet pace1 (8 seeds): 9 plate nodes were proposed at or after the unlock and blocked
+(`bulk_starter_capacity_requires_electric_mining_after_unlock`), several with 0 actions holding a
+job slot for 3-12 minutes (1193005910: copper 5 at 18.9-22.3 kept the early district out of its slot
+until 22.7, two minutes after the outposts); two coal-2 jobs ran 30 minutes into `job_deadline_exceeded`
+because their chest was collected empty before every proof. Pinned by
+`tests/test_v2_starter_stage_policy.py`, `tests/test_v2_progression.py`.
+
 ## Produce (`progression.produce_nodes`)
 
 ```
@@ -413,6 +432,11 @@ step (unit, gain, cost), times (wait, expand, saving) and the reason.
 critical-path rule. Furnace growth adds coal burn (1.35/min per stone furnace)
 that this rule does not size. Pinned by `tests/test_v2_throughput_growth.py`.
 
+After the bus splice a bank's output belt under the bus feed splitter exists only in the district
+plan; `SmeltingDistrict.proof` reads each bank through the plan (pace1: every `smelting_capacity`
+job raised `KeyError(('transport-belt', x, y))` once the bus was spliced). Pinned on the real
+geometry of seed 3794581402 by `tests/test_v2_smelting_growth_after_splice.py`.
+
 ## Threat-sized defense (`defense_policy.py`, `defense_perimeter.py`, capabilities `defense_perimeter`, `defense_growth`)
 
 Posts follow the live threat, never a fixed list (doc: `DEFENSE_POLICY.md`):
@@ -603,6 +627,16 @@ outposts: one lane per resource (PER_RESOURCE_CAPABILITIES); while electric-mini
 Chain from power on: outposts (3 lanes, park on the drills) -> district (inputs = the banks'
 published ports; parks on splitters/undergrounds) -> bus (inputs = district anchor belts built,
 which the early district lays; its splice still waits for `smelting_district` to succeed).
+A consumer may cut a tap into a built trunk while the bus still builds: the bus builds and splices
+`planned_bus.build_plan` (its plan with every built tap applied), never its old trunk belt under
+the tap splitter; a tap's own belt on a removed trunk tile is tap hardware in `planned_tap.cutover`
+(pace1: two buses blocked "reserved block placement is obstructed", one red science row blocked
+`planned_bus_tap_trunk_identity_changed`). Two input ports of one item get two tap names
+(`<owner>:<item>`, `<owner>:<item>#2`): the bus state keys taps by name.
+District site search: a search that ran out of `PlanningBudget` (`planning_budget_exhausted`)
+waits and searches again instead of blocking; the supervisor also auto-retries a `no_clear_*`
+block after `AUTO_RETRY_STALL_SECONDS`, and a retry refused for a job slot is not counted
+against `AUTO_RETRY_LIMIT` (fixpace1 seed 2692229611: two slot refusals used up the district's retries).
 Science cell prebuild (`BootstrapLogistics.prebuild`, called from `starter_research`
 while it only waits): the research slot is held by `starter_research`, so the cell is
 not a separate early job; the automation job builds it with the same `Deferral`.

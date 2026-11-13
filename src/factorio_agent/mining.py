@@ -13,6 +13,27 @@ from factorio_agent.core.deterministic_state import _atomic_json
 from .construction_supply import FUELS, FUEL_SKIP_STOCK
 
 
+UNLOCK_TECHNOLOGY = "electric-mining-drill"
+BULK_RESOURCES = frozenset({"iron-ore", "copper-ore"})
+CELLS_AFTER_UNLOCK = 2  # a plate resource keeps (or recovers) at most this many burner cells after the unlock
+WORKING_DRILL = frozenset({"working", "waiting_for_space_in_destination"})
+
+
+def _researched(technologies, name: str) -> bool:
+    if isinstance(technologies, dict):
+        return technologies.get(name) is True
+    return name in (technologies or ())
+
+
+def closed_by_unlock(resource: str, cells: int, technologies) -> bool:
+    """A plate cell target above ``CELLS_AFTER_UNLOCK`` once electric mining is researched.
+
+    Plate supply then grows by outposts and the district (``throughput_growth``);
+    the planner does not propose such a target and an open job closes on it.
+    """
+    return resource in BULK_RESOURCES and cells > CELLS_AFTER_UNLOCK and _researched(technologies, UNLOCK_TECHNOLOGY)
+
+
 def validate_parameters(parameters: dict) -> None:
     if not isinstance(parameters, dict) or set(parameters) != {"resource", "cells"}:
         raise ValueError("starter_capacity requires resource and cells")
@@ -116,8 +137,24 @@ return best or {ok=false,reason="no_clear_starter_capacity_site"}
                 if receiver["name"] == "stone-furnace"
                 else sum(receiver.get("inventory", {}).values())
             )
+            if produced <= 0 and receiver["name"] != "stone-furnace":
+                # A chest the collector just emptied holds nothing; its drill mining into it
+                # (native status) is the same production evidence (seeds 2212603376, 1590659659:
+                # a two-cell coal job collected every pass and ran 30 minutes into its deadline).
+                drill = self.matching(obs, cell["drill"])
+                produced = int(bool(drill and drill.get("status_name") in WORKING_DRILL))
             if produced > 0:
                 productive.append({"drill": cell["drill"], "receiver": cell["receiver"], "observed_output": produced})
+        if len(productive) < count and closed_by_unlock(resource, count, obs.get("technologies")):
+            # Closed, not reached: electric mining replaces bulk plate cells (closed_by_unlock).
+            return {
+                "tick": obs["tick"],
+                "resource": resource,
+                "target_cells": count,
+                "productive_cells": len(productive),
+                "closed_by_technology": UNLOCK_TECHNOLOGY,
+                "next": "mining_outpost and smelting_capacity (throughput_growth) grow this plate",
+            }
         if len(productive) < count:
             return None
         return {
@@ -139,21 +176,13 @@ return best or {ok=false,reason="no_clear_starter_capacity_site"}
             proof = self.proof(obs, parameters)
             if proof:
                 return {"status": "succeeded", "reason": "starter capacity has live machine output", "evidence": proof}
-        if (
-            resource in ("iron-ore", "copper-ore")
-            and wanted > 2
-            and obs.get("technologies", {}).get("electric-mining-drill") is True
-        ):
+        if closed_by_unlock(resource, wanted, obs.get("technologies")):
+            # No new burner investment; paid cells and the pending site stay. The job closes
+            # (proof: closed_by_technology) instead of blocking and holding its lane.
             return {
-                "status": "blocked",
-                "reason": "bulk_starter_capacity_requires_electric_mining_after_unlock",
-                "evidence": {
-                    "resource": resource,
-                    "required": wanted,
-                    "available": 2,
-                    "required_technology": "electric-mining-drill",
-                    "reason": "expand mining_outpost and smelting_district; preserve paid starter cells",
-                },
+                "status": "succeeded",
+                "reason": "starter_capacity_closed_by_electric_mining_unlock",
+                "evidence": {"resource": resource, "target_cells": wanted, "closed_by_technology": UNLOCK_TECHNOLOGY},
             }
         fuel = self.bootstrap.maintain_fuel(obs)
         if fuel:

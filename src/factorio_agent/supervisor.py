@@ -1572,8 +1572,12 @@ class Supervisor:
             # A stalled job waited on something (fuel, plates) that upkeep may
             # since have fixed; with every job blocked no success can ever
             # arrive, so a stall is also retried after a quiet interval.
+            # A site search that found nothing ("no_clear_...") is retried the same way:
+            # cleared corridors, finished neighbours or a planning budget that ran out change
+            # the answer without a job success (pace1 seed 2692229611: the district blocked at
+            # 19.8 min, found its site on the first retry at 25.0, after the next success).
             stalled_long_enough = (
-                reason == "objective_progress_stalled"
+                (reason == "objective_progress_stalled" or reason.startswith("no_clear_"))
                 # The stall path does not stamp blocked_at_time on the job, so
                 # fall back to when this supervisor first saw it blocked.
                 and self.clock() - float(job.get("blocked_at_time") or seen.get("first_seen", self.clock()))
@@ -1581,10 +1585,14 @@ class Supervisor:
             )
             if succeeded <= seen["successes"] and not stalled_long_enough:
                 continue
-            seen.update(successes=succeeded, count=seen["count"] + 1, first_seen=self.clock())
             if self._control_command("retry", key):
+                seen.update(successes=succeeded, count=seen["count"] + 1, first_seen=self.clock())
                 self._event("auto_retry", key=key, capability=job.get("capability"), blocked_reason=reason[:200])
                 retried = True
+            else:
+                # A retry deferred for a job slot is not an attempt (fixpace1 seed 2692229611: two
+                # slot refusals used up the district's retries; it never ran again).
+                seen.update(successes=succeeded, first_seen=self.clock())
         return retried
 
     def _idle(self, seconds):

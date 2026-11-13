@@ -233,7 +233,7 @@ class ConsumerTests(unittest.TestCase):
         ]
         return {"ok": True, "entities": ends, "underground_pairs": [], "route_metrics": {}, "clear_obstacles": []}
 
-    def connect(self, h, side="left", owner="automation_science"):
+    def connect(self, h, side="left", owner="automation_science", ports=(("iron-plate", 20), ("copper-plate", 30))):
         view = pt.BusView(h.board()["shared_main_bus"])
         inputs = [
             {
@@ -243,7 +243,7 @@ class ConsumerTests(unittest.TestCase):
                 "facing": 0,
                 "direction": "input",
             }
-            for item, along in (("iron-plate", 20), ("copper-plate", 30))
+            for item, along in ports
         ]
         return pt.connect_inputs(
             None,
@@ -258,6 +258,19 @@ class ConsumerTests(unittest.TestCase):
             span=SPAN,
             route=self.route,
         )
+
+    def test_two_ports_of_one_item_get_two_named_taps_in_the_bus_state(self):
+        # fixpace1 seed 3794581402: the belt row's two iron taps shared one name, the bus
+        # state kept one of them and rebuilt the trunk belt under the other splitter.
+        with TemporaryDirectory() as root:
+            h = Harness(root)
+            result = self.connect(h, ports=(("iron-plate", 14), ("iron-plate", 30)))
+            self.assertTrue(result["ok"], result)
+            names = [t["name"] for t in result["taps"]]
+            self.assertEqual(names, ["automation_science:iron-plate", "automation_science:iron-plate#2"])
+            self.assertIsNone(pt.publish(h.root, "w", result["taps"]))
+            state = json.loads((h.root / pb.STATE_FILE).read_text(encoding="utf-8"))
+            self.assertEqual(sorted(t["name"] for t in state["taps"]), sorted(names))
 
     def test_connect_publish_cut_over_and_mark_built(self):
         with TemporaryDirectory() as root:
@@ -334,6 +347,56 @@ class ConsumerTests(unittest.TestCase):
             self.assertIsNone(pt.cutover(h.root, h.builder, h.obs(live), taps))
             first.update(splitter_output_priority="none")
             self.assertEqual(pt.cutover(h.root, h.builder, h.obs(live), taps)["type"], "configure_splitter")
+
+    def test_the_taps_own_belt_on_a_removed_trunk_tile_is_not_a_changed_trunk(self):
+        # pace1 seed 2692229611: the copper tap's branch belt crosses the iron lane on a
+        # removed tile; once placed, the next pass blocked planned_bus_tap_trunk_identity_changed.
+        with TemporaryDirectory() as root:
+            h = Harness(root)
+            taps = self.connect(h)["taps"]
+            tap = taps[-1]
+            tile = tap["remove"][0]
+            trunk = next(e for e in h.entities if xy(e) == xy({"position": tile}))
+            crossing = {"name": "transport-belt", "position": dict(tile), "direction": (trunk["direction"] + 4) % 16}
+            tap["entities"] = [e for e in tap["entities"] if xy(e) != xy(crossing)] + [crossing]
+            pt.publish(h.root, "w", taps)
+            removed = {xy({"position": p}) for t in taps for p in t["remove"]}
+            placed = dict(crossing, unit_number=99999)
+            live = [e for e in h.entities if xy(e) not in removed] + [placed]
+            stock = {"splitter": 2, "transport-belt": 20, "underground-belt": 20}
+            result = pt.cutover(h.root, h.builder, h.obs(live, stock), taps)
+            self.assertNotEqual((result or {}).get("reason"), "planned_bus_tap_trunk_identity_changed", result)
+            h.builder.ensure_plan.assert_called()
+            # A foreign belt on that tile (other direction than the tap's) is still a changed trunk.
+            other = dict(placed, direction=trunk["direction"])
+            for t in taps:
+                t["built"] = False
+            result = pt.cutover(h.root, h.builder, h.obs(live[:-1] + [other], stock), taps)
+            self.assertEqual(result["reason"], "planned_bus_tap_trunk_identity_changed")
+
+    def test_the_bus_builds_around_a_built_consumer_tap(self):
+        # pace1 seeds 1634401926, 1193005910: a produce row tapped the iron trunk while the
+        # bus was still in its build phase; the bus wanted its trunk belt back under the splitter.
+        with TemporaryDirectory() as root:
+            h = Harness(root)
+            taps = self.connect(h)["taps"]
+            state = dict(h.state, taps=[dict(t, built=False) for t in taps])
+            staged = state["plan"]
+            self.assertIs(pb.build_plan(state, staged), staged)  # not cut over yet: the belt stays
+            state["taps"][0]["built"] = True
+            plan = pb.build_plan(state, staged)
+            names = {xy(e): e["name"] for e in plan["entities"]}
+            self.assertEqual(names[xy(taps[0]["splitter"])], "splitter")
+            removed = {xy({"position": p}) for p in taps[0]["remove"]}
+            self.assertFalse(
+                any(
+                    e["name"] == "transport-belt" and xy(e) in removed and e not in taps[0]["entities"]
+                    for e in plan["entities"]
+                )
+            )
+            self.assertEqual(plan["ports"], staged["ports"])
+            for p in taps[1]["remove"]:
+                self.assertIn(xy({"position": p}), {xy(e) for e in plan["entities"] if e["name"] == "transport-belt"})
 
     def test_a_restarted_consumer_reuses_its_built_taps(self):
         with TemporaryDirectory() as root:
