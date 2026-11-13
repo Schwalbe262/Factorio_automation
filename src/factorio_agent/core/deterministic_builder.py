@@ -368,7 +368,19 @@ class FactoryBuilder:
                     continue
                 if isinstance(result, dict) and not result.get("type") and result.get("status") == "waiting":
                     # Waiting for this item must not hold back entities whose
-                    # items are already carried: place one of those instead.
+                    # items are already carried: place those instead, all in one
+                    # round trip on the assisted backend (eval-4177156614: runs of
+                    # single "build a carried plan entity" belts, one pass each).
+                    if self.game.backend == "assisted":
+                        batch = self._carried_batch(
+                            observation, entities[index + 1 :], skipped=frozenset(deferred) | {item}
+                        )
+                        if len(batch) > 1:
+                            return {
+                                "type": "build_many",
+                                "actions": batch,
+                                "reason": "build carried plan entities while an earlier one waits for its item",
+                            }
                     ahead = self._build_ahead(observation, plan, entities[index + 1 :], find)
                     if ahead is not None:
                         return ahead
@@ -417,9 +429,10 @@ return {ok=true,only_actor=own_actor and not other and terrain}
             # New character builds use the navigator's live build reach. A
             # fixed approach radius can send an actor back into the footprint
             # after belts carry it away from the chosen standing position.
-            if self.game.backend == "assisted" and entity["name"] in BUILD_BATCH_NAMES and not deferred:
-                batch = self._affordable_builds(observation, entities[index:])
-                if len(batch) > 1:
+            if self.game.backend == "assisted" and entity["name"] in BUILD_BATCH_NAMES:
+                # Every carried entity of the plan in one round trip; deferred items are passed over.
+                batch = self._carried_batch(observation, entities[index:], skipped=frozenset(deferred))
+                if len(batch) > 1 and batch[0]["position"] == entity["position"] and batch[0]["name"] == entity["name"]:
                     return {"type": "build_many", "actions": batch}
             return {
                 "type": "build",
@@ -581,10 +594,41 @@ return {ok=true,world_id=d and d.world_id,emitter=emitter,ground=ground}
             }
         return None
 
-    def _affordable_builds(self, observation: dict, entities: list[dict]) -> list[dict]:
-        """Take a bounded infrastructure prefix without skipping required work."""
+    def _carried_batch(
+        self, observation: dict, entities: list[dict], *, skipped: frozenset = frozenset()
+    ) -> list[dict]:
+        """``_affordable_builds`` minus the entities a native placement check rejects (one query)."""
+        rows = self._affordable_builds(observation, entities, skipped=skipped)
+        if len(rows) < 2:
+            return rows
+        check = self.can_place([{k: r[k] for k in ("name", "position", "direction")} for r in rows])
+        if not check.get("ok"):
+            blocked = {
+                (b.get("name"), (b.get("position") or {}).get("x"), (b.get("position") or {}).get("y"))
+                for b in check.get("blocked") or ()
+            }
+            if not blocked:
+                return rows[:1]
+            rows = [r for r in rows if (r["name"], r["position"]["x"], r["position"]["y"]) not in blocked]
+        return rows
+
+    def _affordable_builds(
+        self, observation: dict, entities: list[dict], *, skipped: frozenset = frozenset()
+    ) -> list[dict]:
+        """Every carried plan entity that may share one ``build_many`` round trip, in plan order.
+
+        An entity that cannot join (item not carried, item in ``skipped``, a recipe, an
+        underground role, a type outside BUILD_BATCH_NAMES) is passed over, not a stop:
+        the carried entities after it still join (eval-4177156614: 122 of 438 district
+        placements were single builds, one pass each, because the old prefix stopped at
+        the first missing item). Once anything was passed over (or ``skipped`` is not
+        empty), BUILD_AHEAD_KEEP_ORDER types (drills, inserters) are passed over too, the
+        build-ahead rule. An existing entity that differs from the plan stops the batch
+        (``ensure_plan`` reports it). At most BUILD_BATCH_LIMIT rows.
+        """
         stock = Counter(observation.get("inventory", {}))
         rows, seen = [], {}
+        passed = bool(skipped)
         for entity in entities:
             existing = _find(observation, entity)
             if existing is not None:
@@ -599,8 +643,6 @@ return {ok=true,world_id=d and d.world_id,emitter=emitter,ground=ground}
                 ):
                     break
                 continue
-            if entity["name"] not in BUILD_BATCH_NAMES or entity.get("recipe"):
-                break
             p = entity["position"]
             key = entity["name"], p["x"], p["y"]
             if key in seen:
@@ -608,8 +650,17 @@ return {ok=true,world_id=d and d.world_id,emitter=emitter,ground=ground}
                     break
                 continue
             item = entity.get("item") or self._placement_item(entity["name"])
-            if stock[item] < 1:
-                break
+            entity_type = self.catalog.entities.get(entity["name"], {}).get("type", entity["name"])
+            if (
+                entity["name"] not in BUILD_BATCH_NAMES
+                or entity.get("recipe")
+                or entity.get("belt_to_ground_type")
+                or item in skipped
+                or stock[item] < 1
+                or (passed and entity_type in BUILD_AHEAD_KEEP_ORDER)
+            ):
+                passed = True
+                continue
             stock[item] -= 1
             seen[key] = entity.get("direction", 0)
             rows.append(

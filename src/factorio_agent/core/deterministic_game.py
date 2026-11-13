@@ -41,8 +41,24 @@ from .deterministic_coal_replacement_guard import (
 
 
 BUILD_BATCH_LIMIT = 32
+# Each child of a build_many is the ordinary paid ``build`` body (item removed before
+# create_entity), so any entity without a placement role or recipe may share one round
+# trip: furnaces and splitters were single builds (one pass each) in every block. Chests stay
+# single: some audits find a chest's paid birth as a single ``build`` intent in job-events.
 BUILD_BATCH_NAMES = frozenset(
-    {"transport-belt", "small-electric-pole", "pipe", "inserter", "long-handed-inserter", "fast-inserter"}
+    {
+        "transport-belt",
+        "small-electric-pole",
+        "medium-electric-pole",
+        "pipe",
+        "inserter",
+        "burner-inserter",
+        "long-handed-inserter",
+        "fast-inserter",
+        "splitter",
+        "stone-furnace",
+        "steel-furnace",
+    }
 )
 
 
@@ -833,7 +849,7 @@ return success{status="running"}
                 or row["name"] not in BUILD_BATCH_NAMES
             ):
                 raise ValueError(
-                    "build_many accepts only ordinary belt, pole, plain pipe, and basic/long-handed/fast inserter builds"
+                    "build_many accepts only ordinary BUILD_BATCH_NAMES builds (no underground role, no recipe)"
                 )
             position = row.get("position")
             if (
