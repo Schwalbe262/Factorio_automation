@@ -252185,3 +252185,12 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - failure: round auto-1113-1848 invalid (ImportError CHUNK_CHARTED_LUA: main checkout merged during the round); a stopped loop shell kept running and started a second fleet; GUI supervisor was untracked by lifecycle (stale pid) and had to be killed before new-map.
 - result: v2 at 3e8669f, gate PASS 2751; GUI map eval-4177156614 and round all-1113-2047 started on it.
 - next: read all-1113-2047; fix production_row_input_source_missing and bus reach.
+
+## 2026-11-13 22:30 Part 48 - plate growth packages, measured split, science chain (worktree agent-a8e90b4d)
+- goal: eval-4177156614 ~67 min iron short (wait 628 s judged as fast as one furnace, 675 s); research slow with a lab idle for packs.
+- hypothesis: single-step comparison capped by the next bottleneck + T1 assuming no production during the build; science guard reads "idle for packs" as "not busy".
+- actions: throughput_growth.decide evaluates (pairs, furnace slots) packages (reserved pairs, connected module, slots), demand-capped, bill served after taps, production during prep, critical claims delay own plates, payback-bounded wait; stages chained by depends_on; receipt splits measured into connected/off-bus; science_growth follows plates -> packs -> labs.
+- metrics: same live numbers: T0 636 s; +1 slot 608 s; +1 pair +1 slot/row (150/min) 533 s chosen, saves 103 s. tests throughput 42, science 29.
+- result: offline only; nothing proven live.
+- failure reason / open: live science block reserved only 2 machine slots (machine_limit 2): no slot to grow; lookahead ignores steps without builds; taps of grown science not demand.
+- next action: fleet round; check auto_throughput_* chains (mining then smelting) and science_growth chain field.

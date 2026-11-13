@@ -1,4 +1,4 @@
-"""Plate throughput growth: bottleneck stage, one paid step at a time, slack vs critical nodes."""
+"""Plate throughput growth: bottleneck stage, expansion packages, slack vs critical nodes."""
 
 from dataclasses import replace
 import json
@@ -32,6 +32,19 @@ IRON = tg.PlateFacts(
     furnace_step_cost={"iron-plate": 25.0, "copper-plate": 7.0, "stone": 10.0, "wood": 1.0},
     furnace_step_entities=14,
     stocks={"copper-plate": (50.0, 37.5), "iron-plate": (0.0, 72.0), "stone": (50.0, 15.0)},
+)
+# eval-4177156614 at ~67 game min (observe receipt throughput_growth, iron-plate): taps 24/min, bill
+# 937.7 plates, 6/24 furnaces (112.5/min) under 2/3 drill pairs (120/min). The single-step rule valued one
+# furnace slot (+7.5/min, the ore binds next) and answered "waiting is as fast: wait 628s, expand 675s".
+LIVE = replace(
+    IRON,
+    tap_rate=24.0,
+    bill=937.7,
+    furnace_nominal=112.5,
+    per_side=3,
+    ore_nominal=120.0,
+    pairs_built=2,
+    measured=148.9,
 )
 # Copper: 2 furnaces (37.5/min) under 2 drills (60/min).
 COPPER = replace(
@@ -82,14 +95,13 @@ class BottleneckTests(unittest.TestCase):
 
 
 class DecisionTests(unittest.TestCase):
-    def test_ore_limited_iron_adds_one_drill_pair(self):
+    def test_ore_limited_iron_grows_drills_first_then_the_furnaces_to_match(self):
         row = tg.decide(IRON)
         self.assertTrue(row["grow"], row["reason"])
         self.assertEqual(row["capability"], "mining_outpost")
-        self.assertEqual(row["parameters"], {"resource": "iron-ore", "rate_per_minute": 120.0})
-        # Valued with the furnace slot the pair enables (75 -> 112.5), never stacked with it.
-        self.assertEqual(row["step"]["gain_per_minute"], 52.5)
-        self.assertEqual(len(row["step"]["valued_with"]), 1)
+        self.assertEqual([s["capability"] for s in row["stages"]], ["mining_outpost", "smelting_capacity"])
+        ore, furnaces = (s["parameters"]["rate_per_minute"] for s in row["stages"])
+        self.assertLessEqual(furnaces, ore)  # smelting_capacity never runs above the connected ore
         self.assertGreater(row["times"]["saving_seconds"], tg.MIN_SAVING_SECONDS)
 
     def test_furnace_limited_copper_adds_one_slot_per_row_within_the_ore(self):
@@ -113,11 +125,16 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(row["demand"]["per_minute"], 150.0)
         self.assertTrue(row["grow"], row["reason"])
 
-    def test_time_comparison_rejects_a_step_that_does_not_pay(self):
-        # Demand just above capacity: the step's cost and build time eat the saving.
-        row = tg.decide(replace(COPPER, bill=420.0, furnace_step_entities=60))
+    def test_time_comparison_rejects_a_package_that_does_not_pay(self):
+        # Demand just above capacity: the build time of every package eats the saving.
+        row = tg.decide(replace(COPPER, bill=420.0, furnace_step_entities=300, ore_step_entities=300))
         self.assertFalse(row["grow"])
         self.assertIn("waiting is as fast", row["reason"])
+        # The wait is visible: the best package and its times are in the receipt.
+        self.assertIn("best package", row["reason"])
+        self.assertTrue(row["package"]["summary"])
+        self.assertTrue(row["alternatives"])
+        self.assertLess(row["times"]["saving_seconds"], 0)
 
     def test_unfundable_input_waits(self):
         row = tg.decide(replace(IRON, stocks={}))
@@ -147,6 +164,152 @@ class DecisionTests(unittest.TestCase):
         json.dumps(row)
 
 
+class PackageTests(unittest.TestCase):
+    def test_live_shortage_grows_a_drill_pair_with_furnaces_instead_of_waiting(self):
+        row = tg.decide(LIVE)
+        self.assertTrue(row["grow"], row["reason"])
+        self.assertEqual(row["bottleneck"], "furnaces")
+        stages = row["stages"]
+        self.assertEqual([s["capability"] for s in stages], ["mining_outpost", "smelting_capacity"])
+        self.assertEqual(stages[0]["parameters"], {"resource": "iron-ore", "rate_per_minute": 180.0})
+        self.assertEqual(stages[1]["parameters"], {"resource": "iron-ore", "rate_per_minute": 150.0})
+        self.assertEqual((row["package"]["pairs"], row["package"]["furnace_slots"]), (1, 1))
+        self.assertGreater(row["times"]["saving_seconds"], tg.MIN_SAVING_SECONDS)
+        # The single furnace slot (gain 7.5/min) is still evaluated, and loses.
+        single = [a for a in row["alternatives"] if (a["pairs"], a["furnace_slots"]) == (0, 1)]
+        self.assertEqual(len(single), 1)
+        self.assertLess(single[0]["saving_seconds"], row["times"]["saving_seconds"])
+
+    def test_package_capacity_stops_at_the_smallest_that_covers_the_demand(self):
+        row = tg.decide(LIVE)
+        cap = row["package"]["demand_cap_per_minute"]
+        covering = [a["capacity_after"] for a in row["alternatives"] if a["capacity_after"] >= cap]
+        self.assertEqual(covering, [150.0])  # no 180/min or 225/min package for a 117.8/min demand
+
+    def test_small_shortfall_picks_one_furnace_slot(self):
+        row = tg.decide(replace(COPPER, bill=420.0))
+        self.assertTrue(row["grow"], row["reason"])
+        self.assertEqual((row["package"]["pairs"], row["package"]["furnace_slots"]), (0, 1))
+        self.assertEqual([s["capability"] for s in row["stages"]], ["smelting_capacity"])
+
+    def test_demand_already_covered_grows_nothing(self):
+        row = tg.decide(replace(LIVE, bill=200.0))  # 44/min < 112.5 / 1.1
+        self.assertFalse(row["grow"])
+        self.assertIn("covered", row["reason"])
+        self.assertNotIn("package", row)
+
+    def test_reserved_pairs_full_proposes_the_next_module(self):
+        facts = replace(
+            LIVE, pairs_built=3, ore_nominal=180.0, furnace_nominal=187.5, per_side=5, bill=3000.0, patch_rows=6
+        )
+        row = tg.decide(facts)
+        self.assertTrue(row["grow"], row["reason"])
+        first = row["stages"][0]
+        self.assertEqual(first["capability"], "mining_outpost")
+        self.assertIn("connected module", first["unit"])
+        self.assertIn("patch_grid 6 rows", first["unit"])
+        self.assertGreater(first["parameters"]["rate_per_minute"], 180.0)
+
+    def test_reserved_pairs_fill_before_the_module(self):
+        row = tg.decide(replace(IRON, bill=6000.0))
+        self.assertTrue(row["grow"], row["reason"])
+        units = [s["unit"] for s in row["stages"] if s["capability"] == "mining_outpost"]
+        self.assertTrue(units[0].startswith("drill pair"), units)
+        for unit in units[1:]:
+            self.assertIn("connected module", unit)
+
+    def test_critical_bill_starvation_makes_the_package_lose(self):
+        # Critical jobs claim 900 plates: a slack growth job gets its own plates after them.
+        stocks = {**LIVE.stocks, "iron-plate": (0.0, 112.5)}
+        self.assertTrue(tg.decide(replace(LIVE, stocks=stocks))["grow"])
+        row = tg.decide(replace(LIVE, claimed=900.0, stocks=stocks))
+        self.assertFalse(row["grow"], row["reason"])
+        self.assertIn("waiting is as fast", row["reason"])
+        self.assertEqual(row["demand"]["claimed_by_critical_jobs"], 900.0)
+
+    def test_wait_longer_than_the_package_payback_is_not_accepted_on_a_thin_margin(self):
+        # Drill packages are very expensive: one furnace slot remains, saving < MIN_SAVING_SECONDS,
+        # yet the 636 s wait outlasts the slot's payback, so it grows.
+        row = tg.decide(replace(LIVE, ore_step_entities=400, module_step_entities=400))
+        self.assertTrue(row["grow"], row["reason"])
+        self.assertEqual((row["package"]["pairs"], row["package"]["furnace_slots"]), (0, 1))
+        self.assertLess(row["times"]["saving_seconds"], tg.MIN_SAVING_SECONDS)
+        self.assertGreater(row["times"]["wait_seconds"], row["times"]["payback_seconds"])
+        self.assertIn("payback", row["reason"])
+
+    def test_taps_above_every_package_take_the_largest(self):
+        row = tg.decide(replace(IRON, bill=0.0, tap_rate=2000.0))
+        self.assertTrue(row["grow"], row["reason"])
+        self.assertIsNone(row["times"]["wait_seconds"])  # never served by waiting
+        self.assertLessEqual(row["package"]["capacity_after"], tg.SMELTING_RATE_MAX)
+
+    def test_every_package_is_efficient(self):
+        for package in tg.packages(LIVE, 112.5, "furnaces"):
+            k, f = package["pairs"], package["furnace_slots"]
+            if k:
+                self.assertLess(tg._after(LIVE, k - 1, f)[2], package["capacity_after"])
+            if f:
+                self.assertLess(tg._after(LIVE, k, f - 1)[2], package["capacity_after"])
+
+
+class MeasuredSplitTests(unittest.TestCase):
+    def test_force_wide_counter_splits_into_connected_and_off_bus(self):
+        # eval-4177156614: 148.9/min measured while six district furnaces make 112.5/min.
+        connected, off_bus = tg._measured_split(148.9, ["working"] * 6, 18.75, 112.5)
+        self.assertAlmostEqual(connected, 112.5)
+        self.assertAlmostEqual(off_bus, 36.4)
+        self.assertEqual(tg._measured_split(None, [], 18.75, 112.5), (None, None))
+        connected, _ = tg._measured_split(148.9, ["working"] * 3 + ["no_ingredients"] * 3, 18.75, 112.5)
+        self.assertAlmostEqual(connected, 56.25)  # idle district furnaces are not connected output
+
+    def test_receipt_reports_both_and_compares_the_district_only(self):
+        row = tg.decide(replace(LIVE, connected_measured=112.5, off_bus_measured=36.4, starter_phase="retiring"))
+        self.assertEqual(row["supply"]["measured_per_minute"], 148.9)
+        self.assertEqual(row["supply"]["measured_connected_per_minute"], 112.5)
+        self.assertEqual(row["supply"]["measured_off_bus_per_minute"], 36.4)
+        self.assertEqual(row["supply"]["starter_cells"], "retiring")
+        self.assertEqual(row["supply"]["capacity_per_minute"], 112.5)
+
+    def test_retiring_starter_cells_fund_nothing(self):
+        iron = replace(
+            LIVE,
+            connected_measured=112.5,
+            off_bus_measured=36.4,
+            starter_phase="retiring",
+            stocks={"iron-plate": (0.0, 148.9)},
+        )
+        copper = replace(
+            COPPER,
+            connected_measured=37.5,
+            off_bus_measured=10.0,
+            stocks={"iron-plate": (0.0, 148.9), "copper-plate": (0.0, 47.5)},
+        )
+        funded = tg._bus_funding({"iron-plate": iron, "copper-plate": copper})
+        self.assertEqual(funded["iron-plate"].stocks["iron-plate"], (0.0, 112.5))
+        self.assertEqual(funded["copper-plate"].stocks["iron-plate"], (0.0, 112.5))
+        self.assertEqual(funded["copper-plate"].stocks["copper-plate"], (0.0, 47.5))  # its cells still run
+
+    def test_critical_claims_come_from_the_critical_path_allocation(self):
+        step = pg.ROADMAP[0]
+        job = {
+            "key": "a",
+            "capability": step.capability,
+            "status": "waiting",
+            "parameters": dict(step.parameters),
+            "reason": "waiting for iron-plate",
+            "evidence": {"item": "iron-plate", "need": 300},
+        }
+        self.assertEqual(tg.critical_plate_claims(None, [job], {"technologies": {}}), {"iron-plate": 300.0})
+        self.assertEqual(tg.critical_plate_claims(None, [], {}), {})
+
+    def test_starter_phase_from_jobs_and_state(self):
+        job = {"capability": "starter_retirement", "status": "succeeded", "parameters": {"resource": "iron-ore"}}
+        self.assertEqual(tg._starter_phase({}, "iron-ore", [job]), "retired")
+        state = {"resources": {"coal": {"phase": "retiring"}}}
+        self.assertEqual(tg._starter_phase(state, "coal", []), "retiring")
+        self.assertEqual(tg._starter_phase(state, "copper-ore", []), "")
+
+
 class SettlingTests(unittest.TestCase):
     def test_open_or_recent_growth_job_of_the_resource_settles(self):
         job = {"capability": "smelting_capacity", "parameters": {"resource": "iron-ore"}, "status": "running"}
@@ -172,12 +335,18 @@ class NodeTests(unittest.TestCase):
     def test_slack_node_is_low_priority_and_single_per_plate(self):
         obs = receipt(tg.decide(IRON), tg.decide(COPPER))
         nodes = tg.throughput_growth_nodes(self.done, [], obs, self.capabilities, critical=False)
-        self.assertEqual([n["capability"] for n in nodes], ["mining_outpost", "smelting_capacity"])
+        # Iron: its package (drills, then furnaces); copper: one furnace stage.
+        self.assertEqual(
+            [(n["capability"], n["parameters"]["resource"]) for n in nodes],
+            [("mining_outpost", "iron-ore"), ("smelting_capacity", "iron-ore"), ("smelting_capacity", "copper-ore")],
+        )
+        self.assertEqual(nodes[0]["depends_on"], [])
+        self.assertEqual(nodes[1]["depends_on"], [nodes[0]["id"]])
         self.assertTrue(all(n["priority"] == tg.SLACK_PRIORITY for n in nodes))
         self.assertEqual(tg.throughput_growth_nodes(self.done, [], obs, self.capabilities, critical=True), [])
-        # Queued: nothing more for that resource.
+        # One package per plate in flight: a queued iron stage blocks every iron stage.
         again = tg.throughput_growth_nodes(self.done, nodes[:1], obs, self.capabilities, critical=False)
-        self.assertEqual([n["capability"] for n in again], ["smelting_capacity"])
+        self.assertEqual([n["parameters"]["resource"] for n in again], ["copper-ore"])
 
     def test_critical_when_the_bus_waits_for_district_plates(self):
         bus = {
@@ -189,8 +358,8 @@ class NodeTests(unittest.TestCase):
         self.assertTrue(tg.bottleneck_blocks_critical_path("iron-plate", self.done + [bus]))
         obs = receipt(tg.decide(IRON))
         nodes = tg.throughput_growth_nodes(self.done + [bus], [], obs, self.capabilities, critical=True)
-        self.assertEqual(len(nodes), 1)
-        self.assertEqual(nodes[0]["priority"], tg.CRITICAL_PRIORITY)
+        self.assertEqual(len(nodes), 2)  # the package's two stages
+        self.assertTrue(all(n["priority"] == tg.CRITICAL_PRIORITY for n in nodes))
 
     def test_open_or_stalled_jobs_block_the_node(self):
         row = tg.decide(IRON)
@@ -221,9 +390,9 @@ class NodeTests(unittest.TestCase):
         ]
         nodes = pg.autopilot_nodes(self.done + outposts, [], obs, self.capabilities, limit=50)
         growth = [n for n in nodes if n["id"].startswith(tg.NODE_PREFIX)]
-        self.assertEqual(len(growth), 1)
-        self.assertGreater(len(nodes), 1)
-        self.assertEqual(growth[0]["parameters"], {"resource": "iron-ore", "rate_per_minute": 120.0})
+        self.assertEqual([n["capability"] for n in growth], ["mining_outpost", "smelting_capacity"])
+        self.assertGreater(len(nodes), 2)
+        self.assertEqual(growth[0]["parameters"], tg.decide(IRON)["parameters"])
 
 
 class ReceiptTests(unittest.TestCase):
