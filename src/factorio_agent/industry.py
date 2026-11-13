@@ -89,6 +89,25 @@ def _hash(value):
     ).hexdigest()
 
 
+def _idle_powered_labs(obs):
+    """Powered labs standing idle without packs while research runs (labs are not the bottleneck: add none).
+
+    Between batches no research runs and the cell may still grow by its time
+    model; during research, a built lab without packs that is not working
+    means the labs already outnumber the packs reaching them.
+    """
+    if not obs.get("research"):
+        return []
+    return [
+        e
+        for e in obs.get("entities", [])
+        if e.get("name") == "lab"
+        and _powered(e)
+        and e.get("status_name") not in (None, "working")
+        and not (e.get("inventory") or {}).get(RED_PACK)
+    ]
+
+
 def _powered(entity):
     energy = (entity or {}).get("energy")
     return bool(
@@ -1280,6 +1299,8 @@ class BootstrapLogistics:
         not retried for this target. The cell's bound machines, ports and
         plan hash are never changed: lab slots are a separate builder plan.
         """
+        if _idle_powered_labs(obs):
+            return None
         decision = self._capacity_decision(obs, plan)
         if not decision or decision.get("lab_extension_blocked"):
             return None
@@ -1384,6 +1405,8 @@ class BootstrapLogistics:
             return None
         grown = extended_science_cell(plan)
         want = min(MAX_STARTUP_LABS, decision.get("target_labs", 1)) - 1
+        if _idle_powered_labs(obs):  # never add a lab while a built one stands idle
+            want = 0
         slots = lab_slot_entities(grown)[: max(0, want)]
         entities = list(grown["entities"])
         if slots:

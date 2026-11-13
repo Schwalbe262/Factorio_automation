@@ -16,6 +16,11 @@ from .planning import overlap, survey_slots, preflight
 from .site.placement import settle
 from .plate_supply import bus_budget, plate_bus, plate_sources
 from . import planned_tap
+from . import science_growth
+
+# Board block holding the plan's routes, taps and power links outside the two
+# template blocks while they are unbuilt (see ``routes_block``).
+ROUTES_BLOCK = "automation_science_routes"
 
 
 def validate_rate(parameters):
@@ -189,6 +194,8 @@ class AutomaticScience:
         count = math.ceil(parameters["rate_per_minute"] * 1.15 / nominal_each)
         if count > 6:
             return {"ok": False, "reason": "red_science_row_exceeds_six_slots"}
+        # Every requested slot is reserved; plates and labs decide how many are built first.
+        slots = count
         mining = json.loads((root / "mining-outposts.json").read_text(encoding="utf-8"))
         smelting = json.loads((root / "smelting-district.json").read_text(encoding="utf-8"))
         if mining.get("world_id") != obs["world_id"] or smelting.get("world_id") != obs["world_id"]:
@@ -221,9 +228,9 @@ class AutomaticScience:
         # Sites come from the master plan; the fixed development-map list is
         # only for a controller built without a site service.
         if self.site is not None:
-            blocks = planned_science_candidates(self.site, obs["world_id"], count)
+            blocks = planned_science_candidates(self.site, obs["world_id"], slots)
         else:
-            blocks = legacy_science_candidates(count)
+            blocks = legacy_science_candidates(slots)
         for block in blocks:
             science, labs = block["science"], block["labs"]
             areas = [science["reserved_area"], labs["reserved_area"]]
@@ -311,8 +318,16 @@ class AutomaticScience:
                 layout_policy="pcb-permanent-science-v1",
             )
             settle(self.site, obs["world_id"], "automation_science", site.get("allocation"))
+            start = science_growth.start_machines(self._queue_targets(obs), nominal_each, count)
+            stage = science_growth.new_stage(
+                {"science": science, "labs": labs},
+                labs=science_growth.START_LABS,
+                machines=start,
+                machine_limit=count,
+            )
             return {
                 "ok": True,
+                "stage": stage,
                 "world_id": obs["world_id"],
                 "catalog_fingerprint": self.catalog.fingerprint,
                 "requested_rate": parameters["rate_per_minute"],
@@ -383,6 +398,12 @@ class AutomaticScience:
                     return {"status": "blocked", "reason": "science_reserved_block_changed"}
                 board["blocks"][key] = plan
                 changed = True
+        # Routes and power links are published with the blocks, before anything
+        # is built, so every other planner sees them (``routes_block``).
+        routes = routes_block(self.state)
+        if routes is not None and board["blocks"].get(ROUTES_BLOCK) != routes:
+            board["blocks"][ROUTES_BLOCK] = routes
+            changed = True
         for connection in self.state["connections"]:
             if connection not in board.setdefault("connections", []):
                 board["connections"].append(connection)
@@ -397,11 +418,13 @@ class AutomaticScience:
         cut = planned_tap.cutover(self.path.parent, self.builder, obs, taps, clear_obstacles=clear)
         if cut is not None:
             return cut
-        result = self.builder.ensure_plan(obs, self.state["plan"])
+        result = self.builder.ensure_plan(obs, science_growth.build_plan(self.state))
         if result.get("status") != "succeeded":
             return result
         proof = self.proof(obs)
         if proof:
+            # Built routes protect themselves as observed belts from here on.
+            self._retire_routes_block(obs)
             return {
                 "status": "succeeded",
                 "reason": "normally belt-fed machine science reaches powered labs",
@@ -416,30 +439,13 @@ class AutomaticScience:
             or not underground_proof(obs, self.state["plan"])
         ):
             return None
-        actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
-        for wanted in self.state["plan"]["entities"]:
-            e = actual.get((wanted["name"], *xy(wanted)))
-            if not e:
-                return None
-            if wanted.get("recipe") and e.get("recipe") != wanted["recipe"]:
-                return None
-            if (
-                wanted["name"] in ("transport-belt", "underground-belt", "inserter", "assembling-machine-1")
-                and e["direction"] != wanted["direction"]
-            ):
-                return None
-            if wanted["name"] in ("lab", "inserter", "assembling-machine-1") and (
-                not e.get("electric_network_connected") or e.get("energy", 0) <= 0
-            ):
-                return None
-        machines = [
-            actual[(e["name"], *xy(e))]
-            for e in self.state["science"]["entities"]
-            if e.get("recipe") == "automation-science-pack"
-        ]
+        actual = _built(obs, science_growth.build_plan(self.state))
+        if actual is None:
+            return None
+        machines = [actual[(e["name"], *xy(e))] for e in science_growth.built_machines(self.state)]
         if any(e.get("products_finished", 0) < 1 for e in machines):
             return None
-        labs = [actual[(e["name"], *xy(e))] for e in self.state["labs"]["entities"] if e["name"] == "lab"]
+        labs = [actual[(e["name"], *xy(e))] for e in science_growth.built_labs(self.state)]
         if not any(
             e.get("inventory", {}).get("automation-science-pack", 0) > 0 or e.get("status_name") == "working"
             for e in labs
@@ -452,5 +458,150 @@ class AutomaticScience:
             "lab_units": [e["unit_number"] for e in labs],
             "lab_science_stock": sum(e.get("inventory", {}).get("automation-science-pack", 0) for e in labs),
             "nominal_machine_rate_per_minute": self.state["nominal_machine_rate"],
+            "stage": {k: v for k, v in (self.state.get("stage") or {}).items() if k != "growth_entities"},
             "scope": "normal continuous raw-belt supply and machine science into labs; rated capacity is not sustained measured science consumption",
         }
+
+    def _queue_targets(self, obs):
+        """Research queue for sizing (running research and next roadmap technologies of this world's ledger)."""
+        from .research_capacity import queue_targets
+
+        jobs = []
+        ledger = self.path.parent / "jobs.json"
+        try:
+            data = json.loads(ledger.read_text(encoding="utf-8")) if ledger.exists() else {}
+        except (OSError, ValueError):
+            data = {}
+        if isinstance(data, dict) and data.get("world_id") == obs.get("world_id"):
+            jobs = list((data.get("jobs") or {}).values())
+        try:
+            return queue_targets(self.catalog, jobs, obs)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return []
+
+    def _retire_routes_block(self, obs):
+        """Drop the routes block once everything it lists is built (observed hardware replaces it)."""
+        path = self.path.parent / "pcb-board.json"
+        try:
+            board = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if board.get("world_id") == obs["world_id"] and ROUTES_BLOCK in board.get("blocks", {}):
+            del board["blocks"][ROUTES_BLOCK]
+            _atomic_json(path, board)
+
+    def grow(self, obs, parameters):
+        """Build reserved slots up to ``parameters`` ``labs``/``machines`` (capability ``science_growth``).
+
+        Only slots of the saved block are built (``science_growth.build_plan``);
+        the built stage is committed once every new entity is observed and
+        powered. Never shrinks, never exceeds the slot counts or the plate limit.
+        """
+        validate_growth(parameters)
+        stage = (self.state or {}).get("stage")
+        if not stage:
+            return {"status": "blocked", "reason": "science_growth_needs_staged_science_block"}
+        if self.state["world_id"] != obs["world_id"] or self.state["catalog_fingerprint"] != self.catalog.fingerprint:
+            return {"status": "blocked", "reason": "science_world_or_catalog_changed"}
+        labs, machines = parameters["labs"], parameters["machines"]
+        if labs > stage["lab_slots"] or machines > stage.get("machine_limit", stage["machine_slots"]):
+            return {"status": "blocked", "reason": "science_growth_exceeds_reserved_slots"}
+        labs, machines = max(labs, stage["labs"]), max(machines, stage["machines"])
+        result = self.builder.ensure_plan(obs, science_growth.build_plan(self.state, labs=labs, machines=machines))
+        if result.get("status") != "succeeded":
+            return result
+        grown = dict(self.state, stage=dict(stage, labs=labs, machines=machines))
+        actual = _built(obs, science_growth.build_plan(grown))
+        if actual is None:
+            return {"status": "waiting", "reason": "waiting for grown science slots to be observed and powered"}
+        if (labs, machines) != (stage["labs"], stage["machines"]):
+            grown["stage"]["growth_entities"] = science_growth.growth_entities(grown)
+            self.state = grown
+            _atomic_json(self.path, self.state)
+        return {"status": "succeeded", "reason": "reserved science slots built", "evidence": self.growth_proof(obs)}
+
+    def growth_proof(self, obs, parameters=None):
+        """Every entity of the built stage is observed and powered, and the stage reaches ``parameters``."""
+        stage = (self.state or {}).get("stage")
+        if not stage or self.state["world_id"] != obs["world_id"]:
+            return None
+        if parameters and (
+            stage["labs"] < parameters.get("labs", 0) or stage["machines"] < parameters.get("machines", 0)
+        ):
+            return None
+        actual = _built(obs, science_growth.build_plan(self.state))
+        if actual is None:
+            return None
+        return {
+            "tick": obs["tick"],
+            "labs": stage["labs"],
+            "machines": stage["machines"],
+            "lab_units": [actual[(e["name"], *xy(e))]["unit_number"] for e in science_growth.built_labs(self.state)],
+            "science_units": [
+                actual[(e["name"], *xy(e))]["unit_number"] for e in science_growth.built_machines(self.state)
+            ],
+            "free_slots": {
+                "labs": stage["lab_slots"] - stage["labs"],
+                "machines": stage["machine_slots"] - stage["machines"],
+            },
+        }
+
+
+def validate_growth(parameters):
+    if not isinstance(parameters, dict) or set(parameters) != {"labs", "machines"}:
+        raise ValueError("science_growth requires labs and machines")
+    for key in ("labs", "machines"):
+        value = parameters[key]
+        if type(value) is not int or not 1 <= value <= 8:
+            raise ValueError("science_growth " + key + " must be an integer in [1,8]")
+
+
+def _built(obs, plan):
+    """Observed entities by key when every entity of ``plan`` stands as planned and machines are powered, else None."""
+    actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
+    for wanted in plan["entities"]:
+        e = actual.get((wanted["name"], *xy(wanted)))
+        if not e:
+            return None
+        if wanted.get("recipe") and e.get("recipe") != wanted["recipe"]:
+            return None
+        if (
+            wanted["name"] in ("transport-belt", "underground-belt", "inserter", "assembling-machine-1")
+            and e["direction"] != wanted["direction"]
+        ):
+            return None
+        if wanted["name"] in ("lab", "inserter", "assembling-machine-1") and (
+            not e.get("electric_network_connected") or e.get("energy", 0) <= 0
+        ):
+            return None
+    return actual
+
+
+def routes_block(state):
+    """Board block of the plan entities outside the science and lab blocks (routes, taps, power links), or None.
+
+    ``board.planned_unbuilt_hardware`` and ``transport.unbuilt_external_keepouts``
+    read every block's entities and underground pairs, so routes published here
+    are foreign hardware for every later planner before they are built. Its
+    ``reserved_area`` is the one tile under the first science machine (inside
+    the science block, so no other reservation or port apron changes) because
+    readers expect every block to have one; the routes lie outside it.
+    """
+    own = {(e["name"], *xy(e)) for e in state["science"]["entities"] + state["labs"]["entities"]}
+    # Tap hardware (splitter, dives, trunk extension) is published with the bus (``planned_tap.publish``).
+    own |= {(e["name"], *xy(e)) for tap in state.get("taps") or [] for e in tap.get("entities", [])}
+    entities = [e for e in state["plan"]["entities"] if (e["name"], *xy(e)) not in own]
+    if not entities:
+        return None
+    tap_pairs = planned_tap.tap_pairs(state.get("taps") or [])
+    machine = next(e for e in state["science"]["entities"] if e["name"] == "assembling-machine-1")
+    x, y = xy(machine)
+    return _plan(
+        entities,
+        [],
+        template=ROUTES_BLOCK,
+        owner="automation_science",
+        reserved_area=[[x - 0.5, y - 0.5], [x + 0.5, y + 0.5]],
+        underground_pairs=[p for p in state["plan"].get("underground_pairs", []) if p not in tap_pairs],
+        layout_policy="pcb-permanent-science-routes-v1",
+    )

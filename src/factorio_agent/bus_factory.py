@@ -527,8 +527,10 @@ class BusFactory:
             if set(contents) - {trunk["item"]} or contents.get(trunk["item"], 0) <= 0:
                 return None
             lines.append({"item": trunk["item"], "line": trunk["line"], "observed_contents": contents})
-        labs = [actual.get(("lab", *xy(e))) for e in self.science.state["labs"]["entities"] if e["name"] == "lab"]
-        if len(labs) != 8 or any(
+        from .science_growth import built_labs
+
+        labs = [actual.get(("lab", *xy(e))) for e in built_labs(self.science.state)]
+        if not labs or any(
             not e
             or not e.get("electric_network_connected")
             or e.get("energy", 0) <= 0

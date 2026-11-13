@@ -456,6 +456,120 @@ def hardware_conflicts(builder, entities, planned):
     return conflicts
 
 
+CROSSABLE_BELTS = ("transport-belt", "underground-belt")
+# Direction (16-way) -> unit tile vector of a belt's flow.
+_FLOW = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
+
+
+def foreign_belts(obs, blocks, *, exclude=()):
+    """Belts a straight belt line must cross underground: observed ones plus every block's planned-but-unbuilt ones.
+
+    ``planned_bus.trunk_plan`` and the tap trunk extension used to pass only
+    observed belts, so a consumer's planned route was "free" until built and a
+    trunk was laid over it on the surface (seed 283895142: red science's
+    northbound iron line and the copper trunk shared a tile and iron
+    side-loaded onto the copper lane). Blocks named in ``exclude`` or owned
+    (``owner``) by a name in it are the caller's own and skipped.
+    """
+    built = built_keys(obs)
+    rows = [e for e in obs.get("entities", []) if e.get("name") in CROSSABLE_BELTS]
+    seen = {(e["name"], e["position"]["x"], e["position"]["y"]) for e in rows}
+    for name, block in (blocks or {}).items():
+        if name in exclude or not isinstance(block, dict) or block.get("owner") in exclude:
+            continue
+        for e in block.get("entities", []):
+            if not isinstance(e, dict) or e.get("name") not in CROSSABLE_BELTS:
+                continue
+            key = (e["name"], e["position"]["x"], e["position"]["y"])
+            if key in built or key in seen:
+                continue
+            seen.add(key)
+            rows.append(e)
+    return rows
+
+
+def blocks_without_bus(board):
+    """``board["blocks"]`` without entities the published bus owns (consumers' tap hardware is bus hardware)."""
+    bus = board.get("shared_main_bus") if isinstance(board, dict) else None
+    shared = {
+        (e["name"], e["position"]["x"], e["position"]["y"])
+        for e in (bus or {}).get("entities", [])
+        if isinstance(e, dict) and isinstance(e.get("position"), dict)
+    }
+    blocks = {}
+    for name, block in (board.get("blocks", {}) if isinstance(board, dict) else {}).items():
+        if not isinstance(block, dict):
+            continue
+        entities = [
+            e
+            for e in block.get("entities", [])
+            if not (
+                isinstance(e, dict)
+                and isinstance(e.get("position"), dict)
+                and (e.get("name"), e["position"].get("x"), e["position"].get("y")) in shared
+            )
+        ]
+        blocks[name] = dict(block, entities=entities) if shared else block
+    return blocks
+
+
+def _downstream(e):
+    vector = _FLOW.get(e.get("direction", 0))
+    if vector is None:
+        return None
+    return (e["position"]["x"] + vector[0], e["position"]["y"] + vector[1])
+
+
+def surface_conflict(builder, obs, blocks, entities, *, exclude=()):
+    """Why ``entities`` (a trunk or tap line) would meet other blocks' planned-but-unbuilt hardware, or None.
+
+    Rules: no entity footprint on a planned tile (``planned_unbuilt_hardware``;
+    an identical pole is shared); no planned surface belt delivers onto one of
+    ``entities``' surface belts (side-load) and no surface belt of ``entities``
+    delivers onto a planned belt. Planned belts crossed underground leave no
+    entity on their tile, so they pass.
+    """
+    # Footprints are pure geometry (``lab_slot_entities`` does the same); tests pass mock builders.
+    builder = FactoryBuilder.__new__(FactoryBuilder)
+    planned = planned_unbuilt_hardware(builder, obs, blocks, exclude=exclude)
+    planned = {
+        tile: row for tile, row in planned.items() if (blocks.get(row["block"]) or {}).get("owner") not in exclude
+    }
+    clash = hardware_conflicts(builder, entities, planned)
+    if clash:
+        return {"reason": "line_meets_planned_hardware", **clash[0]}
+    ours = {
+        (e["position"]["x"], e["position"]["y"]): e
+        for e in entities
+        if e["name"] in ("transport-belt", "splitter", "underground-belt")
+    }
+    belts = {}
+    for tile, row in planned.items():
+        if row["name"] == "transport-belt":
+            block = blocks.get(row["block"]) or {}
+            e = next(
+                (
+                    x
+                    for x in block.get("entities", [])
+                    if x.get("name") == "transport-belt" and x["position"] == row["position"]
+                ),
+                None,
+            )
+            if e is not None:
+                belts[(e["position"]["x"], e["position"]["y"])] = (row["block"], e)
+    for tile, (block, e) in belts.items():
+        target = _downstream(e)
+        if target in ours and tile not in ours:
+            return {"reason": "planned_belt_would_side_load_line", "tile": tile, "block": block}
+    for tile, e in ours.items():
+        if e["name"] != "transport-belt":
+            continue
+        target = _downstream(e)
+        if target in belts and target not in ours:
+            return {"reason": "line_would_side_load_planned_belt", "tile": tile, "block": belts[target][0]}
+    return None
+
+
 STARTUP_SCIENCE_REACH = 3  # 16-tile cells searched each way around the powered pole
 
 

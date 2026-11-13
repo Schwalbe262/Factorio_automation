@@ -117,6 +117,40 @@ Used by the observe receipt (`research_capacity_receipt`) and by
 `labs_without_assemblers`) for the startup science cell. Pinned by
 `tests/test_v2_research_capacity.py`, `tests/test_v2_science_cell_extension.py`.
 
+## Staged red science (`science_growth.py`, capability `science_growth`)
+
+`automation_science` reserves the whole block (all requested machine slots,
+eight lab slots, belts for the full row) on the board, but builds only a start:
+
+```
+labs     = START_LABS (2)
+machines = clamp(ceil(lab_pack_rate(queue, 2 labs) / pack_rate_per_machine), 1, min(START_SCIENCE_MACHINES (2), plate-supported machines))
+proof    = built machines made packs, built labs powered and one holds packs or works
+```
+
+Unbuilt slots stay in the `automation_science`/`laboratories` blocks (occupied for
+every planner) and are listed in `automation-science.json` `stage.growth_entities`;
+slots are built as a prefix, so every subset is one pole network. Growth rule
+(`growth_decision`, observe receipt `science_growth`, autopilot `science_growth_nodes`
+at `SCIENCE_GROWTH_PRIORITY = TOP_PRIORITY - 500`, below every roadmap step):
+
+```
+no growth unless research runs and every built lab/machine is observed and powered
+idle     = some built lab status != working
+backlog  = lab-row belt holds >= BELT_BACKUP_PACKS (8) packs or every lab >= LAB_BACKUP_PACKS (2) or a machine is full_output
+starving = some lab missing_science_packs and the lab belt is empty
+short    = some machine item_ingredient_shortage / no_ingredients
+may add labs     = not idle and backlog and free lab slots
+may add machines = starving and not short and machines < plate-supported limit
+how many: plan_research_capacity(queue, observed hardware + pack stock,
+          max_labs = labs + free if may add labs else labs,
+          max_assemblers = machines + free if may add machines else machines)   (max_step 2)
+```
+
+A lab is never added while a built lab is idle. The startup cell (`industry._extend_labs`,
+`_grow_cell`) adds no slot lab while research runs and a powered lab is idle without packs.
+Pinned by `tests/test_v2_science_growth.py`, `tests/test_v2_template_power.py`.
+
 ## Idle research choice (`research_policy.choose_research`)
 
 Rank: (a) first researchable step on the unlock path of a wanted technology
