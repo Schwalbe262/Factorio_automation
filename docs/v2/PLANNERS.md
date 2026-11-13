@@ -7,8 +7,8 @@ tuning = change the dataclass default and the test that pins it.
 ## Roadmap autopilot (`progression.py`)
 
 - `Supervisor._autopilot`: when < `LOW_QUEUE = 2` nodes pending/ready, <= `AUTOPILOT_LIMIT = 3` nodes (`supervisor.py:47`).
-- Order inside `autopilot_nodes`: capacity nodes, then produce nodes, then
-  `ROADMAP` steps; all count toward the limit.
+- Order inside `autopilot_nodes`: capacity nodes, then produce nodes, then the
+  supply cell node, then `ROADMAP` steps; all count toward the limit.
 - Priorities: capacity `CAPACITY_PRIORITY = -50`, produce `PRODUCE_PRIORITY = -51`,
   roadmap step `TOP_PRIORITY - index = -100 - index`. A model request uses 0,
   so it always runs first.
@@ -62,6 +62,36 @@ skip when any plate net is unmeasured or <= 0, or rate < PRODUCE_MIN_RATE (1.0)
 
 `bulk_item_demand`: `Step.builds` of the next 4 steps. Pinned by `tests/test_v2_produce_autopilot.py`.
 
+## Supply cell (`supply_cell.py`, temporary hand-fed factory)
+
+A small chest-fed assembler cell, like the startup science cell: not on the
+bus, plates carried in by hand in batches, products taken from bar-capped
+chests. It replaces hand crafting of bulk items between power and the bus.
+
+```
+receipt  supply_cell_candidates = candidates(catalog, jobs, obs)        (__main__ observe)
+demand   bulk_item_demand over the next DEMAND_HORIZON (8) roadmap steps
+item qualifies when  count > HANDCRAFT_LIMIT (10)
+                and  hand_seconds(count) >= hand_seconds(cell hardware: 1 assembler + 2 inserters + 1 chest per recipe node)
+                and  machine_seconds(count) <= WAIT_FACTOR (3) * hand_seconds(count)
+                     machine rate = min over nodes(assembler crafts/min, CHEST_INSERTER_PER_MINUTE 50 / items moved)
+build    node auto_supply_cell {"products": qualifying} once per map, priority -52,
+         requires power, native assembling-machine-1
+retire   node auto_supply_cell_retire {"retire": true} once, priority -1000, after the build job succeeded,
+         when every product has demand <= HANDCRAFT_LIMIT or a succeeded produce job
+```
+
+| Phase | Rule |
+|---|---|
+| design | `recipe_tree` from catalog recipes; raw = `progression.RAW_ITEMS` are hand-fed ports; first intermediate continues the chain, the 2nd/3rd branch sideways; greedy poles |
+| site | 8-tile ring around the powered pole, nearest first; refused: overlap with a board block, planned-unbuilt hardware, a site-plan zone (`SiteService.world().zones()`), ore or buildings (native survey); trees/rocks are cleared |
+| build | `ensure_plan`, bar `OUTPUT_STACKS` (2) on each product chest, first feed for `PROOF_UNITS` (2), proof: every machine finished products, every product chest holds stock |
+| use | `ensure_item` collects from the product chest; above `HANDCRAFT_LIMIT` it waits when `(missing - stock) * wait_s <= WAIT_FACTOR * missing * hand_s` (`construction_supply._waiting_pays`), else hand crafts; an unfed cell (`starved`) is fed from hand first; no progress for `STALL_TICKS` = hand crafting resumes |
+| feed | target per input chest = `min(FEED_CAP 100, ceil(need * raw per unit))`, need = demand - chest stock - carried; a trip only when the deficit is >= `FEED_BATCH` (10) or covers the whole target; shared upkeep inserts only plates beyond `FEED_RESERVE` (50); the idle lane may also collect furnace plates; no feed for a product whose `produce` row is producing |
+| retire | feeding stops (`phase: retiring`); waits while any job waits for "machine-made <product>"; mines inserters, machines, chests (paid, guarded `mine`, contents return to the inventory); keeps poles (other chains may hang on them); removes board block `supply_cell`; `phase: retired` is never proposed again |
+
+Pinned by `tests/test_v2_supply_cell.py`.
+
 ## Research capacity (`research_capacity.py`, `ResearchCapacityConfig`)
 
 ```
@@ -104,7 +134,7 @@ Pinned by `tests/test_v2_research_policy.py`, `tests/test_v2_idle_research.py`.
 | `FUEL_SKIP_STOCK` | 50 | no fuel for a cell holding 50 finished items; such cells still count as productive in `StarterCapacity.proof` | `test_v2_fuel_batching` |
 | `COLLECT_BATCH` | 10 | `take_many` waits until 10 items are on hand (or less is needed, or a verified buffer chest) | `test_v2_construction_supply`, `test_v2_machine_stock` |
 | `MAX_ITEMS` / `MAX_SOURCES` | 50 / 16 | one `take_many` envelope (`validate_take_many`) | `test_v2_construction_supply` |
-| `HANDCRAFT_LIMIT` | 10 | above it, with a producing `produce` row, collect or wait instead of hand crafting | `test_v2_machine_stock` |
+| `HANDCRAFT_LIMIT` | 10 | above it, with a producing `produce` row or supply cell, collect or wait instead of hand crafting | `test_v2_machine_stock`, `test_v2_supply_cell` |
 | `machine_stock.STALL_TICKS` | 3600 | a row without products for this long is `stalled` (hand crafting resumes) | `test_v2_machine_stock` |
 | `industry.SCIENCE_COURIER_BATCH` | 5 | bootstrap science carried per lab per trip | `test_v2_research_capacity` |
 | `DEDICATED_COAL_MINIMUM` | 4000 | coal under a dedicated power drill | none yet |

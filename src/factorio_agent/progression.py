@@ -450,6 +450,9 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed: list[dict] = capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit)]
     proposed += produce_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     proposed += smelting_capacity_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .supply_cell import supply_cell_nodes  # temporary hand-fed cell: build once, retire once
+
+    proposed += supply_cell_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     for index, step in enumerate(ROADMAP):
         if len(proposed) >= limit:
             break

@@ -34,6 +34,10 @@ def shared_upkeep(ex, obs, capability):
     background = ex._continue_background_construction(obs, capability)
     if background:
         return background, filtered
+    cell = getattr(ex, "supply_cell", None)
+    feed = cell.upkeep(obs) if cell is not None else None
+    if isinstance(feed, dict) and feed.get("type"):  # top up the supply cell from plates in hand
+        return feed, filtered
     if capability in INFRASTRUCTURE_REPAIR_CAPABILITIES:
         infrastructure = ex._infrastructure_upkeep(obs)
         if infrastructure:

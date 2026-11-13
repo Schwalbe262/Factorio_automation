@@ -299,6 +299,15 @@ CAPABILITIES = {
         "native_recipes": ["assembling-machine-1"],
         "effect": "normally build a recipe-driven assembler row (derated to its inserters, plus a one-level intermediate sub-row) on a master-plan block, route its inputs from free board ports or a bus tap, end it in a chest capped at two stacks, prove machine output in the chest and register the chest as construction stock; a higher rate fills reserved slots in place",
     },
+    "supply_cell": {
+        "parameters": {
+            "products": "1..6 distinct items with assembler recipe trees from hand-fed plates (build)",
+            "retire": "true instead of products: drain, demolish and release the cell",
+        },
+        "requires": ["power"],
+        "native_recipes": ["assembling-machine-1"],
+        "effect": "temporary hand-fed assembler cell near the grid (not on the bus): plates fed in batches, products collected from bar-capped chests instead of hand crafting; retired by mining once demand ends or a produce row takes over",
+    },
     "research": {
         "parameters": {"technology": "catalog technology name"},
         "requires": ["automation_science"],
@@ -407,6 +416,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "roadmap_material_demand": obs.get("roadmap_material_demand"),
         "roadmap_material_demand_error": obs.get("roadmap_material_demand_error"),
         "bulk_item_demand": obs.get("bulk_item_demand"),
+        "supply_cell_candidates": obs.get("supply_cell_candidates"),
         "research_capacity": obs.get("research_capacity"),
         "research_capacity_error": obs.get("research_capacity_error"),
         "capabilities": CAPABILITIES,

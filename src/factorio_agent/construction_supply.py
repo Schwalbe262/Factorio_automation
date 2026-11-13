@@ -144,8 +144,20 @@ FUEL_SKIP_STOCK = 50  # finished items in a cell that make more fuel pointless
 # (batched ``take_many``) or waits for it instead of queueing a large hand
 # craft. At or below the cap, or when the row is building, stalled or broken,
 # or no row exists, hand crafting proceeds as before (never a deadlock); a
-# fallback above the cap names the row state in the craft reason.
+# fallback above the cap names the row state in the craft reason. The temporary
+# supply cell (``supply_cell.SupplyCell.stock``) answers the same hook, adds a
+# time rule (``_waiting_pays``) and asks to be fed when it has no plates.
 HANDCRAFT_LIMIT = 10
+
+
+def _waiting_pays(machine, missing):
+    """Time rule of the supply cell (``supply_cell.stock``): wait when the machines need at most
+    ``wait_factor`` x the hand time for what the chest does not hold; a source without the
+    figures (``produce`` rows) always waits."""
+    if "wait_seconds_per_unit" not in machine:
+        return True
+    wait = max(0, missing - machine.get("stock", 0)) * machine["wait_seconds_per_unit"]
+    return wait <= machine["wait_factor"] * missing * machine["hand_seconds_per_unit"]
 
 
 def _entity_key(entity):
@@ -341,11 +353,18 @@ class V2Bootstrap(DeterministicBootstrap):
         missing = count - self._count(observation, item)
         hook = getattr(self, "machine_stock", None)
         machine = hook(observation, item) if hook is not None and missing > 0 else None
+        if (
+            machine is not None
+            and machine.get("status") == "starved"
+            and machine.get("feed")
+            and missing > HANDCRAFT_LIMIT
+        ):
+            return machine["feed"]  # supply cell without plates: feed it rather than hand craft
         if machine is not None and machine.get("status") == "producing":
             collect = self._take_output(observation, item, missing)
             if collect is not None:
                 return collect
-            if missing > HANDCRAFT_LIMIT:
+            if missing > HANDCRAFT_LIMIT and _waiting_pays(machine, missing):
                 return {
                     "status": "waiting",
                     "reason": f"waiting for machine-made {item}",

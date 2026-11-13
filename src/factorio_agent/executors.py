@@ -130,6 +130,13 @@ class StarterExecutors:
         )
         # Finished produce rows are construction stock; large hand crafts wait for them.
         self.bootstrap.machine_stock = MachineStock(self.production_rows)
+        from .supply_cell import SupplyCell, chain_stock
+
+        # Temporary hand-fed cell: a second machine stock source behind the produce rows.
+        self.supply_cell = SupplyCell(
+            game, self.bootstrap, self.builder, catalog, site=self.site, rows_stock=self.bootstrap.machine_stock
+        )
+        self.bootstrap.machine_stock = chain_stock(self.bootstrap.machine_stock, self.supply_cell.stock)
         from .inventory_storage import InventoryStorage
 
         self.storage = InventoryStorage(game, catalog)
@@ -655,6 +662,10 @@ class StarterExecutors:
             fuel = bootstrap.maintain_fuel(self.starter_observation(obs))
             if isinstance(fuel, dict) and fuel.get("type"):
                 return fuel
+        cell = getattr(self, "supply_cell", None)
+        feed = cell.idle_feed(obs) if cell is not None else None
+        if isinstance(feed, dict) and feed.get("type"):
+            return feed
         if obs.get("research"):
             return None
         if any(is_active(job) and _owns_research(job.get("capability")) for job in jobs):

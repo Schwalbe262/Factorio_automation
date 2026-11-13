@@ -1,4 +1,4 @@
-"""Early game: starter cells, steam power, starter capacity, component stock, power regularization."""
+"""Early game: starter cells, steam power, starter capacity, component stock, supply cell, power regularization."""
 
 from __future__ import annotations
 
@@ -64,6 +64,25 @@ def validate_prepare_components(parameters):
     validate_parameters(parameters)
 
 
+def supply_cell_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "supply_cell")
+    if early is not None:
+        return early
+    return ex.supply_cell.step(obs, parameters or {})
+
+
+def supply_cell_proof(ex, obs, result, parameters):
+    if (parameters or {}).get("retire"):
+        return ex.supply_cell.retire_proof(obs)
+    return ex.supply_cell.proof(obs)
+
+
+def validate_supply_cell(parameters):
+    from ..supply_cell import validate_parameters
+
+    validate_parameters(parameters)
+
+
 def regularize_power_layout_step(ex, obs, parameters):
     ex.builder._sync(obs)
     fuel_obs = ex.starter_observation(obs)
@@ -89,4 +108,5 @@ register(
     proof=prepare_components_proof,
     validate=validate_prepare_components,
 )
+register("supply_cell", step=supply_cell_step, proof=supply_cell_proof, validate=validate_supply_cell)
 register("regularize_power_layout", step=regularize_power_layout_step, proof=regularize_power_layout_proof)

@@ -58,6 +58,7 @@ jobs.run_jobs: per pass one observe; jobs in priority order; StarterExecutors.st
 | Space | `site/candidates.py`, `site/render.py`, `site/planrender.py`, `site/fakeworld.py`, `site/fakegame.py` | free sites; SVG; synthetic maps and a lupa survey fake for tests |
 | Space | `smelting_site.py`, `mining_site.py` | smelting district on the plan zone; mining bank exit side from the plan |
 | Space | `production_rows.py`, `production_layout.py`, `production_site.py`, `production_sources.py` | `produce` capability: design, place, route, power, preflight, stock chest |
+| Space | `supply_cell.py` | `supply_cell` capability: temporary hand-fed assembler cell (belts, ...) before the bus; recipe tree -> cell, ring site, feeding upkeep, `machine_stock` hook (`chain_stock`), planner `supply_cell_nodes`, retirement by mining (PLANNERS.md) |
 | Space | `planned_bus.py` | `planned_main_bus`: iron/copper trunks on the plan's bus lanes, fed by a splitter beside each district plate port; publishes `board["shared_main_bus"]` (template `planned_main_bus`) |
 | Space | `planned_tap.py` | taps on the planned bus (any direction, either side): splitter + branch to a port outside the band, built trunks dive, reserved lanes tunnelled, trunk extension; planned with the consumer's block (`connect_inputs`), built first (`cutover`), supply rule `tap_budget` |
 | Space | `plate_supply.py` | plate resolver for science: bus taps when a planned bus is published (`plate_bus`, `bus_budget`), else the district's registered output ports (old `smelter-lanes.json` only as a same-world fallback), never a port another owner took |
@@ -98,6 +99,7 @@ All other top-level modules are capability controllers constructed in
 | Roadmap autopilot | `progression.autopilot_nodes` via `Supervisor._autopilot` | add up to 3 `auto_<step>` nodes for ready steps, priority `-100 - index` | propose a step whose job is blocked/failed; touch the world |
 | Capacity planner | `progression.capacity_nodes` -> `capacity_planning.plan_capacity` | add `starter_capacity` nodes at priority -50 | expand without measured production and known cell cost; before `starter` succeeded; after that resource's `mining_outpost` succeeded |
 | Produce planner | `progression.produce_nodes` | add `produce` nodes at priority -51 | propose without positive measured plate net rate |
+| Supply cell planner | `supply_cell.supply_cell_nodes` (from `autopilot_nodes`) | add one `supply_cell` build node (-52) and later one retire node (-1000) | propose twice per map; retire while demand remains and no `produce` row took over |
 | Research planners | `research_capacity` (observe receipt, `industry.py` startup cell), `research_policy.choose_research` (`StarterExecutors.idle_action`) | size science rate/labs; start lab research when no job acts | start research while a job owns research or any job has an unresolved world effect |
 | Auto-retry | `Supervisor._auto_retry` | `retry` a blocked job after a new success, <= 3 times | retry unknown outcomes, rollbacks, deadlines |
 | Incidents | `incidents.IncidentTracker` | open `empty_queue`, `blocked_job`, `no_progress`, `planner_review` | act; planner none only logs |
@@ -147,7 +149,7 @@ action in a job's events may belong to upkeep, not to the capability.
    finished items; stock collected in `take_many` batches of `COLLECT_BATCH = 10`;
    bootstrap science carried in `SCIENCE_COURIER_BATCH = 5` per lab (`industry.py:33`).
 9. Hand-craft cap. Above `HANDCRAFT_LIMIT = 10` missing items with a producing
-   `produce` row, `V2Bootstrap.ensure_item` collects or waits instead of crafting
-   (`construction_supply.py:324`, `machine_stock.py`).
+   `produce` row or supply cell, `V2Bootstrap.ensure_item` collects or waits instead of crafting
+   (`construction_supply.py`, `machine_stock.py`, `supply_cell.SupplyCell.stock`).
 10. One writer. `submit`, `control`, `run_*` hold `writer.lock`; the supervisor
     holds `controller.lock` (`core/deterministic_state.RunLock`).
