@@ -54,6 +54,29 @@ class FakeSite:
         self.released.append(name)
 
 
+class ForeignKeepoutTests(unittest.TestCase):
+    def test_the_pole_bridge_keeps_off_the_unbuilt_bus_and_other_blocks(self):
+        # auto-1113-1758 seed 4101796979: the row's bridge pole was planned on a bus belt
+        # still to be built; the bus built it first and the row blocked for good.
+        from factorio_agent.core.deterministic_builder import FactoryBuilder
+        from factorio_agent.production_site import foreign_keepouts
+
+        def belt(x, y):
+            return {"name": "transport-belt", "position": {"x": x, "y": y}, "direction": 0}
+
+        board = {
+            "blocks": {
+                "production_row_inserter": {"entities": [belt(1.5, 1.5)]},
+                "smelting_district": {"entities": [belt(5.5, 5.5)]},
+            },
+            "shared_main_bus": {"entities": [belt(19.5, -95.5), belt(19.5, -94.5)]},
+        }
+        obs = {"entities": [dict(belt(19.5, -94.5), unit_number=7)]}
+        keepouts = foreign_keepouts(FactoryBuilder.__new__(FactoryBuilder), obs, board, "production_row_inserter")
+        self.assertEqual({(e["position"]["x"], e["position"]["y"]) for e in keepouts}, {(19.5, -95.5), (5.5, 5.5)})
+        self.assertEqual({e["name"] for e in keepouts}, {"reserved-tile"})
+
+
 class ProductionRowsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

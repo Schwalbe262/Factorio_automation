@@ -55,6 +55,27 @@ def _output_facing(line: dict) -> dict:
     return dict(line["output"], facing=belt_out["facing"])
 
 
+def foreign_keepouts(builder, obs, board, owner) -> list[dict]:
+    """1x1 pole keepouts on every other block's planned-but-unbuilt tile (``board.planned_unbuilt_hardware``).
+
+    The planned bus (``board["shared_main_bus"]``) counts as a block here.
+    Belt routing already avoids other blocks' unbuilt routes; the pole bridge
+    did not, and a row's bridge pole was planned on the trunk of a bus still
+    being built: the bus belt went down first and the row blocked for good on
+    "reserved block placement is obstructed" (fleets auto-1113-1708 seed
+    3707974081, auto-1113-1758 seed 4101796979).
+    """
+    from .board import entity, planned_unbuilt_hardware
+    from .smelting import RESERVED_TILE
+
+    blocks = dict(board.get("blocks") or {})
+    if isinstance(board.get("shared_main_bus"), dict):
+        # The planned bus is published beside the blocks, not among them.
+        blocks.setdefault("shared_main_bus", board["shared_main_bus"])
+    tiles = planned_unbuilt_hardware(builder, obs, blocks, exclude=(owner,))
+    return [entity(RESERVED_TILE, x, y) for x, y in sorted(tiles)]
+
+
 def _taps(game, builder, obs, board, line, owner, block, ports, catalog):
     """Planned-bus taps and routes for ``ports`` (``planned_tap.connect_inputs``)."""
     if not ports:
@@ -160,6 +181,7 @@ def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner:
         return {"ok": False, "reason": "production_row_site_allocation_failed", "detail": str(exc)[:200]}
     build = builder_for(catalog, design)
     failures = []
+    keepouts = foreign_keepouts(builder, obs, board, owner)
     for block in blocks:
         wants = block_wants(block, lambda plan: plan["inputs"], lambda plan: [_output_facing(plan)])
         for placement in orientations(build, size, block.rect, wants, allowed=lambda t: t.mirror is None)[:2]:
@@ -180,7 +202,7 @@ def place_line(game, builder, obs, catalog, site, board, design: dict, *, owner:
                 failures.append({"allocation": block.name, **routed})
                 continue
             groups = rows(line)
-            power = connect_power_groups(game, builder, obs, groups, routed["entities"])
+            power = connect_power_groups(game, builder, obs, groups, routed["entities"] + keepouts)
             if not power.get("ok"):
                 failures.append({"allocation": block.name, "reason": power.get("reason", "power_failed")})
                 continue
