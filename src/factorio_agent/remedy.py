@@ -112,7 +112,17 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
         ROUTE_RELAX_1,
         ROUTE_RELAX_2,
     ),
-    "steam_expansion": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    "steam_expansion": (
+        Rung(
+            "site:wider_steam_search",
+            "site",
+            {"steam_fallback_sites": 12, "steam_water_run_max": 64},
+            kinds=("site",),
+            note="twelve free sites near the plant, water runs up to 64 tiles (steam_siting hard maxima)",
+        ),
+        ROUTE_RELAX_1,
+        ROUTE_RELAX_2,
+    ),
     "trunk_return_feed": (
         Rung(
             "site:past_first_tap",
