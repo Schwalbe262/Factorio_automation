@@ -409,6 +409,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "technologies": sorted(obs.get("technologies", {})),
         "enabled_recipes": sorted(k for k, v in obs.get("enabled_recipes", {}).items() if v),
         "research": obs.get("research"),
+        "research_queue": obs.get("research_queue"),
         "enemies_near_start": obs.get("enemies"),
         "research_progress": obs.get("research_progress"),
         "electricity": obs.get("electricity"),

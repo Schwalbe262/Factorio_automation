@@ -642,15 +642,15 @@ class StarterExecutors:
         """Use a pass in which no job acted: burner fuel upkeep first, then lab research.
 
         Fuel upkeep returns the ordinary batched take/insert action from
-        ``bootstrap.maintain_fuel``. The rest describes the research start:
+        ``bootstrap.maintain_fuel``. The rest keeps the native research queue filled:
 
-        None while research is running, while any job has an unresolved world
-        effect or an active job owns research (a capability taking a
-        ``technology``), within IDLE_RESEARCH_INTERVAL_TICKS of the previous
-        attempt, or without a proven automatic lab science supply. Otherwise
-        ``research_policy.choose_research`` picks a technology steered by the
-        upcoming roadmap steps, and the ``research`` capability's own step
-        produces the start action, so its shape and start record are unchanged.
+        None while any job has an unresolved world effect, an active bootstrap
+        job owns research (a research-owning capability other than ``research``),
+        a funded bootstrap batch runs its technology, within
+        IDLE_RESEARCH_INTERVAL_TICKS of the previous attempt, without a proven
+        automatic lab science supply, or when the queue is full or already
+        holds every planned technology. Otherwise one ``research_queue`` action
+        writes ``research_queue_plan`` (roadmap, then preferences, then cheapest).
         """
         jobs = self._same_world_jobs(obs)
         if jobs is None or _unresolved_world_effect(jobs):
@@ -667,21 +667,41 @@ class StarterExecutors:
         feed = cell.idle_feed(obs) if cell is not None else None
         if isinstance(feed, dict) and feed.get("type"):
             return feed
-        if obs.get("research"):
-            return None
-        if any(is_active(job) and _owns_research(job.get("capability")) for job in jobs):
+        # Bootstrap batches own the lab one hand-funded technology at a time;
+        # the native queue is filled only beside ordinary ``research`` jobs.
+        if any(
+            is_active(job) and _owns_research(job.get("capability")) and job.get("capability") != "research"
+            for job in jobs
+        ):
             return None
         last = getattr(self, "idle_research_tick", None)
         if last is not None and 0 <= obs["tick"] - last < IDLE_RESEARCH_INTERVAL_TICKS:
             return None
         self.idle_research_tick = obs["tick"]
+        if obs.get("research") and self._funded_startup_owner(obs) is not None:
+            return None
+        from .research_queue import queue_action
+
+        plan = self.research_queue_plan(obs, jobs=jobs)
+        return queue_action(obs, plan, reason="keep the native research queue filled") if plan else None
+
+    def research_queue_plan(self, obs, *, first=None, jobs=None):
+        """``research_queue.plan_queue`` steered by the roadmap; ``first`` leads the wanted technologies.
+
+        Empty without a proven automatic lab supply (bootstrap phase).
+        """
         supplied = self.normal_research.supplied_packs(obs)
         if not supplied:
-            return None
+            return []
         from . import progression, research_policy
+        from .research_queue import plan_queue
 
+        if jobs is None:
+            jobs = self._same_world_jobs(obs) or []
         wanted = progression.roadmap_wanted_technologies(jobs, obs.get("technologies") or {})
-        choice = research_policy.choose_research(
+        if first:
+            wanted = [first] + [name for name in wanted if name != first]
+        return plan_queue(
             self.catalog,
             obs,
             wanted_recipes=progression.roadmap_wanted_recipes(jobs, CAPABILITIES),
@@ -689,10 +709,6 @@ class StarterExecutors:
             preferences=research_policy.legacy_upgrade_preferences(),
             supplied_packs=supplied,
         )
-        if choice is None:
-            return None
-        action = self.normal_research.step(obs, {"technology": choice.technology})
-        return action if action.get("type") == "research" else None
 
     def _approved_initial_defense(self, obs, *, maintain_armed=False):
         """Finish an already requested perimeter; never invent a defense job."""

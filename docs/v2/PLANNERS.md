@@ -168,14 +168,58 @@ A lab is never added while a built lab is idle. The startup cell (`industry._ext
 `_grow_cell`) adds no slot lab while research runs and a powered lab is idle without packs.
 Pinned by `tests/test_v2_science_growth.py`, `tests/test_v2_template_power.py`.
 
-## Idle research choice (`research_policy.choose_research`)
+## Native research queue (`research_queue.py`)
+
+The labs never wait between technologies: the game's own research queue is
+kept filled. `plan_queue` (pure) orders up to `RESEARCH_QUEUE_SIZE = 7`
+technologies, current research included:
+
+```
+running research first (never interrupted or switched)
+then unlock paths, prerequisites first, of: roadmap-wanted technologies in roadmap
+  order (next 6 steps, incl. STEP_TECHNOLOGY), technologies unlocking wanted recipes,
+  upgrades.PRIORITIES; then the cheapest finite supplied technology, repeated
+a technology enters only if enabled, not a trigger technology, every prerequisite
+  researched or earlier in the plan, every pack in NormalResearch.supplied_packs
+no supplied packs -> empty plan: nothing is queued
+```
+
+Action `research_queue {technologies}` (`DeterministicGame.act`): writes current
+research, the listed technologies, then the rest of the existing native queue,
+skipping (and reporting in `skipped`) what the force cannot research in that
+order; the receipt `research_queue` is the queue read back. `observe` reports
+`research_queue` beside `research`.
+
+Who writes it:
+- idle lane (`executors.idle_action`, at most every `IDLE_RESEARCH_INTERVAL_TICKS = 600`):
+  when a planned technology is missing and the native queue has room. Skipped
+  while an active bootstrap research-owning job exists (capability other than
+  `research`) or a funded bootstrap batch runs its technology.
+- roadmap `research` step for T (`NormalResearch.step`): T researched -> succeeded;
+  T anywhere in the native queue -> waiting; else one `research_queue` action
+  with T right behind the running research, then the rest of the plan (even when
+  the queue is full of fillers).
+- autopilot proposes no job for a research step whose technology is already in
+  the native queue (`progression._natively_queued`); it is satisfied once researched.
+
+Bootstrap phase: no queue. Finite hand-funded batches (`industry.BootstrapLogistics`,
+`StarterResearch`) pay for exactly one technology's `unit_count`; a queued successor
+would consume leftover packs and the batch accounting, so they keep the one-at-a-time
+`research` action until machine science proves an automatic supply.
+
+Research capacity (`research_capacity.queue_targets`, used by the receipt and
+`science_growth`): current research, then the native queue, then roadmap technologies.
+
+Pinned by `tests/test_v2_research_queue.py`, `tests/test_v2_idle_research.py`.
+
+## Policy preferences (`research_policy.choose_research`)
 
 Rank: (a) first researchable step on the unlock path of a wanted technology
 or recipe (next 6 roadmap steps); (b) same for `upgrades.PRIORITIES`; (c)
 cheapest finite (`unit_count * pack kinds`). Only packs with proven supply
-(`NormalResearch.supplied_packs`), never trigger technologies; at most every
-`IDLE_RESEARCH_INTERVAL_TICKS = 600` (`jobs.py:594`).
-Pinned by `tests/test_v2_research_policy.py`, `tests/test_v2_idle_research.py`.
+(`NormalResearch.supplied_packs`), never trigger technologies. The queue plan
+above uses the same ranking repeatedly.
+Pinned by `tests/test_v2_research_policy.py`.
 
 ## Batching and hand-craft constants (`construction_supply.py`, `industry.py`)
 

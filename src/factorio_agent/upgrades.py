@@ -39,6 +39,6 @@ def next_upgrade(obs, researcher):
         ):
             continue
         result = researcher.step(obs, {"technology": name})
-        if result.get("type") == "research":
+        if result.get("type") in ("research", "research_queue"):
             return result
     return None

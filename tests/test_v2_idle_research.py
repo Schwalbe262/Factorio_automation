@@ -218,7 +218,9 @@ class IdleActionTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         # A plain wait from fuel upkeep is not an action; research selection follows.
         self.executors.bootstrap = SimpleNamespace(maintain_fuel=lambda observation: {"status": "waiting"})
-        self.assertIsNone(self.executors.idle_action(self.obs(research="cheap")))
+        self.assertIsNone(
+            self.executors.idle_action(self.obs(research="cheap", research_queue=["cheap", "drill-tech"]))
+        )
 
     def write_jobs(self, *rows):
         jobs = {f"j{index}": dict(row, world_id="world") for index, row in enumerate(rows)}
@@ -237,22 +239,36 @@ class IdleActionTests(unittest.TestCase):
                 return rows
         raise AssertionError(step_id)
 
-    def test_fallback_starts_cheapest_supplied_research_with_the_research_action_shape(self):
+    def test_fallback_queues_supplied_research_cheapest_first(self):
         action = self.executors.idle_action(self.obs())
-        expected = self.executors.normal_research.step(self.obs(tick=1000), {"technology": "cheap"})
-        self.assertEqual(action, expected)
-        self.assertEqual(action["type"], "research")
-        self.assertEqual(action["technology"], "cheap")
+        self.assertEqual(action["type"], "research_queue")
+        self.assertEqual(action["technologies"], ["cheap", "drill-tech"])
 
-    def test_running_research_gives_none(self):
-        self.assertIsNone(self.executors.idle_action(self.obs(research="cheap")))
+    def test_queue_holding_every_planned_technology_gives_none(self):
+        self.assertIsNone(
+            self.executors.idle_action(self.obs(research="cheap", research_queue=["cheap", "drill-tech"]))
+        )
+
+    def test_running_research_with_a_short_queue_is_refilled_behind_it(self):
+        action = self.executors.idle_action(self.obs(research="cheap", research_queue=["cheap"]))
+        self.assertEqual(action["technologies"], ["drill-tech"])
+
+    def test_full_native_queue_is_not_touched(self):
+        for index in range(7):
+            self.catalog.technologies[f"filler-{index}"] = tech(unit_count=1)
+        queue = [f"filler-{index}" for index in range(7)]
+        self.assertIsNone(self.executors.idle_action(self.obs(research=queue[0], research_queue=queue)))
+
+    def test_active_research_step_job_does_not_stop_the_queue_refill(self):
+        self.write_jobs({"capability": "research", "parameters": {"technology": "x"}, "status": "waiting"})
+        self.assertEqual(self.executors.idle_action(self.obs())["type"], "research_queue")
 
     def test_unresolved_pending_action_gives_none(self):
         self.write_jobs({"capability": "power", "parameters": {}, "status": "running", "pending_action": {}})
         self.assertIsNone(self.executors.idle_action(self.obs()))
 
-    def test_active_job_owning_research_gives_none(self):
-        self.write_jobs({"capability": "research", "parameters": {"technology": "x"}, "status": "waiting"})
+    def test_active_bootstrap_job_owning_research_gives_none(self):
+        self.write_jobs({"capability": "bootstrap_research", "parameters": {"technology": "x"}, "status": "waiting"})
         self.assertIsNone(self.executors.idle_action(self.obs()))
 
     def test_missing_or_foreign_ledger_gives_none(self):
@@ -271,19 +287,19 @@ class IdleActionTests(unittest.TestCase):
         self.assertIsNone(self.executors.idle_action(self.obs()))
         self.green.ok = True
         action = self.executors.idle_action(self.obs(tick=1000 + IDLE_RESEARCH_INTERVAL_TICKS))
-        self.assertEqual(action["technology"], "green-tech")
+        self.assertEqual(action["technologies"], ["green-tech"])
 
     def test_roadmap_recipes_steer_the_choice(self):
         self.write_jobs(*self.roadmap_done_through("bootstrap_logistics"))
         action = self.executors.idle_action(self.obs())
-        self.assertEqual(action["technology"], "drill-tech")
+        self.assertEqual(action["technologies"][0], "drill-tech")
 
     def test_roadmap_research_steps_steer_the_choice(self):
         self.catalog.technologies["steel-processing"] = tech(unit_count=40)
         self.catalog.technologies["logistic-science-pack"] = tech(unit_count=40)
         self.write_jobs(*self.roadmap_done_through("research_logistic_science_pack"))
         action = self.executors.idle_action(self.obs())
-        self.assertEqual(action["technology"], "steel-processing")
+        self.assertEqual(action["technologies"][:2], ["steel-processing", "cheap"])
 
     def test_attempts_are_rate_limited_by_game_tick(self):
         self.assertIsNotNone(self.executors.idle_action(self.obs(tick=1000)))
