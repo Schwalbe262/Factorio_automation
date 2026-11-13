@@ -108,6 +108,30 @@ In this order, against the same entity list (`production_site.py:116-129`):
 | whole-block check | `planning.preflight(game, builder, obs, entities)` (overlap, ore keepout, owned-entity configuration, clearable trees/rocks, no tree cap: `site/nature.py`) |
 | plan | `core.deterministic_builder._plan(entities, ports, reserved_area=..., clear_obstacles=..., clearance_world_id=obs["world_id"], underground_pairs=...)` |
 
+## 4b. When the plan does not fit: return `needs`, declare relaxations
+
+Every spatial planner joins the remedy ladder (`ARCHITECTURE.md` "When a plan
+does not fit: the remedy ladder"):
+
+1. **Return `needs`.** A blocked result names what failed and what would make
+   it fit. Either return `plan_needs` built with `plan_needs.make(kind, reason,
+   item=, from=, to=, blockers=[...], limit="turns 7>6", tried=n,
+   rejected_by={check: count}, change="the single change that unblocks it")`,
+   or keep to the shapes `plan_needs.from_result` already reads (`failures`
+   rows with `source`/`destination`, `candidate_failures`, `route_failures`,
+   `corridor_failures_by_item`, `failed_check`/`first_blocker`). A test asserts
+   `plan_needs.from_result(<capability>, result)["kind"]` for each failure.
+2. **Have a pure `prepare`.** Add a `postmortem.DRY_RUN` entry; only then the
+   ladder can re-plan it read-only (`remedy.what_if`) before a retry.
+3. **Declare relaxations.** Add the planner's rungs to `remedy.RELAXATIONS`
+   (`Rung(name, kind, options, kinds=, cost_seconds=, items=)`, kinds from
+   `remedy.LADDER`) and read them while planning with
+   `remedy.option(name, default)` (or `remedy.scaled_count`,
+   `remedy.route_limits` via `transport.plan_connection`). A relaxation keeps a
+   hard maximum; a rung that spends actor time or items states it
+   (`cost_seconds`, `items`) so wait-vs-spend and the critical path can skip it.
+   Never put remedy options in the job parameters (`validate` rejects them).
+
 ## 5. Persist state, register the block
 
 - One JSON file per instance in `game.cfg.runtime_dir`

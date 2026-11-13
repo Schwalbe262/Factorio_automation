@@ -1,0 +1,596 @@
+"""The remedy ladder: the failure contract (plan_needs), the resolver (remedy) and the supervisor rule."""
+
+from copy import deepcopy
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from factorio_agent import plan_needs, planned_tap, remedy
+from factorio_agent.supervisor import REMEDY_CHECK_SECONDS, REMEDY_RECHECK_SECONDS, CLIError
+
+from test_v2_supervisor import Fixture, job
+
+FIXTURE = Path(__file__).parent / "fixtures" / "remedy_eval_1575138435.json"
+
+
+def cases():
+    return {c["job"]["capability"]: c for c in json.loads(FIXTURE.read_text(encoding="utf-8"))["cases"]}
+
+
+class NeedsContractTests(unittest.TestCase):
+    def test_route_failures_name_both_ends_and_the_change(self):
+        result = {
+            "status": "blocked",
+            "reason": "no_green_science_site_with_clean_connections",
+            "failures": [
+                {
+                    "reason": "no_clean_trunk_corridor",
+                    "item": "logistic-science-pack",
+                    "source": {"x": 64.5, "y": -117.5},
+                    "destination": {"x": 149.5, "y": -66.5},
+                }
+            ],
+        }
+        needs = plan_needs.from_result("logistic_science", result)
+        self.assertEqual(needs["kind"], "route")
+        self.assertEqual((needs["from"], needs["to"]), ([64.5, -117.5], [149.5, -66.5]))
+        self.assertIn("(64.5,-117.5)->(149.5,-66.5)", needs["change"])
+
+    def test_tap_failures_mining_banks_corridors_and_preflight_get_their_kind(self):
+        tap = plan_needs.from_result(
+            "logistic_science",
+            {
+                "status": "blocked",
+                "reason": "no_green_science_site_with_clean_connections",
+                "failures": [
+                    {
+                        "reason": "planned_bus_tap_route_failed",
+                        "item": "iron-plate",
+                        "side": 1,
+                        "failures": [{"reason": "no_clean_trunk_corridor"}] * 3,
+                    }
+                ],
+            },
+        )
+        self.assertEqual((tap["kind"], tap["item"], tap["tried"]), ("tap", "iron-plate", 3))
+        bank = plan_needs.from_result(
+            "mining_outpost",
+            {
+                "status": "blocked",
+                "reason": "no_policy_compliant_paired_bank_with_growth_and_power",
+                "evidence": {
+                    "candidate_failures": ["bank_meets_planned_hardware_of:x"],
+                    "exit_sides_tried": ["E", "N"],
+                    "needs": "planned_hardware_moved:x",
+                },
+            },
+            {"resource": "iron-ore", "rate_per_minute": 300.0},
+        )
+        self.assertEqual(
+            (bank["kind"], bank["resource"], bank["change"]), ("bank", "iron-ore", "planned_hardware_moved:x")
+        )
+        corridor = plan_needs.from_result(
+            "smelting_district",
+            {
+                "status": "blocked",
+                "reason": "no_clear_pcb_smelting_district_with_corridors",
+                "corridor_failures_by_item": {"iron-ore": 4, "coal": 1},
+            },
+        )
+        self.assertEqual((corridor["kind"], corridor["item"]), ("site", "iron-ore"))
+        flight = plan_needs.from_result(
+            "planned_main_bus",
+            {
+                "status": "blocked",
+                "reason": "planned_bus_preflight_failed",
+                "failed_check": "trunk",
+                "first_blocker": {"name": "stone-furnace", "position": {"x": 1, "y": 2}},
+            },
+        )
+        self.assertEqual(flight["kind"], "preflight")
+        self.assertEqual(flight["blockers"][0], {"entity": "stone-furnace", "position": [1.0, 2.0]})
+
+    def test_a_planner_given_record_wins_and_waits_are_no_planning_failure(self):
+        given = plan_needs.from_result(
+            "produce",
+            {
+                "status": "blocked",
+                "reason": "x_route_failed",
+                "plan_needs": {"kind": "route", "item": "gear", "limit": "turns 7>6"},
+            },
+        )
+        self.assertEqual((given["kind"], given["limit"], given["block"]), ("route", "turns 7>6", "produce"))
+        self.assertIsNone(
+            plan_needs.from_result("produce", {"status": "blocked", "reason": "production_row_input_source_missing"})
+        )
+        self.assertIsNone(plan_needs.from_result("power", {"status": "blocked", "reason": "no_minable_resources_left"}))
+
+    def test_signature_is_stable_and_changes_with_the_constraint(self):
+        a = plan_needs.make("route", "no_clean_trunk_corridor", item="iron-plate", **{"from": [1, 2], "to": [3, 4]})
+        b = plan_needs.make(
+            "route", "no_clean_trunk_corridor", item="iron-plate", **{"from": [1, 2], "to": [3, 4]}, tried=9
+        )
+        c = plan_needs.make("route", "no_clean_trunk_corridor", item="copper-plate", **{"from": [1, 2], "to": [3, 4]})
+        self.assertEqual(plan_needs.signature(a), plan_needs.signature(b))
+        self.assertNotEqual(plan_needs.signature(a), plan_needs.signature(c))
+
+
+class ResolverTests(unittest.TestCase):
+    def test_rungs_come_in_ladder_order_once_per_needs_signature(self):
+        needs = plan_needs.make("site", "no_green_science_site_with_clean_connections", block="logistic_science")
+        order, tried = [], []
+        while True:
+            rung, _ = remedy.choose("logistic_science", needs, tried)
+            if rung is None:
+                break
+            order.append(rung.kind)
+            tried = remedy.record(tried, rung, needs, {"fits": False}, 0)
+        self.assertEqual(order, ["replan", "layout", "site", "relax"])
+        self.assertEqual(order, sorted(order, key=remedy.LADDER.index))
+        # A different constraint opens the ladder again.
+        other = plan_needs.make("route", "no_clean_trunk_corridor", item="iron-plate")
+        self.assertEqual(remedy.choose("logistic_science", other, tried)[0].name, "replan")
+        self.assertEqual(
+            remedy.next_remedy("logistic_science", needs, tried), {"rung": None, "wait_for": needs["change"]}
+        )
+
+    def test_rungs_only_meet_their_needs_kinds(self):
+        bank = plan_needs.make("bank", "no_policy_compliant_paired_bank_with_growth_and_power", resource="iron-ore")
+        tried = remedy.record([], remedy.REPLAN, bank, {"fits": False}, 0)
+        self.assertEqual(remedy.choose("mining_outpost", bank, tried)[0].kind, "shrink")
+        route = plan_needs.make("route", "no_clean_trunk_corridor")
+        tried = remedy.record([], remedy.REPLAN, route, {"fits": False}, 0)
+        self.assertIsNone(remedy.choose("mining_outpost", route, tried)[0])
+
+    def test_a_rung_that_would_starve_the_critical_bill_or_costs_more_than_waiting_is_skipped(self):
+        costly = remedy.Rung(
+            "clear:bridge_pole", "clear", {"clear": "pole"}, cost_seconds=90, items={"small-electric-pole": 2}
+        )
+        needs = plan_needs.make("route", "no_clean_trunk_corridor")
+        tried = remedy.record([], remedy.REPLAN, needs, {"fits": False}, 0)
+        with patch.dict(remedy.RELAXATIONS, {"probe": (costly,)}):
+            rung, skipped = remedy.choose(
+                "probe", needs, tried, claimed={"small-electric-pole": {"units": None, "jobs": ["power"]}}
+            )
+            self.assertIsNone(rung)
+            self.assertIn("critical-path", skipped[0]["why"])
+            rung, skipped = remedy.choose("probe", dict(needs, wait_seconds=30), tried)
+            self.assertIsNone(rung)
+            self.assertIn("cheaper", skipped[0]["why"])
+            self.assertEqual(remedy.choose("probe", needs, tried)[0], costly)
+
+    def test_options_are_visible_only_inside_the_remedy(self):
+        self.assertEqual(remedy.scaled_count(8), 8)
+        with remedy.applied({"count_scale": 0.5, "route_relax": 1}):
+            self.assertEqual(remedy.scaled_count(8), 4)
+            self.assertEqual(remedy.route_limits()["long_route_turns"], 12)
+        with remedy.applied({"count_max": 2}):
+            self.assertEqual(remedy.scaled_count(8), 2)
+        self.assertIsNone(remedy.route_limits()["long_route_turns"])
+        self.assertEqual(
+            remedy.merged({"options": {"route_relax": 1}}, remedy.Rung("s", "shrink", {"count_max": 2})),
+            {"route_relax": 1, "count_max": 2},
+        )
+
+    def test_unknown_outcomes_rollbacks_and_deadlines_never_enter(self):
+        base = dict(
+            capability="logistic_science", status="blocked", reason="no_green_science_site_with_clean_connections"
+        )
+        self.assertTrue(remedy.eligible(base))
+        self.assertFalse(remedy.eligible(dict(base, pending_action={"type": "build"})))
+        self.assertFalse(remedy.eligible(dict(base, reason="action_outcome_unknown_reconcile_required")))
+        self.assertFalse(remedy.eligible(dict(base, reason="job_deadline_exceeded")))
+        self.assertFalse(remedy.eligible(dict(base, status="waiting")))
+
+
+class RouteOrderTests(unittest.TestCase):
+    def test_a_failed_input_is_planned_first_once(self):
+        # eval-1575138435: the copper branch (5 tiles) walled off the iron input; iron first fits both.
+        inputs = [{"item": "copper-plate"}, {"item": "iron-plate"}]
+        seen = []
+
+        def fake(*args, inputs, **kwargs):
+            seen.append([p["item"] for p in inputs])
+            if inputs[0]["item"] == "copper-plate":
+                return {"ok": False, "reason": "planned_bus_tap_route_failed", "item": "iron-plate"}
+            return {"ok": True, "routes": [], "taps": [], "entities": [], "ignored_units": [], "sources": {}}
+
+        with patch.object(planned_tap, "_connect_in_order", fake):
+            found = planned_tap.connect_inputs(
+                None, None, {}, {}, owner="o", allocation=None, inputs=inputs, entities=[], demand={}, span=4
+            )
+        self.assertTrue(found["ok"])
+        self.assertEqual(seen, [["copper-plate", "iron-plate"], ["iron-plate", "copper-plate"]])
+        self.assertEqual(found["route_order"], ["iron-plate", "copper-plate"])
+
+    def test_the_order_search_is_bounded(self):
+        calls = []
+
+        def fake(*args, inputs, **kwargs):
+            calls.append(1)
+            return {"ok": False, "reason": "planned_bus_tap_route_failed", "item": inputs[-1]["item"]}
+
+        with patch.object(planned_tap, "_connect_in_order", fake):
+            found = planned_tap.connect_inputs(
+                None,
+                None,
+                {},
+                {},
+                owner="o",
+                allocation=None,
+                inputs=[{"item": "a"}, {"item": "b"}, {"item": "c"}],
+                entities=[],
+                demand={},
+                span=4,
+            )
+        self.assertFalse(found["ok"])
+        self.assertLessEqual(len(calls), 4)
+        self.assertIn("orders_tried", found)
+
+
+class LadderCLI:
+    """FakeCLI extension: ``what-if`` answers from a script, ``retry --remedy`` is recorded."""
+
+    def __init__(self, cli, answers):
+        self.cli, self.answers = cli, answers
+        self.what_ifs = []
+        original = cli.invoke
+
+        def invoke(args, **kwargs):
+            if args[0] == "what-if":
+                rung = args[args.index("--rung") + 1]
+                self.what_ifs.append(rung)
+                answer = self.answers(rung, json.loads(args[args.index("--options") + 1]))
+                if isinstance(answer, Exception):
+                    raise answer
+                return dict(answer, check={"rung": rung, "signature": self.signature(args), "fits": answer.get("fits")})
+            if args[0] == "retry" and "--remedy" in args:
+                rung = json.loads(args[args.index("--remedy") + 1])
+                job = cli.jobs[args[args.index("--key") + 1]]
+                result = original(args[:3], **kwargs)
+                cli.calls[-1] = list(args)
+                job["remedy"] = rung
+                return result
+            return original(args, **kwargs)
+
+        cli.invoke = invoke
+
+    def signature(self, args):
+        key = args[args.index("--key") + 1]
+        return plan_needs.signature(remedy.needs_of(self.cli.jobs[key]))
+
+
+class LadderFixture(Fixture):
+    def blocked(self, key, capability, reason, evidence=None, parameters=None):
+        self.cli.jobs[key] = job(
+            key,
+            capability,
+            status="blocked",
+            reason=reason,
+            evidence=evidence or {},
+            blocked_at_time=self.clock(),
+            **({} if parameters is None else {}),
+        )
+        if parameters is not None:
+            self.cli.jobs[key]["parameters"] = parameters
+        self.s.work.data["nodes"].append(
+            dict(
+                id="auto_" + key,
+                capability=capability,
+                parameters=deepcopy(self.cli.jobs[key]["parameters"]),
+                depends_on=[],
+                priority=0,
+                job_key=key,
+                status="blocked",
+                submitted=True,
+                created_at=0,
+            )
+        )
+
+    def retries(self):
+        return [c for c in self.cli.calls if c[0] == "retry"]
+
+
+class SupervisorLadderTests(LadderFixture):
+    def test_the_first_fitting_rung_is_applied_by_a_retry_one_check_per_cycle(self):
+        self.s.max_seconds = None
+        ladder = LadderCLI(
+            self.cli,
+            lambda rung, options: {
+                "fits": rung == "layout:next_form",
+                "reason": "plan" if rung == "layout:next_form" else "no",
+            },
+        )
+        self.blocked("green", "logistic_science", "no_green_science_site_with_clean_connections")
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))  # the block itself was the plain re-plan
+        self.assertEqual(ladder.what_ifs, [])
+        self.clock.advance(REMEDY_CHECK_SECONDS + 1)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(ladder.what_ifs, ["layout:next_form"])
+        retry = self.retries()[-1]
+        self.assertEqual(json.loads(retry[retry.index("--remedy") + 1])["options"], {"layout_rotate": 1})
+        node = self.s.work.node_for_job("green")
+        self.assertEqual(node["needs"]["kind"], "site")
+        self.assertEqual(node["retry_plan"]["next_remedy"]["rung"], "site:longer_connection")
+
+    def test_a_spent_ladder_waits_for_new_facts_or_the_recheck_period(self):
+        self.s.max_seconds = None
+        ladder = LadderCLI(self.cli, lambda rung, options: {"fits": False, "reason": "no"})
+        self.blocked(
+            "mine",
+            "mining_outpost",
+            "no_policy_compliant_paired_bank_with_growth_and_power",
+            {"candidate_failures": [], "exit_sides_tried": ["E", "N", "S", "W"]},
+            {"resource": "iron-ore", "rate_per_minute": 300.0},
+        )
+        for _ in range(6):
+            self.clock.advance(REMEDY_CHECK_SECONDS + 1)
+            self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(ladder.what_ifs, ["shrink:half_drills", "shrink:two_drills"])
+        plan = self.s.work.node_for_job("mine")["retry_plan"]
+        self.assertIsNone(plan["rung"])
+        self.assertIn("bank anchor", plan["wait_for"])
+        self.assertEqual(self.retries(), [])
+        self.clock.advance(REMEDY_RECHECK_SECONDS)
+        self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(ladder.what_ifs[-1], "replan")
+
+    def test_a_deferred_retry_keeps_the_confirmed_rung_and_an_error_is_no_fit(self):
+        self.s.max_seconds = None
+        answers = iter([CLIError("what-if broke"), {"fits": True, "reason": "plan"}])
+        ladder = LadderCLI(self.cli, lambda rung, options: next(answers))
+        self.blocked(
+            "coal",
+            "mining_outpost",
+            "no_policy_compliant_paired_bank_with_growth_and_power",
+            {"attempted_banks": 1, "candidate_count": 1},
+            {"resource": "coal", "rate_per_minute": 60.0},
+        )
+        self.s._auto_retry(self.s._snapshot())  # the block itself was the plain re-plan
+        self.clock.advance(REMEDY_CHECK_SECONDS + 1)
+        self.s._auto_retry(self.s._snapshot())  # error: fits None -> applied by a retry like before
+        self.assertEqual(len(self.retries()), 1)
+        self.cli.jobs["coal"].update(
+            status="blocked",
+            reason="no_policy_compliant_paired_bank_with_growth_and_power",
+            blocked_at_time=self.clock(),
+        )
+        self.cli.jobs["busy"] = job("busy", "mining_outpost", status="waiting")
+        self.s._auto_retry(self.s._snapshot())  # the new block is seen
+        self.clock.advance(REMEDY_CHECK_SECONDS + 1)
+        refused = self.cli.invoke
+
+        def slot(args, **kwargs):
+            if args[0] == "retry":
+                raise CLIError("mining_outpost is already active")
+            return refused(args, **kwargs)
+
+        self.cli.invoke = slot
+        self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(len(ladder.what_ifs), 2)
+        self.cli.invoke = refused
+        del self.cli.jobs["busy"]
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))  # no new what-if: the confirmed rung retries
+        self.assertEqual(len(ladder.what_ifs), 2)
+
+    def test_unknown_outcomes_and_waits_stay_with_the_old_rules(self):
+        LadderCLI(self.cli, lambda rung, options: {"fits": True})
+        self.blocked("lost", "logistic_science", "action_outcome_unknown_reconcile_required")
+        self.cli.jobs["lost"]["pending_action"] = {"type": "build"}
+        self.clock.advance(REMEDY_RECHECK_SECONDS * 3)
+        self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(self.retries(), [])
+
+
+class LiveCaseTests(LadderFixture):
+    """eval-1575138435 (75 game min): three jobs blocked 25+ minutes; the post-mortem dry run fitted all three."""
+
+    def test_recorded_evidence_names_the_constraint(self):
+        found = cases()
+        green = found["logistic_science"]
+        failed = [r for r in green["routes"] if r["ok"] is False]
+        self.assertEqual(failed[0]["item"], "iron-plate")
+        self.assertEqual(
+            (failed[0]["source"], failed[0]["destination"]), ({"x": 80.5, "y": -95.5}, {"x": 77.5, "y": -90.5})
+        )
+        # The copper tap was routed first and is 5 tiles long; every iron tap row then had no corridor.
+        self.assertEqual(green["routes"][0]["item"], "copper-plate")
+        self.assertEqual(green["routes"][0]["route_metrics"]["length"], 5)
+        self.assertTrue(green["routes"][-1]["ok"])  # the third site fitted: a plain re-plan resolves it
+        mine = found["mining_outpost"]
+        self.assertEqual([a["side"] for a in mine["bank_attempts"]], ["E", "N"])
+        self.assertEqual([a["ok"] for a in mine["bank_attempts"]], [False, True])
+        self.assertEqual(mine["dry_run_relaxed"], "single_pair_no_growth")
+        self.assertTrue(found["dedicated_materials"]["dry_run_ok"])
+
+    def test_each_live_job_is_resolved_by_the_replan_rung(self):
+        self.s.max_seconds = None
+        ladder = LadderCLI(self.cli, lambda rung, options: {"fits": rung == "replan", "reason": "plan"})
+        for name, case in cases().items():
+            row = case["job"]
+            self.blocked(name, row["capability"], row["reason"], row["evidence"], row["parameters"])
+            self.cli.jobs[name]["blocked_at_time"] = self.clock() - 1500  # blocked 25 min before this supervisor
+        # A supervisor started after the block: no remedy history, the needs derived from the ledger row.
+        for name in cases():
+            self.s.__dict__.setdefault("_remedy", {})[name] = {
+                "tried": [],
+                "last": 0.0,
+                "facts": None,
+                "checks": 0,
+                "blocked_at": self.cli.jobs[name]["blocked_at_time"],
+            }
+        for _ in range(3):
+            self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(ladder.what_ifs, ["replan", "replan", "replan"])
+        self.assertEqual(sorted(c[2] for c in self.retries()), sorted(cases()))
+        self.assertTrue(all(json.loads(c[c.index("--remedy") + 1])["rung"] == "replan" for c in self.retries()))
+
+
+class WhatIfTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        (self.root / "pcb-board.json").write_text("{}", encoding="utf-8")
+        from test_v2_postmortem import FakeLive
+
+        self.live = FakeLive(self.root)
+
+    def run_with(self, prepare, options):
+        from types import SimpleNamespace
+
+        bus = SimpleNamespace(prepare=prepare)
+        job = dict(
+            capability="planned_main_bus", parameters={}, status="blocked", reason="planned_bus_feed_route_failed"
+        )
+        return remedy.what_if(
+            self.root,
+            self.live,
+            None,
+            job,
+            options,
+            executors_factory=lambda game, catalog: SimpleNamespace(planned_bus=bus),
+        )
+
+    def test_the_planner_sees_the_rung_options_and_the_run_is_untouched(self):
+        def prepare(obs):
+            (self.root / "x").exists()
+            return (
+                {"ok": True}
+                if remedy.option("route_relax") == 1
+                else {
+                    "ok": False,
+                    "reason": "planned_bus_feed_route_failed",
+                    "route_failures": [{"item": "iron-plate", "reason": "no_clean_trunk_corridor"}],
+                }
+            )
+
+        before = sorted(p.name for p in self.root.iterdir())
+        no = self.run_with(prepare, {})
+        self.assertIs(no["fits"], False)
+        self.assertEqual(no["needs"]["kind"], "route")
+        yes = self.run_with(prepare, {"route_relax": 1})
+        self.assertIs(yes["fits"], True)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), before)
+        self.assertEqual(self.live.writes, [])
+
+    def test_a_planner_that_would_act_has_no_answer(self):
+        def prepare(obs):
+            return remedy_game[0].act({"type": "build"})
+
+        remedy_game = []
+        from types import SimpleNamespace
+
+        def factory(game, catalog):
+            remedy_game.append(game)
+            return SimpleNamespace(planned_bus=SimpleNamespace(prepare=prepare))
+
+        job = dict(
+            capability="planned_main_bus", parameters={}, status="blocked", reason="planned_bus_feed_route_failed"
+        )
+        out = remedy.what_if(self.root, self.live, None, job, {}, executors_factory=factory)
+        self.assertIsNone(out["fits"])
+        self.assertIn("read_only_violation", out["reason"])
+        self.assertEqual(self.live.writes, [])
+
+
+class LedgerTests(unittest.TestCase):
+    def test_retry_with_a_remedy_records_it_and_note_remedy_writes_only_ladder_fields(self):
+        from factorio_agent import jobs
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ledger = {
+                "schema_version": 2,
+                "world_id": "w",
+                "last_tick": 100,
+                "jobs": {
+                    "k": dict(
+                        key="k",
+                        world_id="w",
+                        capability="logistic_science",
+                        parameters={"rate_per_minute": 30},
+                        status="blocked",
+                        reason="no_green_science_site_with_clean_connections",
+                        blocked_at_tick=90,
+                        blocked_at_time=1.0,
+                        created_tick=1,
+                        last_tick=90,
+                        progress_at_tick=90,
+                        progress_at_time=1.0,
+                        needs={"kind": "site"},
+                    )
+                },
+            }
+            (root / "jobs.json").write_text(json.dumps(ledger), encoding="utf-8")
+            (root / "job-events.jsonl").write_text("", encoding="utf-8")
+            jobs.note_remedy(
+                root, "k", check={"rung": "replan", "fits": False}, next_remedy={"rung": "layout:next_form"}
+            )
+
+            class Game:
+                def observe(self):
+                    return {"ok": True, "world_id": "w", "tick": 120}
+
+            with patch.object(jobs.Ledger, "sync", lambda self, obs: None):
+                jobs.control(
+                    root,
+                    Game(),
+                    "k",
+                    "retry",
+                    remedy_rung={"rung": "layout:next_form", "kind": "layout", "options": {"layout_rotate": 1}},
+                )
+            row = json.loads((root / "jobs.json").read_text(encoding="utf-8"))["jobs"]["k"]
+            self.assertEqual(row["remedy"]["options"], {"layout_rotate": 1})
+            self.assertEqual(row["remedies_tried"][0]["rung"], "replan")
+            self.assertEqual(row["next_remedy"], {"rung": "layout:next_form"})
+            events = [json.loads(line)["event"] for line in (root / "job-events.jsonl").read_text().splitlines()]
+            self.assertIn("remedy_checked", events)
+            self.assertIn("remedy_applied", events)
+            with self.assertRaises(ValueError):
+                jobs.control(root, Game(), "k", "pause", remedy_rung={"options": {}})
+
+
+class WasteReportTests(unittest.TestCase):
+    def test_blocked_seconds_per_needs_kind_and_resolved_rungs(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "waste_report_t", Path(__file__).parents[1] / "tools" / "waste_report.py"
+        )
+        waste = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(waste)
+        events = [
+            {
+                "key": "g",
+                "event": "terminal",
+                "status": "blocked",
+                "reason": "no_x",
+                "tick": 600,
+                "needs": {"kind": "route"},
+            },
+            {"key": "g", "event": "remedy_checked", "rung": "relax:route_turns_max", "fits": True, "tick": 1200},
+            {"key": "g", "event": "remedy_applied", "rung": "relax:route_turns_max", "tick": 1200},
+            {"key": "g", "event": "retry", "tick": 1200},
+            {"key": "g", "event": "terminal", "status": "succeeded", "tick": 3000},
+            {
+                "key": "m",
+                "event": "terminal",
+                "status": "blocked",
+                "reason": "no_bank",
+                "tick": 600,
+                "needs": {"kind": "bank"},
+            },
+        ]
+        out = waste.remedy_summary(events, 6600)
+        self.assertEqual(out["blocked_by_needs_kind"]["route"], {"seconds": 10.0, "blocks": 1})
+        self.assertEqual(out["blocked_by_needs_kind"]["bank"], {"seconds": 100.0, "blocks": 1})
+        self.assertEqual(
+            out["rungs"]["relax:route_turns_max"], {"checked": 1, "fitted": 1, "applied": 1, "resolved": 1}
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

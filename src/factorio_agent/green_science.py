@@ -18,7 +18,7 @@ from .science import nominal_plate_supply
 from .science_growth import built_labs
 from .plate_supply import bus_budget, plate_bus
 from .planned_tap import tap_budget
-from . import planned_tap
+from . import planned_tap, remedy
 from .smelting import merge_entities
 from .site.placement import allocated_placements, settle
 from .site.transform import Transform, apply as apply_transform, in_canonical, plan_transform
@@ -139,6 +139,8 @@ def planned_green_layouts(site, world_id, catalog, lab_port, *, rate, tick=None,
     index, pool = selection.choose(
         [o["score"] for o in options], config, selection.seed_for(world_id, "logistic_science")
     )
+    # Remedy ladder rung "layout:next_form" (remedy.RELAXATIONS): the next form is tried first.
+    index = (index + int(remedy.option("layout_rotate", 0) or 0)) % len(options)
     chosen = options[index]
     found = []
     for option in [chosen] + [o for o in options if o is not chosen]:

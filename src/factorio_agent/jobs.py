@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
+from factorio_agent import plan_needs, remedy
 from factorio_agent.early_start import (
     EARLY_FREE_SLOTS,
     admission_requires,
@@ -520,7 +521,26 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "feed_head_rework": obs.get("feed_head_rework"),
         "capabilities": CAPABILITIES,
         "jobs": [
-            {k: v for k, v in job.items() if k in {"key", "capability", "status", "reason", "actions", "last_tick"}}
+            {
+                **{
+                    k: v
+                    for k, v in job.items()
+                    if k in {"key", "capability", "status", "reason", "actions", "last_tick"}
+                },
+                # The remedy ladder (remedy.py): what failed, what was tried, what comes next.
+                **{
+                    k: job[k] for k in ("needs", "next_remedy", "remedy") if job.get(k) and job["status"] != "succeeded"
+                },
+                **(
+                    {
+                        "remedies_tried": [
+                            {k: t.get(k) for k in ("rung", "fits", "reason")} for t in job["remedies_tried"][-6:]
+                        ]
+                    }
+                    if job.get("remedies_tried") and job["status"] != "succeeded"
+                    else {}
+                ),
+            }
             for job in ledger.data["jobs"].values()
         ],
         "rocket_launch_verified": False,
@@ -653,9 +673,13 @@ def submit(root: Path, game, request: Request, *, priority: int = 0) -> dict:
         return job
 
 
-def control(root: Path, game, key: str, operation: str) -> dict:
+def control(root: Path, game, key: str, operation: str, *, remedy_rung: dict | None = None) -> dict:
+    """Pause/resume/reconcile/retry one job. ``remedy_rung`` (retry only, the remedy ladder):
+    ``{"rung", "kind", "options"}`` becomes the job's active ``remedy`` (its planner reads the options)."""
     if operation not in {"pause", "resume", "reconcile", "retry"}:
         raise ValueError("unsupported job control")
+    if remedy_rung is not None and (operation != "retry" or not isinstance(remedy_rung.get("options"), dict)):
+        raise ValueError("a remedy rung is applied by a retry with an options object")
     with RunLock(root / "writer.lock"):
         ledger = Ledger(root)
         observation = game.observe()
@@ -729,6 +753,22 @@ def control(root: Path, game, key: str, operation: str) -> dict:
                 job.pop("blocked_at_tick", None)
                 job.pop("blocked_at_time", None)
                 ledger.event(key, "retry_requested", old_reason=job["reason"], tick=ledger.data["last_tick"])
+                if remedy_rung is not None:
+                    row = {
+                        "rung": str(remedy_rung.get("rung"))[:60],
+                        "kind": str(remedy_rung.get("kind"))[:20],
+                        "options": dict(remedy_rung["options"]),
+                        "needs_kind": (job.get("needs") or {}).get("kind"),
+                        "tick": ledger.data["last_tick"],
+                    }
+                    job["remedy"] = row
+                    job["remedies_applied"] = (job.get("remedies_applied") or [])[-11:] + [row]
+                    ledger.event(
+                        key,
+                        "remedy_applied",
+                        rung_kind=row["kind"],
+                        **{k: v for k, v in row.items() if k != "kind"},
+                    )
             if operation == "resume":
                 if "paused_at_tick" not in job:
                     # Upgrade receipts created before pause-budget accounting.
@@ -769,6 +809,36 @@ def control(root: Path, game, key: str, operation: str) -> dict:
         ledger.save()
         ledger.event(key, operation, status=job["status"], tick=ledger.data["last_tick"])
         return job
+
+
+def note_remedy(
+    root: Path, key: str, *, check: dict | None, next_remedy: dict | None, needs: dict | None = None
+) -> dict:
+    """Record one remedy-ladder check on a blocked job (``remedies_tried``, ``next_remedy``; a what-if's
+    fresher ``needs``). Writes only these fields of a job that is still blocked; never acts."""
+    with RunLock(root / "writer.lock"):
+        ledger = Ledger(root)
+        job = ledger.data["jobs"].get(key)
+        if job is None:
+            raise ValueError("unknown job key")
+        if job["status"] != "blocked":
+            return {"key": key, "status": job["status"], "noted": False}
+        if check:
+            job["remedies_tried"] = (job.get("remedies_tried") or [])[-23:] + [check]
+        if next_remedy is not None:
+            job["next_remedy"] = next_remedy
+        if needs:
+            job["needs"] = needs
+        ledger.save()
+        if check:
+            ledger.event(
+                key,
+                "remedy_checked",
+                tick=ledger.data.get("last_tick"),
+                rung_kind=check.get("kind"),
+                **{k: check.get(k) for k in ("rung", "fits", "needs_kind", "reason", "seconds")},
+            )
+        return {"key": key, "status": job["status"], "noted": True}
 
 
 IDLE_RESEARCH_INTERVAL_TICKS = 600
@@ -931,7 +1001,9 @@ def _advance_job(
         return "terminal", {}
     started = time.perf_counter()
     try:
-        result = executors.step(job["capability"], obs if view is None else view, job["parameters"])
+        # A rung of the remedy ladder (job["remedy"], set by a retry) plans with its options.
+        with remedy.applied((job.get("remedy") or {}).get("options")):
+            result = executors.step(job["capability"], obs if view is None else view, job["parameters"])
         if guard is not None and result.get("type"):
             result = guard(result) or result
     except PLANNER_FAULTS as exc:
@@ -1036,10 +1108,31 @@ def _advance_job(
             )
     ledger.save()
     if job["status"] in TERMINAL:
+        extra = {}
         if job["status"] == "blocked":
             job.update(blocked_at_tick=obs["tick"], blocked_at_time=time.time())
-            ledger.save()
-        ledger.event(key, "terminal", status=job["status"], reason=job["reason"], evidence=job["evidence"])
+        if job["status"] in ("blocked", "failed"):
+            # The failure contract (plan_needs): what failed and what would make it fit.
+            needs = plan_needs.from_result(job["capability"], result, job.get("parameters")) if result else None
+            if needs:
+                job["needs"] = needs
+                job.pop("next_remedy", None)
+                extra = {"needs": {k: needs.get(k) for k in ("kind", "reason", "item", "change")}}
+            else:
+                job.pop("needs", None)
+        else:
+            job.pop("needs", None)
+            job.pop("next_remedy", None)
+        ledger.save()
+        ledger.event(
+            key,
+            "terminal",
+            status=job["status"],
+            reason=job["reason"],
+            evidence=job["evidence"],
+            tick=obs["tick"],
+            **extra,
+        )
         return "terminal", result
     return ("action" if result.get("type") else "status"), result
 

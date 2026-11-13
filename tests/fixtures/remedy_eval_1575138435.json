@@ -1,0 +1,290 @@
+{
+ "source": "20261114-011129-t336751",
+ "world_tick": 336751,
+ "cases": [
+  {
+   "job": {
+    "key": "lunaq_38357c5bbc34ab35d67d69494cfc7caf7a17bb34142af7f1",
+    "capability": "dedicated_materials",
+    "parameters": {
+     "resource": "coal"
+    },
+    "status": "blocked",
+    "reason": "no_policy_compliant_paired_bank_with_growth_and_power",
+    "evidence": {
+     "attempted_banks": 1,
+     "candidate_count": 1
+    },
+    "blocked_at_tick": 249361
+   },
+   "probe_tick": 336751,
+   "cause": "step: would act now: take_full_magazines (normally collect full magazines from the commissioned exact ammo buffer)",
+   "dry_run_mode": "prepare",
+   "dry_run_ok": true,
+   "dry_run_reason": null,
+   "dry_run_relaxed": null,
+   "dry_run_count": null,
+   "routes": [],
+   "bank_attempts": [
+    {
+     "side": null,
+     "ok": true,
+     "reason": null,
+     "candidate_count": null,
+     "attempts": null
+    }
+   ]
+  },
+  {
+   "job": {
+    "key": "lunaq_6586b58c42e9e579854e8d9ecfa8177c61486716b4268678",
+    "capability": "logistic_science",
+    "parameters": {
+     "rate_per_minute": 30
+    },
+    "status": "blocked",
+    "reason": "no_green_science_site_with_clean_connections",
+    "evidence": {},
+    "blocked_at_tick": 249361
+   },
+   "probe_tick": 336751,
+   "cause": "route iron-plate (80.5,-95.5)->(77.5,-90.5): no_clean_trunk_corridor [nothing there now]",
+   "dry_run_mode": "step",
+   "dry_run_ok": null,
+   "dry_run_reason": "collect live construction stocks copper-plate",
+   "dry_run_relaxed": null,
+   "dry_run_count": null,
+   "routes": [
+    {
+     "item": "copper-plate",
+     "source": {
+      "x": 80.5,
+      "y": -90.5
+     },
+     "destination": {
+      "x": 77.5,
+      "y": -88.5
+     },
+     "ok": true,
+     "reason": "",
+     "route_metrics": {
+      "length": 5,
+      "turns": 2,
+      "manhattan_distance": 5.0,
+      "detour_ratio": 1.0
+     }
+    },
+    {
+     "item": "iron-plate",
+     "source": {
+      "x": 80.5,
+      "y": -95.5
+     },
+     "destination": {
+      "x": 77.5,
+      "y": -90.5
+     },
+     "ok": false,
+     "reason": "no_clean_trunk_corridor",
+     "route_metrics": null
+    },
+    {
+     "item": "iron-plate",
+     "source": {
+      "x": 80.5,
+      "y": -96.5
+     },
+     "destination": {
+      "x": 77.5,
+      "y": -90.5
+     },
+     "ok": false,
+     "reason": "no_clean_trunk_corridor",
+     "route_metrics": null
+    },
+    {
+     "item": "iron-plate",
+     "source": {
+      "x": 80.5,
+      "y": -97.5
+     },
+     "destination": {
+      "x": 77.5,
+      "y": -90.5
+     },
+     "ok": false,
+     "reason": "no_clean_trunk_corridor",
+     "route_metrics": null
+    },
+    {
+     "item": "copper-plate",
+     "source": {
+      "x": 80.5,
+      "y": -106.5
+     },
+     "destination": {
+      "x": 77.5,
+      "y": -106.5
+     },
+     "ok": true,
+     "reason": "",
+     "route_metrics": {
+      "length": 3,
+      "turns": 0,
+      "manhattan_distance": 3.0,
+      "detour_ratio": 1.0
+     }
+    },
+    {
+     "item": "iron-plate",
+     "source": {
+      "x": 80.5,
+      "y": -111.5
+     },
+     "destination": {
+      "x": 77.5,
+      "y": -108.5
+     },
+     "ok": true,
+     "reason": "",
+     "route_metrics": {
+      "length": 6,
+      "turns": 2,
+      "manhattan_distance": 6.0,
+      "detour_ratio": 1.0
+     }
+    },
+    {
+     "item": "logistic-science-pack",
+     "source": {
+      "x": 64.5,
+      "y": -117.5
+     },
+     "destination": {
+      "x": 149.5,
+      "y": -66.5
+     },
+     "ok": false,
+     "reason": "no_clean_trunk_corridor",
+     "route_metrics": null
+    },
+    {
+     "item": "copper-plate",
+     "source": {
+      "x": 111.5,
+      "y": -127.5
+     },
+     "destination": {
+      "x": 114.5,
+      "y": -127.5
+     },
+     "ok": true,
+     "reason": "",
+     "route_metrics": {
+      "length": 3,
+      "turns": 0,
+      "manhattan_distance": 3.0,
+      "detour_ratio": 1.0
+     }
+    },
+    {
+     "item": "iron-plate",
+     "source": {
+      "x": 111.5,
+      "y": -134.5
+     },
+     "destination": {
+      "x": 114.5,
+      "y": -125.5
+     },
+     "ok": true,
+     "reason": "",
+     "route_metrics": {
+      "length": 12,
+      "turns": 2,
+      "manhattan_distance": 12.0,
+      "detour_ratio": 1.0
+     }
+    },
+    {
+     "item": "logistic-science-pack",
+     "source": {
+      "x": 127.5,
+      "y": -116.5
+     },
+     "destination": {
+      "x": 149.5,
+      "y": -66.5
+     },
+     "ok": true,
+     "reason": "",
+     "route_metrics": {
+      "length": 74,
+      "turns": 2,
+      "manhattan_distance": 72.0,
+      "detour_ratio": 1.0277777777777777
+     }
+    }
+   ],
+   "bank_attempts": []
+  },
+  {
+   "job": {
+    "key": "lunaq_c768dceb22f6f1bf3e7dbfab3ea4a1c11eae9d4b003adea2",
+    "capability": "mining_outpost",
+    "parameters": {
+     "rate_per_minute": 300.0,
+     "resource": "iron-ore"
+    },
+    "status": "blocked",
+    "reason": "no_policy_compliant_paired_bank_with_growth_and_power",
+    "evidence": {
+     "candidate_failures": [],
+     "exit_sides_tried": [
+      "E",
+      "N",
+      "S",
+      "W"
+     ]
+    },
+    "blocked_at_tick": 226169
+   },
+   "probe_tick": 336751,
+   "cause": "mining bank iron-ore side E: 0 candidates on 1034 patch tiles, failures none (no candidate site)",
+   "dry_run_mode": "prepare",
+   "dry_run_ok": true,
+   "dry_run_reason": null,
+   "dry_run_relaxed": "single_pair_no_growth",
+   "dry_run_count": 8,
+   "routes": [],
+   "bank_attempts": [
+    {
+     "side": "E",
+     "ok": false,
+     "reason": "no_policy_compliant_paired_bank_with_growth_and_power",
+     "candidate_count": 0,
+     "attempts": [
+      {
+       "candidates": 0
+      },
+      {
+       "relaxed": "no_growth_pair",
+       "candidates": 0
+      },
+      {
+       "relaxed": "single_pair_no_growth",
+       "candidates": 0
+      }
+     ]
+    },
+    {
+     "side": "N",
+     "ok": true,
+     "reason": null,
+     "candidate_count": null,
+     "attempts": null
+    }
+   ]
+  }
+ ]
+}

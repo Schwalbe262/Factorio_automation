@@ -25,6 +25,7 @@ from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane, slot_group, slo
 from factorio_agent.early_start import admission_requires
 from factorio_agent import incidents as incident_rules
 from factorio_agent import actor_client
+from factorio_agent import plan_needs, remedy
 
 
 STATE_FILE = Path("logs/controller-state.json")
@@ -76,6 +77,16 @@ SITE_RETRY_MARKERS = (
 )
 SITE_RETRY_CHANGE_SECONDS = 300
 SITE_RETRY_PERIOD_SECONDS = 900
+# Remedy ladder (remedy.py, _remedy_ladder): one read-only what-if per cycle, per job at most every
+# REMEDY_CHECK_SECONDS; with every rung spent, "replan" again after REMEDY_FACTS_SECONDS once the
+# published facts changed, else after REMEDY_RECHECK_SECONDS (eval-1575138435: three jobs blocked
+# 25+ min whose plain re-plan fitted again; their reasons were no re-planning blockers and their
+# three retries were spent within 7 minutes).
+REMEDY_CHECK_SECONDS = 60
+REMEDY_FACTS_SECONDS = 120
+REMEDY_RECHECK_SECONDS = 300
+REMEDY_MAX_CHECKS = 12
+REMEDY_BUDGET_SECONDS = remedy.WHAT_IF_SECONDS
 SITE_RETRY_FACT_FILES = ("pcb-board.json", "material-sources.json", "site-plan.json")
 
 
@@ -1742,9 +1753,12 @@ class Supervisor:
         jobs = list(context[1].get("jobs", {}).values())
         done = [job.get("capability") for job in jobs if job["status"] == "succeeded"]
         memory = self.__dict__.setdefault("_auto_retries", {})
-        retried = False
+        # Planning failures with needs and a pure planner walk the remedy ladder instead.
+        on_ladder, retried = self._remedy_ladder(context)
         for job in jobs:
             key = job["key"]
+            if key in on_ladder:
+                continue
             if job["status"] != "blocked":
                 # Keep the count while the job is merely running again, so a job
                 # that keeps blocking cannot be retried without limit.
@@ -1812,6 +1826,162 @@ class Supervisor:
             # (fleet auto-1113-1708 seed 1054430559: the belt row's retry after the bus was
             # deferred for a slot and never came back).
         return retried
+
+    def _remedy_ladder(self, context) -> tuple[set, bool]:
+        """Walk the remedy ladder (``remedy.py``) for blocked planning failures; returns (keys, retried).
+
+        A blocked job with ``needs`` whose capability has a pure planner (``remedy.dry_runs``) is
+        owned by the ladder: at most one read-only what-if per cycle, one per job every
+        REMEDY_CHECK_SECONDS, each rung once per needs signature, at most REMEDY_MAX_CHECKS checks
+        before the facts change. A rung whose what-if yields a plan is applied by ``retry --remedy``
+        (a deferred admission keeps it confirmed for the next cycle). With every rung spent the
+        job stays blocked; ``replan`` is re-armed after REMEDY_FACTS_SECONDS once the published
+        facts (``_site_facts``) changed, else after REMEDY_RECHECK_SECONDS. Unknown outcomes,
+        rollbacks and deadlines never enter (``remedy.eligible``).
+        """
+        jobs = list(context[1].get("jobs", {}).values())
+        memory = self.__dict__.setdefault("_remedy", {})
+        planners = remedy.dry_runs()
+        owned, retried, checked = set(), False, False
+        now = self.clock()
+        for key in [k for k, job in context[1].get("jobs", {}).items() if job.get("status") == "succeeded"]:
+            memory.pop(key, None)
+        rows = [j for j in jobs if remedy.eligible(j) and j.get("capability") in planners]
+        rows.sort(key=lambda j: -(j.get("priority") or 0))
+        for job in rows:
+            key, capability, needs = job["key"], job["capability"], remedy.needs_of(job)
+            owned.add(key)
+            state = memory.setdefault(
+                key, {"tried": list(job.get("remedies_tried") or []), "last": 0.0, "facts": None, "checks": 0}
+            )
+            if state.get("blocked_at") != job.get("blocked_at_time"):
+                # A fresh block is itself the plain re-plan's answer for these needs.
+                state.update(blocked_at=job.get("blocked_at_time"), confirmed=None, last=now)
+                state["tried"] = remedy.record(
+                    state["tried"], remedy.REPLAN, needs, {"fits": False, "reason": "blocked"}, now
+                )
+            if state.get("confirmed"):
+                if self._remedy_retry(job, state["confirmed"]):
+                    state["confirmed"] = None
+                    retried = True
+                continue
+            if checked or now - state["last"] < REMEDY_CHECK_SECONDS:
+                continue
+            facts = self._site_facts(context[0])
+            changed = state["facts"] is not None and facts != state["facts"]
+            if changed:
+                state["checks"] = 0
+            rung, skipped = remedy.choose(capability, needs, state["tried"], claimed=self._critical_claims(context))
+            if rung is None or state["checks"] >= REMEDY_MAX_CHECKS:
+                wait = REMEDY_FACTS_SECONDS if changed else REMEDY_RECHECK_SECONDS
+                if now - state["last"] < wait:
+                    self._remedy_wait(job, needs, state, wait, skipped)
+                    continue
+                sig = plan_needs.signature(needs)
+                state["tried"] = [
+                    t for t in state["tried"] if not (t.get("rung") == "replan" and t.get("signature") == sig)
+                ]
+                rung = remedy.REPLAN
+            options = remedy.merged(job.get("remedy"), rung)
+            following = remedy.next_remedy(
+                capability, needs, state["tried"] + [{"rung": rung.name, "signature": plan_needs.signature(needs)}]
+            )
+            try:
+                receipt = self.cli.invoke(
+                    [
+                        "what-if",
+                        "--key",
+                        key,
+                        "--rung",
+                        rung.name,
+                        "--kind",
+                        rung.kind,
+                        "--options",
+                        remedy.dumps(options),
+                        "--seconds",
+                        str(REMEDY_BUDGET_SECONDS),
+                        "--next",
+                        json.dumps(following),
+                    ]
+                )
+            except CLIError as exc:
+                receipt = {"fits": None, "reason": "what_if_error: " + str(exc)[:160]}
+            checked = True
+            state.update(last=self.clock(), facts=facts, checks=state["checks"] + 1)
+            check = receipt.get("check") or {"rung": rung.name, "signature": plan_needs.signature(needs)}
+            state["tried"] = (state["tried"] + [check])[-24:]
+            self._event(
+                "remedy_check",
+                key=key,
+                capability=capability,
+                rung=rung.name,
+                needs_kind=needs.get("kind"),
+                fits=receipt.get("fits"),
+                reason=str(receipt.get("reason") or "")[:160],
+                seconds=receipt.get("seconds"),
+                skipped=skipped[:3],
+            )
+            self._remedy_node(key, needs, state, following)
+            if receipt.get("fits") is False:
+                continue
+            # A plan (or no answer from a read-only re-plan): apply the rung by a retry.
+            state["confirmed"] = {"rung": rung.name, "kind": rung.kind, "options": options}
+            if self._remedy_retry(job, state["confirmed"]):
+                state["confirmed"] = None
+                retried = True
+        return owned, retried
+
+    def _remedy_retry(self, job, rung) -> bool:
+        """``retry --remedy``; a retryable admission refusal defers it (the rung stays confirmed)."""
+        if self._stop_requested():
+            return False
+        try:
+            self.cli.invoke(["retry", "--key", job["key"], "--remedy", json.dumps(rung)])
+        except CLIError as exc:
+            if not _retryable_admission(str(exc)):
+                raise
+            self._event("decision_deferred", operation="retry", key=job["key"], reason=str(exc)[:300])
+            return False
+        self._event("auto_retry", key=job["key"], capability=job.get("capability"), rule="remedy", rung=rung["rung"])
+        return True
+
+    def _remedy_wait(self, job, needs, state, wait, skipped) -> None:
+        """Every rung spent: the node says what the job waits for and when ``replan`` is re-armed."""
+        plan = {
+            "rule": "remedy_ladder",
+            "rung": None,
+            "wait_for": needs.get("change"),
+            "next_check_at_time": round(state["last"] + wait, 1),
+            "sooner_when_changed": list(SITE_RETRY_FACT_FILES) + ["technologies"],
+            "skipped": skipped[:3],
+        }
+        node = self.work.node_for_job(job["key"])
+        if node is not None and node.get("retry_plan") != plan:
+            node["retry_plan"] = plan
+            self.work.save()
+
+    def _remedy_node(self, key, needs, state, following) -> None:
+        node = self.work.node_for_job(key)
+        if node is None:
+            return
+        node["retry_plan"] = {"rule": "remedy_ladder", "next_remedy": following, "checks": state["checks"]}
+        node["needs"] = {k: needs.get(k) for k in ("kind", "reason", "item", "change")}
+        node["remedies_tried"] = [
+            {k: t.get(k) for k in ("rung", "fits", "reason")} for t in state["tried"][-6:] if isinstance(t, dict)
+        ]
+        self.work.save()
+
+    def _critical_claims(self, context) -> dict:
+        """Items the critical path claims now (``critical_path``); {} when it cannot be computed."""
+        if not any(r.items for rungs in remedy.RELAXATIONS.values() for r in rungs):
+            return {}
+        try:
+            from .critical_path import allocation
+
+            jobs = context[1].get("jobs", {})
+            return dict(allocation(jobs, context[0], context[2]).claimed)
+        except Exception:  # noqa: BLE001 - a claim estimate never stops the ladder
+            return {}
 
     def _site_facts(self, observation) -> list:
         """Published facts a site/connection failure depends on (cheap: file stamps, technology count)."""

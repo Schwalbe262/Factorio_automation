@@ -232,7 +232,9 @@ def _outpost_prepare(ex, obs, parameters):
             continue
         proof = ex.outposts.bank_proof(obs, bank)
         rate += proof["nominal_rate_per_minute"] if proof else 0
-    count = max(1, min(8, math.ceil((target - rate) / per_drill)))
+    from .remedy import scaled_count  # the shrink rung of a what-if (remedy.what_if) applies here too
+
+    count = scaled_count(max(1, min(8, math.ceil((target - rate) / per_drill))))
     return dict(ex.outposts.prepare(obs, resource, count), dry_run_count=count, dry_run_active_rate=rate)
 
 
@@ -259,6 +261,7 @@ DRY_RUN = {
     "dedicated_materials": DryRun(
         lambda ex, obs, p: ex.material_supply.prepare(obs, p), lambda ex, obs, p: ex.material_supply.step(obs, p)
     ),
+    "logistic_science": DryRun(lambda ex, obs, p: ex.green.prepare(obs, p)),
 }
 
 
