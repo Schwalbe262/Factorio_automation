@@ -93,17 +93,21 @@ class EngineResearchTests(unittest.TestCase):
                 "production": {"automation-science-pack": {"consumed": 10}, "logistic-science-pack": {"consumed": 0}},
             }
             request = {"technology": "advanced-material-processing"}
+            expected = {
+                "technology": "advanced-material-processing",
+                "packs": ["logistic-science-pack"],
+                "producers": ["logistic_science"],
+            }
+            # eval-4177156614: no green block existed, yet the job held the research lane for an
+            # hour with evidence {}. Without any producer it blocks (yields the lane) and names it.
+            missing = obj.step(obs, request)
+            self.assertEqual((missing["status"], missing["reason"]), ("blocked", "research_pack_producer_missing"))
+            self.assertEqual(missing["evidence"], expected)
+            # A green block is being built: the job waits for its supply, naming the producer.
+            obj.green = SimpleNamespace(state={"phase": "build"}, proof=lambda o: None)
             waiting = obj.step(obs, request)
-            self.assertEqual(waiting["reason"], "waiting_for_science_pack_supply")
-            # eval-4177156614: the ledger showed evidence {}; the wait now names the missing producer.
-            self.assertEqual(
-                waiting["evidence"],
-                {
-                    "technology": "advanced-material-processing",
-                    "packs": ["logistic-science-pack"],
-                    "producers": ["logistic_science"],
-                },
-            )
+            self.assertEqual((waiting["status"], waiting["reason"]), ("waiting", "waiting_for_science_pack_supply"))
+            self.assertEqual(waiting["evidence"], expected)
             obj.green = SimpleNamespace(proof=lambda o: {"science_units": [2]})
             self.assertEqual(obj.step(obs, request)["type"], "research_queue")
 
@@ -165,8 +169,10 @@ class EngineResearchTests(unittest.TestCase):
             )
             obj.path = Path(directory) / "research.json"
             result = obj.step({"world_id": "w", "technologies": {}}, {"technology": "next"})
-            self.assertEqual(result["reason"], "waiting_for_science_pack_supply")
+            # No blue block planned at all: the job yields the research lane.
+            self.assertEqual(result["reason"], "research_pack_producer_missing")
             self.assertEqual(result["packs"], ["chemical-science-pack"])
+            self.assertEqual(result["evidence"]["producers"], ["chemical_science"])
 
 
 if __name__ == "__main__":

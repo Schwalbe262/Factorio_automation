@@ -209,6 +209,27 @@ class AutopilotTests(unittest.TestCase):
         nodes = ids(self.propose(jobs, observation=observation, limit=10))
         self.assertIn("auto_research_advanced_material_processing", nodes)
 
+    def test_live_stall_shape_still_proposes_green_steel_with_research_nodes_queued(self):
+        # eval-4177156614 at 100 game min: the green research job runs (waiting for packs), the
+        # automation-2 and engine nodes are ready behind it; logistic science and steel are due.
+        jobs = [j for j in done_through("dedicated_materials_stone") if j["capability"] != "logistic_science"]
+        jobs = [j for j in jobs if j["capability"] not in ("steam_expansion", "defense_perimeter")]
+        jobs += [job("dedicated_materials_coal"), job("steel_supply"), job("brick_production", "blocked")]
+        jobs.append(dict(job("research_advanced_material_processing"), status="waiting"))
+        queue = [
+            {"id": "auto_research_" + s, "capability": "research", "parameters": {"technology": t}, "status": "ready"}
+            for s, t in (("automation_2", "automation-2"), ("engine", "engine"))
+        ]
+        green = [{"name": "automation-science-pack", "amount": 1}, {"name": "logistic-science-pack", "amount": 1}]
+        listed = [
+            {"technology": t, "science_ingredients": green}
+            for t in ("advanced-material-processing", "automation-2", "engine", "electric-energy-distribution-1")
+        ]
+        observation = {"available_research": {"technologies": listed}, "tick": 400000}
+        nodes = ids(self.propose(jobs, queue, observation=observation, limit=3))
+        self.assertEqual(nodes[:2], ["auto_logistic_science", "auto_steel_production"])
+        self.assertNotIn("auto_research_electric_energy_distribution_1", nodes)
+
     def test_completed_roadmap_proposes_nothing(self):
         # A finished roadmap still retires the starter cells its permanent sources replaced, once each.
         jobs = done_through("chemical_science")

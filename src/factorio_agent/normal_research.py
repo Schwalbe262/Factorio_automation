@@ -116,6 +116,25 @@ class NormalResearch:
             # before green science existed). The evidence names the missing
             # producer block, so the stall says what has to be built.
             missing = sorted(unsupported)
+            producers = {
+                "logistic-science-pack": getattr(self, "green", None),
+                "chemical-science-pack": getattr(self, "blue", None),
+            }
+            if any(not getattr(producers.get(p), "state", None) for p in missing):
+                # No block for the pack exists at all: the job yields the research lane
+                # (eval-4177156614: advanced-material-processing held it for an hour while
+                # no green block was even proposed). The supervisor retries it once the
+                # producer succeeds (RETRY_CLEARED_BY).
+                return {
+                    "status": "blocked",
+                    "reason": "research_pack_producer_missing",
+                    "packs": missing,
+                    "evidence": {
+                        "technology": name,
+                        "packs": missing,
+                        "producers": sorted({PACK_PRODUCERS.get(p, "unknown") for p in missing}),
+                    },
+                }
             return {
                 "status": "waiting",
                 "reason": "waiting_for_science_pack_supply",

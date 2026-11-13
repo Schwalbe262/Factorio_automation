@@ -45,6 +45,8 @@ RETRY_CLEARED_BY = {
     "production_row_input_source_missing": frozenset(
         {"planned_main_bus", "main_bus", "automation_science", "smelting_capacity", "produce"}
     ),
+    # normal_research: no block makes one of the technology's packs yet.
+    "research_pack_producer_missing": frozenset({"logistic_science", "chemical_science"}),
 }
 # Re-planning blockers (a route, a whole-plan preflight or a site search that found nothing):
 # the world, neighbours and the planning budget change the answer without any job success.
