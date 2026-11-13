@@ -111,6 +111,9 @@ class RiskTests(unittest.TestCase):
         f = facts()
         self.assertEqual(assess_risk(f, "w")["native_tier"], "early")
         f["technologies"]["chemical-science-pack"] = True
+        # Quiet low-evolution map: the tier reserve waits for evolution.
+        self.assertEqual((assess_risk(f, "w")["native_tier"], assess_risk(f, "w")["minimum_posts"]), ("advanced", 0))
+        f["evolution_factor"] = 0.15
         self.assertEqual((assess_risk(f, "w")["native_tier"], assess_risk(f, "w")["minimum_posts"]), ("advanced", 2))
 
     def test_missing_native_fields_and_wrong_world_fail_closed(self):
@@ -134,6 +137,7 @@ class AdditivePlanningTests(unittest.TestCase):
         self.f = facts()
         self.game = SimpleNamespace(query=Mock(side_effect=lambda _: deepcopy(self.f)))
         self.f["technologies"]["logistic-science-pack"] = True
+        self.f["evolution_factor"] = 0.15  # mid tier holds one reserve post above QUIET_EVOLUTION
         self.engine = DefensePolicy(self.game, SimpleNamespace(fingerprint="cat"))
         self.obs = {
             "world_id": "w",

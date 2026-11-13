@@ -1,5 +1,9 @@
 # Strategic gun posts
 
+> History of the development map only. On a world with a site plan the fixed
+> posts below are never used; posts are sized by threat and sited off planned
+> land (`DEFENSE_POLICY.md`, "Planned world (site service) and growth").
+
 The user manually repelled the attack that damaged the development factory.
 The framework subsequently repaired its furnace district and commissioned
 eight proactive gun posts through Luna-selected ordinary jobs. The prior

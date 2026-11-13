@@ -56,6 +56,11 @@ PRODUCE_MIN_RATE = 1.0
 SCIENCE_GROWTH_CAPABILITY = "science_growth"
 # Below every roadmap step: growth fills a free job slot, it never delays the roadmap.
 SCIENCE_GROWTH_PRIORITY = TOP_PRIORITY - 500
+# Threat-sized defense posts (``defense_growth_nodes``): a free slot, never the critical path.
+DEFENSE_GROWTH_CAPABILITY = "defense_growth"
+DEFENSE_GROWTH_PRIORITY = SCIENCE_GROWTH_PRIORITY - 1
+# A target is re-proposed at most once per this many ticks (10 game minutes).
+DEFENSE_GROWTH_PERIOD_TICKS = 36000
 
 
 @dataclass(frozen=True)
@@ -614,6 +619,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
             }
         )
     proposed += science_growth_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    proposed += defense_growth_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     from .starter_retirement import starter_retirement_nodes  # mine starter cells a permanent source replaced
 
     proposed += starter_retirement_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
@@ -664,6 +670,54 @@ def science_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[d
             "priority": SCIENCE_GROWTH_PRIORITY,
             "depends_on": [],
             "reason": f"science growth to {labs} labs, {machines} machines: {row.get('reason', '')}"[:300],
+        }
+    ]
+
+
+def defense_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
+    """One ``defense_growth`` node when the observe receipt ``defense_growth`` wants more posts.
+
+    The receipt (``defense_perimeter.growth_receipt``) compares the current
+    risk's post target with the posts the policy holds. Here only: the
+    capability exists, ``defense_perimeter`` succeeded, no growth node or job
+    is open, the same target has not stalled. The node id carries a
+    ``DEFENSE_GROWTH_PERIOD_TICKS`` bucket, so a target is re-evaluated
+    periodically instead of once per map.
+    """
+    if DEFENSE_GROWTH_CAPABILITY not in capabilities:
+        return []
+    row = observation.get("defense_growth")
+    if not isinstance(row, Mapping) or not row.get("grow"):
+        return []
+    posts = row.get("target_posts")
+    tick = observation.get("tick")
+    if type(posts) is not int or not 1 <= posts <= 16 or type(tick) is not int:
+        return []
+    succeeded = {job.get("capability") for job in jobs if job.get("status") == "succeeded"}
+    if not set(capabilities[DEFENSE_GROWTH_CAPABILITY].get("requires", [])) <= succeeded:
+        return []
+    parameters = {"posts": posts}
+    for node in queue_nodes:
+        if node.get("capability") == DEFENSE_GROWTH_CAPABILITY and node.get("status", "pending") in OPEN_NODE_STATUSES:
+            return []
+    for job in jobs:
+        if job.get("capability") != DEFENSE_GROWTH_CAPABILITY:
+            continue
+        if job.get("status") not in TERMINAL_STATUSES:
+            return []
+        if job.get("status") in STALLED_STATUSES and job.get("parameters") == parameters:
+            return []
+    node_id = f"{NODE_PREFIX}defense_growth_{posts}_{tick // DEFENSE_GROWTH_PERIOD_TICKS}"
+    if node_id in {node.get("id") for node in queue_nodes}:
+        return []
+    return [
+        {
+            "id": node_id,
+            "capability": DEFENSE_GROWTH_CAPABILITY,
+            "parameters": parameters,
+            "priority": DEFENSE_GROWTH_PRIORITY,
+            "depends_on": [],
+            "reason": f"defense growth to {posts} posts: {row.get('reason', '')}"[:300],
         }
     ]
 

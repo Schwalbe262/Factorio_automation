@@ -745,7 +745,8 @@ class StarterExecutors:
         known = {"pending", "running", "waiting", "paused", "blocked", "failed", "succeeded"}
         if not any(job.get("status") in known and job.get("parameters") == {} for job in rows):
             return None
-        result = perimeter.step(obs) if adaptive or not armed else perimeter.upkeep(obs)
+        # Background: urgent risk builds now; a quiet-to-approaching growth waits for defense_growth.
+        result = perimeter.step(obs, background=True) if adaptive or not armed else perimeter.upkeep(obs)
         if (
             adaptive
             and result.get("status") == "blocked"

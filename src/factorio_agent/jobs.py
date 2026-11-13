@@ -140,6 +140,11 @@ CAPABILITIES = {
         "requires": ["starter"],
         "effect": "adapt normally paid gun targets to current native enemies, damage and tech; reuse paid guards, defer unneeded future posts and yield to production once current risk targets are armed; no whole-factory coverage claim",
     },
+    "defense_growth": {
+        "parameters": {"posts": "integer [1,16], current-risk post target the observe receipt asked for"},
+        "requires": ["defense_perimeter"],
+        "effect": "add the posts a risen native threat asks for on the threatened side, off planned land (defense_perimeter.growth_receipt); low priority, never on the roadmap's critical path",
+    },
     "defense_watch": {
         "parameters": {},
         "requires": ["defense_perimeter"],
@@ -458,6 +463,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "research_capacity_error": obs.get("research_capacity_error"),
         "science_growth": obs.get("science_growth"),
         "science_growth_error": obs.get("science_growth_error"),
+        "defense_growth": obs.get("defense_growth"),
         "early_start_inputs": obs.get("early_start_inputs"),
         "capabilities": CAPABILITIES,
         "jobs": [

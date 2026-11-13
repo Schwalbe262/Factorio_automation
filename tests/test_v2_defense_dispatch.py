@@ -132,7 +132,7 @@ class EmergencyDispatchTests(unittest.TestCase):
         ex._continue_background_construction = Mock(return_value=None)
         ex.capacity = SimpleNamespace(step=Mock(return_value={"type": "take", "item": "iron-plate"}))
         self.assertEqual(ex.step("starter_capacity", obs, {"resource": "iron-ore", "cells": 8})["item"], "iron-plate")
-        ex.perimeter.step.assert_called_once_with(obs)
+        ex.perimeter.step.assert_called_once_with(obs, background=True)
         ex.perimeter.step.return_value = {"type": "build", "name": "gun-turret"}
         self.assertEqual(ex.step("starter_capacity", obs, {"resource": "iron-ore", "cells": 8})["name"], "gun-turret")
         self.assertEqual(ex.capacity.step.call_count, 1)

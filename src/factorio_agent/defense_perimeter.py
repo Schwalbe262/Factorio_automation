@@ -14,10 +14,17 @@ import re
 
 from factorio_agent.core.deterministic_state import _atomic_json
 from .defense_coverage import COVERAGE_MARGIN, coverage_cells, coverage_report, native_candidate_survey, select_cover
+from .defense_policy import outside_plan, plan_exclusions
 
 
 AMMO_TARGET = 10
 REFILL_BELOW = 5
+# Risk level (``defense_policy.assess_risk``) at which other jobs' background
+# step adds posts at once; below it new posts wait for a ``defense_growth`` node.
+URGENT_RISK_LEVEL = 2
+SITE_PLAN_FILE = "site-plan.json"
+# Development-map layout: used only on a world without a site plan
+# (``_legacy_prepare``, ``_coverage_reservations``); never on a planned world.
 POSTS = (
     ("west_smelter", (-50.5, -26.5), (-44, -26)),
     ("north_smelter", (-32.5, -43.5), (-32, -32)),
@@ -40,6 +47,69 @@ def _point(pair):
 
 def _result(status, reason, **evidence):
     return {"status": status, "reason": reason, "evidence": evidence}
+
+
+def _plan_box(rect):
+    # Site rects are half-open [x0, y0, x1, y1] tiles; defense boxes are [[x0, y0], [x1, y1]].
+    return [[rect[0], rect[1]], [rect[2], rect[3]]]
+
+
+def site_plan_areas(root, world_id):
+    """Planned land of this world's site plan, or ``None`` when the world has no site service.
+
+    Rows ``{"kind", "name", "area"}``: every zone (bus band, smelting, power,
+    mining, outposts, rail stations), district strips (growth slots),
+    corridors and allocations with their tap bands. Read-only.
+    """
+    path = Path(root) / SITE_PLAN_FILE
+    if not path.exists():
+        return None
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    if stored.get("world_id") != world_id:
+        return None
+    plan = stored.get("plan") or {}
+    rows = [{"kind": z["kind"], "name": z["name"], "area": _plan_box(z["rect"])} for z in plan.get("zones", [])]
+    rows += [
+        {"kind": "strip", "name": "strip:" + s["side"], "area": _plan_box(s["rect"])} for s in plan.get("strips", [])
+    ]
+    rows += [
+        {"kind": "corridor", "name": c["name"], "area": _plan_box(segment["rect"])}
+        for c in plan.get("corridors", [])
+        for segment in c.get("segments", [])
+    ]
+    for a in plan.get("allocations", []):
+        rows.append({"kind": "allocation", "name": a["name"], "area": _plan_box(a["rect"])})
+        if a.get("tap_rect"):
+            rows.append({"kind": "corridor", "name": a["name"] + ":tap", "area": _plan_box(a["tap_rect"])})
+    return rows
+
+
+def growth_receipt(root, obs):
+    """Observe receipt ``defense_growth``: does the current risk want more posts than the policy holds?
+
+    Read-only; ``obs["adaptive_defense_risk"]`` is the observe-time survey.
+    ``None`` while there is no risk or the perimeter state belongs to another world.
+    """
+    risk = obs.get("adaptive_defense_risk")
+    if not isinstance(risk, dict) or type(risk.get("minimum_posts")) is not int:
+        return None
+    path = Path(root) / "defense-perimeter.json"
+    state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    if state and state.get("world_id") != obs.get("world_id"):
+        return None
+    active = len(state.get("adaptive_policy", {}).get("active_posts", []))
+    target = risk["minimum_posts"]
+    return {
+        "grow": target > active,
+        "target_posts": target,
+        "active_posts": active,
+        "risk": risk.get("risk"),
+        "level": risk.get("level"),
+        "evolution_factor": risk.get("evolution_factor"),
+        "nearest_spawner": risk.get("nearest_spawner"),
+        "nearest_unit": risk.get("nearest_unit"),
+        "reason": risk.get("sizing", "")[:200],
+    }
 
 
 def protected_factory_areas(game, world_id, catalog_fingerprint, *, runtime_dir=None):
@@ -145,12 +215,20 @@ class DefensePerimeter:
             return "defense_perimeter_world_or_catalog_changed"
         return None
 
+    def _plan_areas(self, obs):
+        """This world's planned land (``site_plan_areas``); ``None`` without a site service."""
+        return site_plan_areas(self.path.parent, obs.get("world_id"))
+
     def prepare(self, obs):
-        if not getattr(self, "adaptive_enabled", False):
-            return self._legacy_prepare(obs)
         error = self._identity_error(obs)
         if error:
             return {"ok": False, "reason": error}
+        try:
+            plan = self._plan_areas(obs)
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            return {"ok": False, "reason": "defense_site_plan_unreadable", "detail": str(exc)[:200]}
+        if not getattr(self, "adaptive_enabled", False) and plan is None:
+            return self._legacy_prepare(obs)
         try:
             reserved = protected_factory_areas(
                 self.game, obs["world_id"], self.catalog.fingerprint, runtime_dir=self.path.parent
@@ -162,7 +240,10 @@ class DefensePerimeter:
             ]
         except (KeyError, TypeError, ValueError) as exc:
             return {"ok": False, "reason": "adaptive_defense_policy_unavailable", "detail": str(exc)[:200]}
-        preview = self.policy_engine.prepare(obs, self.state, reserved)
+        if plan is None:
+            preview = self.policy_engine.prepare(obs, self.state, reserved)
+        else:
+            preview = self.policy_engine.prepare(obs, self.state, reserved, plan_areas=plan)
         if not preview.get("ok"):
             return preview
         if preview["risk"]["minimum_posts"] and not all(
@@ -204,6 +285,8 @@ class DefensePerimeter:
         error = self._identity_error(obs)
         if error:
             return {"ok": False, "reason": error}
+        if self._plan_areas(obs) is not None:
+            return {"ok": False, "reason": "legacy_fixed_posts_refused_on_planned_world"}
         if not all(obs.get("enabled_recipes", {}).get(item) for item in ("gun-turret", "firearm-magazine")):
             return {"ok": False, "reason": "native_gun_turret_and_normal_magazine_recipes_required"}
         reserved = deepcopy(list(FUTURE_AREAS))
@@ -309,6 +392,8 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         )
         if not result.get("ok"):
             return result
+        if result.get("posts") == {}:  # an empty Lua sequence serializes as an object
+            result["posts"] = []
         result.update(
             initialized=True,
             missing=[p["name"] for p in result["posts"] if p.get("missing")],
@@ -428,11 +513,35 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         self._bind(report)
         return self._refill(obs, report)
 
-    def step(self, obs, *, required_posts=None):
+    def _deferred_growth(self, prepared):
+        """Evidence when ``prepared`` wants more posts than the policy holds at a non-urgent risk."""
+        risk = prepared.get("adaptive_policy", {}).get("risk", {})
+        held = len(self.state.get("adaptive_policy", {}).get("active_posts", [])) if self.state else 0
+        if risk.get("minimum_posts", 0) <= held or risk.get("level", URGENT_RISK_LEVEL) >= URGENT_RISK_LEVEL:
+            return None
+        return {
+            "target_posts": risk["minimum_posts"],
+            "active_posts": held,
+            "risk": risk.get("risk"),
+            "sizing": risk.get("sizing"),
+        }
+
+    def step(self, obs, *, required_posts=None, background=False):
+        """Plan, build and arm the current-risk posts.
+
+        ``background=True`` (another job's prelude): a non-urgent growth is not
+        built here; known posts get upkeep and a ``defense_growth`` node adds
+        the new ones off the critical path.
+        """
         if not self.state or getattr(self, "adaptive_enabled", False):
             prepared = self.prepare(obs)
             if not prepared.get("ok"):
                 return _result("blocked", prepared.get("reason", "defense_preflight_failed"), native=prepared)
+            deferred = self._deferred_growth(prepared) if background else None
+            if deferred:
+                self.growth_diagnostic = deferred
+                upkeep = self.upkeep(obs) if self.state else None
+                return upkeep or _result("succeeded", "defense_growth_deferred_to_low_priority_node", **deferred)
             if self.state != prepared:
                 self.state = prepared
                 self._save()
@@ -479,6 +588,8 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
             if self.state["adaptive_policy"].get("status") != "ready":
                 self.state["adaptive_policy"]["status"] = "ready"
                 self._save()
+            if not proof["active_post_names"]:
+                return _result("succeeded", "quiet map, no posts required", **proof)
             return _result("succeeded", "current native risk defense targets are armed", **proof)
         if self.state.get("phase") != "armed":
             self.state["phase"] = "armed"
@@ -551,6 +662,10 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
             ammo_target=policy["risk"]["ammo_target"],
             refill_below=policy["risk"]["refill_below"],
             risk=deepcopy(policy["risk"]),
+            sizing=policy["risk"].get("sizing"),
+            post_placement={
+                p["name"]: specs[p["name"]].get("placement", "board") for p in report["posts"] if p["name"] in names
+            },
             risk_observed_tick=policy["surveyed_tick"],
             active_post_names=list(names),
             retained_registered_posts=len(self.state["posts"]),
@@ -560,7 +675,10 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         )
 
     def _coverage_reservations(self, obs, areas):
-        reserved = deepcopy(list(FUTURE_AREAS)) + deepcopy(areas)
+        # Development-map future areas only without a site plan; a planned
+        # world's land is filtered from the candidates (``prepare_coverage``).
+        legacy = [] if self._plan_areas(obs) is not None else deepcopy(list(FUTURE_AREAS))
+        reserved = legacy + deepcopy(areas)
         reserved.extend(
             protected_factory_areas(self.game, obs["world_id"], self.catalog.fingerprint, runtime_dir=self.path.parent)
         )
@@ -651,7 +769,16 @@ return {ok=true,tick=game.tick,posts=posts,actor_full_magazines=held,actor_parti
         else:
             existing = deepcopy(self.state["posts"])
             candidates = native.get("candidates", [])
-        chosen = select_cover(cells, existing, candidates, radius)
+        # Planned world: off every planned area first; then the zone/strip that
+        # hosts the scope may take a post on free land (bus/rail/corridors never).
+        strict, relaxed = plan_exclusions(self._plan_areas(obs), areas)
+        chosen = None
+        for blocked in [strict] + ([relaxed] if relaxed != strict else []):
+            chosen = select_cover(
+                cells, existing, [p for p in candidates if outside_plan(p["position"], blocked)], radius
+            )
+            if chosen is not None:
+                break
         if chosen is None:
             return {
                 "ok": False,
