@@ -583,10 +583,17 @@ def roadmap_wanted_recipes(jobs, capabilities, *, horizon=6) -> list[str]:
     return list(dict.fromkeys(recipes))
 
 
+# Research a step performs without naming it in its parameters. Without this
+# the research-capacity decision saw only the current technology and judged a
+# second lab or science machine "not worth it" although logistics came next.
+STEP_TECHNOLOGY = {"bootstrap_logistics": "logistics"}
+
+
 def roadmap_wanted_technologies(jobs, technologies_researched, *, horizon=6) -> list[str]:
     """Technologies named by the next ``horizon`` unsatisfied steps, in roadmap order."""
     steps = _upcoming(jobs, _names(technologies_researched), horizon)
-    return [step.parameters["technology"] for step in steps if "technology" in step.parameters]
+    names = [step.parameters.get("technology") or STEP_TECHNOLOGY.get(step.capability) for step in steps]
+    return [name for name in names if name]
 
 
 def bulk_item_demand(catalog, jobs, observation, *, horizon=4) -> dict[str, dict]:
