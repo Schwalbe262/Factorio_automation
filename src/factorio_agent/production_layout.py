@@ -46,6 +46,28 @@ the free column before the main row and side-loads onto the other lane
     YYYYYYYYYYYYY>>>>>     Y: P's output (one lane) + the side-load = the main row's last belt
                    @>>>    the sourced ingredient's near belt (port reached from the west)
 
+Lane merge (three sourced solid ingredients, e.g. low density structure:
+copper + steel + plastic): the heaviest item takes the near belt alone, the
+two lighter ones share the far belt, one per lane. Their two routed full
+belts meet in a lane-merge adapter in front of the far belt's port: both
+side-load from opposite sides onto the start of a belt ``J`` that turns into
+the far belt, so each lane carries one item (``lane_merge_adapter``; never a
+mixed lane, no sushi). Both external ports face the flow like every other
+input port (fed from the west)::
+
+    B>>v           B: lighter item's port (left lane), runs over J and turns down
+    A>J<           A: other item's port (right lane); J faces south (no back input)
+     >>>>>>>>>>    the far belt: J's two lanes, straight into the main row
+    @>>>>>>>>>>    near belt (heaviest item, its own port)
+
+``audit_line`` checks the lanes (``blocks.belts``) and, after routing,
+``adapter_intrusions`` rejects a route belt that feeds an adapter tile.
+
+Output mode (``output``): ``stock_chest`` (default, ``blocks.stock_tail``: the
+row is construction stock) or ``belt``: no tail, the main row's output belt
+end is the line's output port (``belt_tail``), a free belt source another row
+or a tap routes from (``production_sources.free_board_ports``).
+
 Ingredient sources (decided by the caller's ``sourced(item)`` predicate):
 an item a registered belt port or bus tap can deliver is *sourced*. An item
 that is not sourced but has a row-craftable recipe whose ingredients are all
@@ -72,6 +94,8 @@ from .site.transform import apply as apply_transform
 MAIN_ORIGIN = (0.5, 0.5)
 MARGIN = 1
 MAX_SPARE_FACTOR = 3  # the "max" growth provision reserves at most three times the built machines
+OUTPUT_MODES = ("stock_chest", "belt")
+LANE_MERGE = "lane_merge"
 
 
 def _spare(sizing: RowSizing) -> int:
@@ -111,9 +135,16 @@ def _assembler_recipe(catalog: Any, recipe: str) -> bool:
 
 def _width_error(recipe: str, count: int) -> ValueError:
     return ValueError(
-        f"{recipe}: {count} solid ingredients need a lane-merge adapter (routes fill whole belts); "
-        "a produced line takes at most two, or three when two are in-line intermediates of one shared input"
+        f"{recipe}: {count} solid ingredients; a produced line takes at most two, three when all three "
+        "are delivered by belts (lane merge) or two are in-line intermediates of one shared input"
     )
+
+
+def merge_lanes(amounts: dict[str, float]) -> list[tuple[str, ...]]:
+    """Lane plan of a lane-merge line: heaviest item alone on the near belt, the two
+    lighter ones on the far belt (left lane = the lighter, ``lane_merge_adapter`` port B)."""
+    order = sorted(amounts, key=lambda item: (-amounts[item], item))
+    return [(order[0],), (order[2], order[1])]
 
 
 def _check_width(catalog: Any, recipe: str) -> list[str]:
@@ -131,10 +162,15 @@ def _amounts(catalog: Any, recipe: str) -> dict[str, float]:
     return amounts
 
 
-def _size(catalog, recipe, rate, *, inserter, enabled, sub_item=None, twin_item=None, machine=None) -> RowSizing:
-    """Size ``recipe``; with ``twin_item`` its last belt carries the twin (left) and sub (right) lanes."""
+def _size(
+    catalog, recipe, rate, *, inserter, enabled, sub_item=None, twin_item=None, machine=None, merge=None
+) -> RowSizing:
+    """Size ``recipe``; with ``twin_item`` its last belt carries the twin (left) and sub (right) lanes;
+    with ``merge`` (``LANE_MERGE``) the far belt carries the two lighter items (``merge_lanes``)."""
     amounts = _amounts(catalog, recipe)
-    if twin_item is None:
+    if merge == LANE_MERGE:
+        lanes = merge_lanes(amounts)
+    elif twin_item is None:
         lanes = _lanes({item: amounts[item] for item in _check_width(catalog, recipe)}, sub_item)
     else:
         plain = {item: amounts[item] for item in amounts if item not in (sub_item, twin_item)}
@@ -172,15 +208,26 @@ def _single_input(catalog: Any, item: str, sourced: Callable[[str], bool]) -> tu
 
 
 def plan_sources(catalog: Any, recipe: str, sourced: Callable[[str], bool]) -> dict:
-    """``{"sourced", "sub_item", "sub_recipe", "twin_item", "twin_recipe"}``; ValueError when unbuildable.
+    """``{"sourced", "sub_item", "sub_recipe", "twin_item", "twin_recipe", "merge"}``; ValueError when unbuildable.
 
     Two unsourced intermediates made from the same single sourced input become
-    twin sub-rows (module doc); a third solid ingredient is accepted only so.
+    twin sub-rows (module doc); three sourced items share two belts through the
+    lane-merge adapter (``merge`` = ``LANE_MERGE``); a third solid ingredient is
+    accepted only so.
     """
     items = _ingredients(catalog, recipe)
     if len(items) > 3:
         raise _width_error(recipe, len(items))
     unsourced = [item for item in items if not sourced(item)]
+    if len(items) == 3 and not unsourced:
+        return {
+            "sourced": items,
+            "sub_item": None,
+            "sub_recipe": None,
+            "twin_item": None,
+            "twin_recipe": None,
+            "merge": LANE_MERGE,
+        }
     singles = [_single_input(catalog, item, sourced) for item in unsourced]
     if len(unsourced) == 2 and all(singles) and singles[0][1] == singles[1][1]:
         amounts = _amounts(catalog, recipe)
@@ -192,6 +239,7 @@ def plan_sources(catalog: Any, recipe: str, sourced: Callable[[str], bool]) -> d
             "sub_recipe": _row_recipe(catalog, sub),
             "twin_item": twin,
             "twin_recipe": _row_recipe(catalog, twin),
+            "merge": None,
         }
     if len(items) == 3:
         raise _width_error(recipe, len(items))
@@ -210,7 +258,14 @@ def plan_sources(catalog: Any, recipe: str, sourced: Callable[[str], bool]) -> d
                 "request a produce row with a belt output for it first"
             )
         sub_item, sub_recipe = item, candidate
-    return {"sourced": plain, "sub_item": sub_item, "sub_recipe": sub_recipe, "twin_item": None, "twin_recipe": None}
+    return {
+        "sourced": plain,
+        "sub_item": sub_item,
+        "sub_recipe": sub_recipe,
+        "twin_item": None,
+        "twin_recipe": None,
+        "merge": None,
+    }
 
 
 def design_line(
@@ -224,12 +279,15 @@ def design_line(
     chest: str,
     origin: tuple[float, float] = MAIN_ORIGIN,
     genome: dict | None = None,
+    output: str = "stock_chest",
 ) -> dict:
     """Canonical line at ``origin``: a row line (module docstring) or, when no row
     can carry the recipe tree, a direct-insertion cluster (``blocks.cluster``).
 
     ``genome`` (a ``layout_variants.Genome`` dict) rebuilds exactly that candidate
-    instead of the default first-fit choice."""
+    instead of the default first-fit choice. ``output``: ``OUTPUT_MODES``."""
+    if output not in OUTPUT_MODES:
+        raise ValueError(f"unknown output mode {output}")
     if genome is not None:
         from .layout_variants import Genome, generate
 
@@ -243,16 +301,14 @@ def design_line(
             sourced=sourced,
             chest=chest,
             origin=origin,
+            output=output,
         )
+    common = dict(inserter=inserter, enabled=enabled, sourced=sourced, chest=chest, origin=origin, output=output)
     try:
-        return _design_row_line(
-            catalog, product, rate, inserter=inserter, enabled=enabled, sourced=sourced, chest=chest, origin=origin
-        )
+        return _design_row_line(catalog, product, rate, **common)
     except ValueError as row_error:
         try:
-            return cluster_line(
-                catalog, product, rate, inserter=inserter, enabled=enabled, sourced=sourced, chest=chest, origin=origin
-            )
+            return cluster_line(catalog, product, rate, **common)
         except ValueError as cluster_error:
             raise ValueError(f"{row_error}; cluster: {cluster_error}") from row_error
 
@@ -275,6 +331,7 @@ def cluster_line(
     turned: bool | None = None,
     cells: dict | None = None,
     output_side: str | None = None,
+    output: str = "stock_chest",
 ) -> dict:
     """A stock line made of one ``blocks.cluster`` plan ending in its chest (same keys as a row line).
 
@@ -283,6 +340,8 @@ def cluster_line(
     from .blocks.cluster import cluster_block
     from .blocks.stock_tail import STOCK_STACKS
 
+    if output != "stock_chest":
+        raise ValueError("a cluster ends in its chest; a belt output needs a row form")
     if machine is None:
         machine = next((m for m in CLUSTER_MACHINES if m in enabled and m in catalog.entities), None)
     elif machine not in enabled or machine not in catalog.entities:
@@ -367,16 +426,25 @@ def _design_row_line(
     origin: tuple[float, float] = MAIN_ORIGIN,
     machine: str | None = None,
     spare: str = "default",
+    output: str = "stock_chest",
+    merge: str | None = None,
 ) -> dict:
     """``machine`` pins the main row's assembler; ``spare`` is the growth provision:
     ``none`` (no reserved slot), ``default`` (as many slots again, ``_spare``) or
-    ``max`` (up to ``MAX_SPARE_FACTOR`` x the built count, within the lane budget)."""
+    ``max`` (up to ``MAX_SPARE_FACTOR`` x the built count, within the lane budget).
+    ``output``: ``stock_chest`` (stock tail) or ``belt`` (``belt_tail``). ``merge``
+    (a genome's choice): None follows the sources, otherwise it must match them
+    (``""`` = no merge, ``LANE_MERGE``)."""
     recipe = _row_recipe(catalog, product)
     if recipe is None:
         raise ValueError(f"no recipe makes {product}")
     if machine is not None and machine not in enabled:
         raise ValueError(f"{machine} is not enabled for a row")
+    if output not in OUTPUT_MODES:
+        raise ValueError(f"unknown output mode {output}")
     plan = plan_sources(catalog, recipe, sourced)
+    if merge is not None and (plan["merge"] or "") != merge:
+        raise ValueError(f"{recipe}: genome merge {merge or 'none'} does not match the sources")
     main_sizing = _size(
         catalog,
         recipe,
@@ -386,6 +454,7 @@ def _design_row_line(
         sub_item=plan["sub_item"],
         twin_item=plan["twin_item"],
         machine=machine,
+        merge=plan["merge"],
     )
     policies = {
         "none": 0,
@@ -409,7 +478,8 @@ def _design_row_line(
         else:
             sub, twin, merge = twin_rows(catalog, main_sizing, sizings[0], sizings[1], origin, inserter=inserter)
     main = row_block(catalog, main_sizing, origin=origin, inserter=inserter, spare=spare)
-    tail = stock_tail(catalog, main, inserter=inserter, chest=chest)
+    tail = belt_tail(main) if output == "belt" else stock_tail(catalog, main, inserter=inserter, chest=chest)
+    adapter = lane_merge_adapter(main, main_sizing.belt) if plan["merge"] == LANE_MERGE else None
     spec = {
         "product": product,
         "recipe": recipe,
@@ -420,8 +490,146 @@ def _design_row_line(
         "sub_recipe": plan["sub_recipe"],
         "twin_item": plan["twin_item"],
         "twin_recipe": plan["twin_recipe"],
+        "merge": plan["merge"],
+        "output": output,
     }
-    return compose(catalog, spec, main, sub, tail, twin=twin, merge=merge)
+    return compose(catalog, spec, main, sub, tail, twin=twin, merge=merge, adapter=adapter)
+
+
+def belt_tail(plan: dict) -> dict:
+    """Belt output mode: no chest; the row's output belt end is the line's output port.
+
+    Same keys as ``blocks.stock_tail.stock_tail`` (``arm``/``chest``/``pole`` None,
+    ``bar_slots`` 0); the port keeps its ``facing`` and lane, so
+    ``production_sources.free_board_ports`` offers it as a belt source."""
+    ports = [p for p in plan["ports"] if p.get("direction") == "output"]
+    if len(ports) != 1:
+        raise ValueError("a belt tail needs a row with exactly one output port")
+    port = dict(ports[0])
+    return {
+        "mode": "belt",
+        "entities": [],
+        "arm": None,
+        "chest": None,
+        "pole": None,
+        "port": port,
+        "belt_end": dict(port["position"]),
+        "bar_slots": 0,
+        "stock_rate_per_minute": float(plan.get("rated_per_minute") or 0),
+    }
+
+
+def is_belt_output(line: dict) -> bool:
+    return (line.get("tail") or {}).get("mode") == "belt"
+
+
+def audit_belt_tail(catalog: Any, plan: dict, tail: dict) -> list[str]:
+    """The belt port is the row's output belt end, facing the flow, with nothing after it."""
+    errors = []
+    port = next((p for p in plan["ports"] if p.get("direction") == "output"), None)
+    out = tail.get("port") or {}
+    if port is None or out.get("position") != port["position"] or out.get("facing") != port.get("facing"):
+        errors.append("belt_tail_port_not_row_end")
+    elif out.get("item") != port["item"] or "name" in out:
+        errors.append("belt_tail_port_mismatch")
+    else:
+        tiles = set().union(*(footprint(catalog, e) for e in plan["entities"]))
+        if step(xy(port), port["facing"]) in tiles:
+            errors.append("belt_tail_belt_continues")
+    return errors
+
+
+def lane_merge_adapter(main: dict, belt: str) -> dict:
+    """The lane-merge adapter in front of the main row's far (two-item) belt (module doc).
+
+    Built in the row's own frame (``blocks.geometry.Frame``), so it turns with the row.
+    Returns ``entities``, ``inputs`` (two full-belt ports), ``replaces`` (the far
+    belt's two lane ports) and ``tiles`` (every adapter tile, for ``adapter_intrusions``)."""
+    from .blocks.geometry import Frame
+
+    layout = main["layout"]
+    frame = Frame(tuple(layout["origin"]), layout["flow"])
+    shape = RowShape(_machine_size(main))
+    v = shape.input_belt_v(1)
+    lanes = [p for p in main["ports"] if p["direction"] == "input" and p.get("belt_index") == 1]
+    by_lane = {p.get("lane"): p for p in lanes}
+    if set(by_lane) != {"left", "right"}:
+        raise ValueError("a lane merge needs a far belt with one item per lane")
+    east, south, west = 4, 8, 12
+    canonical = [
+        (-1, v, east),  # C: J turns into the far belt
+        (-1, v - 1, south),  # J: two side-loads, nothing behind
+        (-2, v - 1, east),  # A: right-lane feed, port
+        (-2, v - 2, east),  # B: left-lane feed, port, runs over J
+        (-1, v - 2, east),
+        (0, v - 2, south),
+        (0, v - 1, west),
+    ]
+    entities = [entity(belt, *frame.point(u, w), frame.direction(d)) for u, w, d in canonical]
+
+    def port(u, w, item):
+        x, y = frame.point(u, w)
+        return {"kind": "item", "item": item, "position": {"x": x, "y": y}, "facing": frame.flow, "direction": "input"}
+
+    inputs = [port(-2, v - 1, by_lane["right"]["item"]), port(-2, v - 2, by_lane["left"]["item"])]
+    return {
+        "kind": LANE_MERGE,
+        "entities": entities,
+        "inputs": inputs,
+        "replaces": [dict(p) for p in lanes],
+        "tiles": [dict(e["position"]) for e in entities],
+    }
+
+
+def _machine_size(row: dict) -> int:
+    machine = next(e for e in row["entities"] if e.get("recipe"))
+    return int(machine.get("_width") or 3)
+
+
+def _audit_adapter(catalog: Any, line: dict) -> list[str]:
+    """Each adapter port's item reaches exactly its lane of the far belt port, nothing else does."""
+    adapter = line["adapter"]
+    belts = belt_tiles(catalog, line["entities"])
+    graph = belt_graph(belts)
+    lanes: dict = {}
+    for p in belts:
+        for side in ("left", "right"):
+            lanes[(p, side)] = set()
+    for port in adapter["inputs"]:
+        if xy(port) not in belts:
+            return ["adapter_port_without_belt"]
+        for side in ("left", "right"):
+            lanes[(xy(port), side)].add(port["item"])
+    spread(lanes, graph)
+    errors = []
+    for port in adapter["replaces"]:
+        got = lanes.get((xy(port), port["lane"]), set())
+        if got != {port["item"]}:
+            errors.append(f"adapter_lane_wrong:{port['item']}:{port['lane']}:{','.join(sorted(got))}")
+    return errors
+
+
+def adapter_intrusions(catalog: Any, line: dict, entities: list[dict]) -> list[str]:
+    """Route belts (``entities`` minus the line's own) feeding an adapter tile other than an
+    external port from straight behind; such a feed would mix a lane (``production_site``)."""
+    adapter = line.get("adapter")
+    if not adapter:
+        return []
+    own = {(e["name"], *xy(e)) for e in line["entities"]}
+    tiles = {(t["x"], t["y"]) for t in adapter["tiles"]} | {xy(p) for p in adapter["replaces"]}
+    ports = {xy(p): p["facing"] for p in adapter["inputs"]}
+    belts = belt_tiles(catalog, entities)
+    found = []
+    for p, e in belts.items():
+        if (e["name"], *p) in own:
+            continue
+        q = step(p, e["direction"])
+        if q not in tiles:
+            continue
+        if q in ports and step(q, (ports[q] + 8) % 16) == p and e["direction"] == ports[q]:
+            continue
+        found.append(f"adapter_fed_by_route:{q[0]}:{q[1]}")
+    return sorted(set(found))
 
 
 def _sub_sizing(catalog, plan: dict, main: RowSizing, spare: int, *, inserter, enabled):
@@ -528,10 +736,13 @@ def compose(
     *,
     twin: dict | None = None,
     merge: dict | None = None,
+    adapter: dict | None = None,
 ) -> dict:
     """The line dict: rows, tail, external input ports, the internal joint, the merged entities."""
     joint = None
     inputs = [p for p in main["ports"] if p["direction"] == "input"]
+    if adapter is not None:
+        inputs = [p for p in inputs if p.get("belt_index") != 1] + list(adapter["inputs"])
     if twin is not None:
         inputs = [p for p in inputs if p["item"] not in (spec["sub_item"], spec["twin_item"])]
         inputs.append(merge["shared_input"])
@@ -545,6 +756,7 @@ def compose(
         + list((sub or {}).get("entities", []))
         + list((twin or {}).get("entities", []))
         + list((merge or {}).get("entities", []))
+        + list((adapter or {}).get("entities", []))
         + list(tail["entities"])
     )
     tiles = set().union(*(footprint(catalog, e) for e in entities))
@@ -557,6 +769,7 @@ def compose(
         "sub": sub,
         "twin": twin,
         "merge": merge,
+        "adapter": adapter,
         "tail": tail,
         "inputs": inputs,
         "output": tail["port"],
@@ -593,7 +806,12 @@ def audit_line(catalog: Any, line: dict) -> list[str]:
             errors.append("joint_not_straight")
         if line["sub"]["rated_per_minute"] + 1e-9 < _sub_demand(catalog, line):
             errors.append("sub_row_rate_below_main_demand")
-    errors += [f"tail:{e}" for e in audit_stock_tail(catalog, line["main"], line["tail"])]
+    if line.get("adapter") is not None:
+        errors += [f"adapter:{e}" for e in _audit_adapter(catalog, line)]
+    if is_belt_output(line):
+        errors += [f"tail:{e}" for e in audit_belt_tail(catalog, line["main"], line["tail"])]
+    else:
+        errors += [f"tail:{e}" for e in audit_stock_tail(catalog, line["main"], line["tail"])]
     counts: dict = {}
     for e in line["entities"]:
         for tile in footprint(catalog, e):
@@ -681,7 +899,14 @@ def extend_line(catalog: Any, line: dict, extra: int) -> dict:
         raise ValueError("a cluster has no reserved slots: more rate is a new row block (blocks.cluster.grow_decision)")
     main = extend_row(line["main"], catalog, extra)
     extended = compose(
-        catalog, line["spec"], main, line["sub"], line["tail"], twin=line.get("twin"), merge=line.get("merge")
+        catalog,
+        line["spec"],
+        main,
+        line["sub"],
+        belt_tail(main) if is_belt_output(line) else line["tail"],
+        twin=line.get("twin"),
+        merge=line.get("merge"),
+        adapter=line.get("adapter"),
     )
     if extended["inputs"] != line["inputs"] or extended["output"] != line["output"]:
         raise ValueError("line extension would move ports")

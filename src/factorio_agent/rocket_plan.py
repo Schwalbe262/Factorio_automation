@@ -20,9 +20,12 @@ item:
 * for every recipe, who can make it: a declared block capability (smelting,
   steel, bricks, plastic/sulfur, refinery, advanced circuits, engines, packs),
   the generic ``produce`` row when the recipe is solid and structurally fits a
-  row (``production_layout.plan_sources``), or the missing capability that
-  would have to exist (``fluid_assembly``, ``chemical_product``, ...), each with
-  status ``roadmap`` / ``wired`` / ``unwired`` / ``missing``.
+  row (``production_layout.plan_sources``, three belt-fed solids through the
+  lane merge), or the missing capability that would have to exist
+  (``fluid_assembly``, ``chemical_product``, ...), each with status ``roadmap`` /
+  ``wired`` / ``unwired`` / ``missing``; a ``produce`` row is a belt-output row
+  (``output: belt``) when a consumer that cannot make the item in-line takes it
+  (``classify``), otherwise it ends in the stock chest the rocket stages collect from.
 
 ``tail(plan)`` turns the bill into roadmap step rows (research, production,
 silo, parts, launch); ``progression.roadmap_for`` appends them to ``ROADMAP``
@@ -362,7 +365,42 @@ def _raw_producer(catalog, key: Key) -> dict:
 
 
 def classify(catalog, flow: Mapping, *, silo: Mapping, silo_name: str, payload: str | None) -> dict[Key, dict]:
-    """Producer per product of ``flow`` (module doc), in production order."""
+    """Producer per product of ``flow`` (module doc), in production order.
+
+    A ``produce`` row ends in a stock chest unless a consumer that cannot make the
+    item in-line needs it on a belt (``_belt_needs``): then it is a belt-output row
+    (``output: belt``) and a belt source for the rows after it. Repeated until stable.
+    """
+    belt_items: set[str] = set()
+    out: dict[Key, dict] = {}
+    for _ in range(8):
+        out = _classify(catalog, flow, silo=silo, silo_name=silo_name, payload=payload, belt_items=belt_items)
+        more = _belt_needs(flow, out) - belt_items
+        if not more:
+            break
+        belt_items |= more
+    return out
+
+
+def _belt_needs(flow: Mapping, producers: Mapping[Key, dict]) -> set[str]:
+    """Stock-row items a non-``produce`` generic consumer (a row that cannot sub-row them) takes."""
+    needs = set()
+    for key, row in producers.items():
+        if row["kind"] != "generic" or row["capability"] == PRODUCE:
+            continue
+        for ingredient in flow["choices"][key]["ingredients"]:
+            source = producers.get(_material(ingredient))
+            if (
+                source is not None
+                and source["capability"] == PRODUCE
+                and source["parameters"].get("output") != "belt"
+                and ingredient.get("type", "item") == "item"
+            ):
+                needs.add(ingredient["name"])
+    return needs
+
+
+def _classify(catalog, flow: Mapping, *, silo, silo_name, payload, belt_items: set[str]) -> dict[Key, dict]:
     declared = _capability_products(catalog)
     hand = set((catalog.entities.get("character") or {}).get("crafting_categories") or ())
     parts = part_recipe(catalog, silo)["name"]
@@ -383,7 +421,7 @@ def classify(catalog, flow: Mapping, *, silo: Mapping, silo_name: str, payload: 
             crafted = "hand-crafted from stock" if hand & set(recipe["categories"]) else "needs an assembler"
             row = {"capability": stage, "parameters": {}, "kind": "stage", "belt": False, "note": crafted}
         else:
-            row = _generic_producer(catalog, recipe, key, belt_sources)
+            row = _generic_producer(catalog, recipe, key, belt_sources, belt_output=key[1] in belt_items)
         if row.get("belt") and key[0] == "item":
             belt_sources.add(key[1])
         row.setdefault("module", row["capability"])
@@ -391,8 +429,10 @@ def classify(catalog, flow: Mapping, *, silo: Mapping, silo_name: str, payload: 
     return out
 
 
-def _generic_producer(catalog, recipe: Mapping, key: Key, belt_sources: set[str]) -> dict:
-    """A recipe no block capability declares: the generic row, or the capability that is missing."""
+def _generic_producer(catalog, recipe: Mapping, key: Key, belt_sources: set[str], *, belt_output=False) -> dict:
+    """A recipe no block capability declares: the generic row, or the capability that is missing.
+
+    A ``produce`` row carries its ``layout`` (input mode from ``plan_sources``, output mode)."""
     machine = machine_for(catalog, recipe)
     machine_row = catalog.entities.get(machine[0], {}) if machine else {}
     if _has_fluid(recipe):
@@ -417,16 +457,34 @@ def _generic_producer(catalog, recipe: Mapping, key: Key, belt_sources: set[str]
     from .production_layout import plan_sources
 
     try:
-        plan_sources(catalog, recipe["name"], lambda item: item in belt_sources)
+        plan = plan_sources(catalog, recipe["name"], lambda item: item in belt_sources)
     except ValueError as exc:
         return {
-            "capability": "produce_merged",
+            "capability": "produce_unfit",
             "parameters": {"item": key[1]},
             "kind": "generic",
             "belt": False,
             "note": f"no produce row fits: {str(exc)[:160]}",
         }
-    return {"capability": PRODUCE, "parameters": {"item": key[1]}, "kind": "generic", "belt": False}
+    parameters = {"item": key[1], **({"output": "belt"} if belt_output else {})}
+    return {
+        "capability": PRODUCE,
+        "parameters": parameters,
+        "kind": "generic",
+        "belt": belt_output,
+        "layout": {"inputs": _input_mode(plan), "output": "belt" if belt_output else "stock_chest"},
+    }
+
+
+def _input_mode(plan: Mapping) -> str:
+    """How a produce row gets its solid inputs (``production_layout.plan_sources``)."""
+    if plan.get("merge"):
+        return plan["merge"]
+    if plan.get("twin_item"):
+        return f"twin_sub_rows:{plan['sub_item']}+{plan['twin_item']}"
+    if plan.get("sub_item"):
+        return f"sub_row:{plan['sub_item']}"
+    return "belts"
 
 
 # ----- the bill ------------------------------------------------------------------
@@ -523,6 +581,7 @@ def rocket_bill(
                 "kind": producer["kind"],
                 "status": _status(producer["capability"], producer["parameters"], capabilities, producer["module"]),
                 **({"note": producer["note"]} if producer.get("note") else {}),
+                **({"layout": producer["layout"]} if producer.get("layout") else {}),
             },
         }
         if recipe is not None:
@@ -682,7 +741,11 @@ def tail(bill: Mapping, *, existing: Iterable[str] = (), researched_by: Mapping[
         producer = row["producer"]
         if producer["kind"] != "generic" or producer["status"] == "roadmap":
             continue
-        if producer["capability"] == PRODUCE and all(_makes_own_inputs(makers.get(c)) for c in row["consumers"]):
+        if (
+            producer["capability"] == PRODUCE
+            and producer["parameters"].get("output") != "belt"
+            and all(_makes_own_inputs(makers.get(c)) for c in row["consumers"])
+        ):
             continue  # every consumer is a row (one-level sub-row) or a block that makes it itself
         parameters = dict(producer["parameters"])
         if producer["capability"] in (PRODUCE, "fluid_assembly"):

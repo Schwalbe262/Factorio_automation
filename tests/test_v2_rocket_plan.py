@@ -201,7 +201,7 @@ class RocketBillTests(unittest.TestCase):
             "plastic-bar": ("chemical_production", "roadmap"),
             "pipe": ("produce", "wired"),
             "electronic-circuit": ("produce", "wired"),
-            "low-density-structure": ("produce_merged", "missing"),
+            "low-density-structure": ("produce", "wired"),
             "processing-unit": ("fluid_assembly", "missing"),
             "rocket-fuel": ("fluid_assembly", "missing"),
             "solid-fuel": ("chemical_product", "missing"),
@@ -254,6 +254,19 @@ class RocketTailTests(unittest.TestCase):
         # copper cable is only a sub-row of the circuit row: no row of its own
         self.assertNotIn("rocket_produce_copper_cable", rows)
         self.assertIn("rocket_produce_electronic_circuit", rows["rocket_fluid_assembly_processing_unit"]["after"])
+        # processing units cannot make circuits in-line: the circuit row is a belt-output row
+        circuits = rows["rocket_produce_electronic_circuit"]["parameters"]
+        self.assertEqual(circuits["output"], "belt")
+        validate_parameters(circuits)
+        lds = rows["rocket_produce_low_density_structure"]["parameters"]
+        self.assertNotIn("output", lds)  # the rocket parts take it from the stock chest
+        validate_parameters(lds)
+
+    def test_produce_rows_name_their_input_and_output_mode(self):
+        result = bill()
+        self.assertEqual(item(result, "low-density-structure")["producer"]["layout"]["inputs"], "lane_merge")
+        circuit = item(result, "electronic-circuit")["producer"]
+        self.assertEqual(circuit["layout"], {"inputs": "sub_row:copper-cable", "output": "belt"})
 
     def test_stage_rows_end_the_tail_and_after_refers_to_earlier_ids(self):
         rows = self.tail()

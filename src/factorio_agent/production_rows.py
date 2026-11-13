@@ -2,13 +2,16 @@
 
 Contract (``jobs.CAPABILITIES["produce"]``):
 
-* parameters ``{"item": <recipe product>, "rate_per_minute": (0, MAX_RATE]}``;
+* parameters ``{"item": <recipe product>, "rate_per_minute": (0, MAX_RATE]}`` and
+  optionally ``"output"``: ``stock_chest`` (default) or ``belt`` (the row's output
+  belt end is published as a free belt port another row routes from; no chest,
+  so it is no construction stock: ``machine_stock`` ignores it);
 * the product recipe, an assembling machine, the row inserter (fastest
   enabled of ``RowLimits.inserter_items_per_minute``), long-handed inserters
   for a two-belt line, a chest and belts/poles must be enabled (checked at
   step time, reported as ``production_row_recipes_locked``);
-* layout: ``production_layout`` (main row, optional one-level sub-row, stock
-  tail), sized for ``min(rate, stock tail rate)`` with ``blocks.size_row``
+* layout: ``production_layout`` (main row, optional one-level sub-row or a
+  lane-merge adapter for three belt-fed ingredients, stock tail or belt output), sized for ``min(rate, stock tail rate)`` with ``blocks.size_row``
   derating; placement, routing, power and preflight: ``production_site``;
   input sources: ``production_sources`` (bus taps, free board ports); on the
   planned bus a plate tap is planned with the block (``planned_tap``) and
@@ -43,7 +46,16 @@ from factorio_agent.core.deterministic_state import _atomic_json
 
 from . import planned_tap
 from .blocks.params import DEFAULT_LIMITS, inserter_rate
-from .production_layout import audit_line, design_line, extend_line, input_demand, rows, unsourced_raw
+from .production_layout import (
+    OUTPUT_MODES,
+    audit_line,
+    design_line,
+    extend_line,
+    input_demand,
+    is_belt_output,
+    rows,
+    unsourced_raw,
+)
 from .production_site import place_line, turned
 from .production_sources import resolve, sourced_items, tap_parameters
 from .transport import underground_proof, xy
@@ -60,10 +72,19 @@ if not inv or not inv.supports_bar() then return {ok=false,reason="production_ro
 return {ok=true,slots=inv.get_bar()-1,size=#inv}"""
 
 
+OPTIONAL = ("output",)
+
+
 def validate_parameters(parameters) -> None:
     """Structure only; recipe support is checked against the catalog at step time."""
-    if not isinstance(parameters, dict) or set(parameters) != {"item", "rate_per_minute"}:
-        raise ValueError("produce requires item and rate_per_minute")
+    if (
+        not isinstance(parameters, dict)
+        or not {"item", "rate_per_minute"} <= set(parameters)
+        or set(parameters) - {"item", "rate_per_minute", *OPTIONAL}
+    ):
+        raise ValueError("produce requires item and rate_per_minute (optional: output)")
+    if parameters.get("output", "stock_chest") not in OUTPUT_MODES:
+        raise ValueError(f"produce output must be one of {', '.join(OUTPUT_MODES)}")
     item, rate = parameters["item"], parameters["rate_per_minute"]
     if not isinstance(item, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", item):
         raise ValueError("produce item must be a catalog item name")
@@ -83,6 +104,14 @@ def choose_inserter(enabled: list[str], limits=DEFAULT_LIMITS) -> str | None:
 
 def choose_chest(enabled: list[str]) -> str | None:
     return next((name for name in CHESTS if name in enabled), None)
+
+
+def output_mode(parameters: dict) -> str:
+    return parameters.get("output", "stock_chest")
+
+
+def state_output(state: dict) -> str:
+    return "belt" if is_belt_output(state.get("line") or {}) else "stock_chest"
 
 
 class ProductionRows:
@@ -153,6 +182,7 @@ class ProductionRows:
             enabled=needs["enabled"],
             sourced=sourced,
             chest=needs["chest"],
+            output=output_mode(parameters),
         )
         ranked, found, demand = self._candidates(obs, item, arguments, needs["enabled"])
         try:
@@ -227,7 +257,17 @@ class ProductionRows:
             layout_library=designed.get("layout_library"),
             layout_skipped=designed.get("layout_skipped"),
         )
-        placed = place_line(self.game, self.builder, obs, self.catalog, self.site, board, design, owner=owner)
+        placed = place_line(
+            self.game,
+            self.builder,
+            obs,
+            self.catalog,
+            self.site,
+            board,
+            design,
+            owner=owner,
+            returns_to_bus=output_mode(parameters) == "belt",
+        )
         if not placed["ok"]:
             return placed
         return {
@@ -296,6 +336,8 @@ class ProductionRows:
     def _bar(self, obs, state: dict) -> dict | None:
         from .blocks.stock_tail import BAR_RECHECK_TICKS, adaptive_stacks
 
+        if is_belt_output(state["line"]):
+            return None
         # The bar follows the item's upcoming demand (belts are used hundreds at
         # a time); it is looked at again every BAR_RECHECK_TICKS.
         checked = state.get("bar_tick")
@@ -324,7 +366,8 @@ class ProductionRows:
         """Fill reserved slots for a higher rate; None when nothing changes."""
         line = state["line"]
         per = line["main"]["rated_per_minute"] / line["main"]["count"]
-        target = min(rate, inserter_rate(self.catalog, line["tail"]["arm"]["name"]))
+        arm = line["tail"].get("arm")
+        target = min(rate, inserter_rate(self.catalog, arm["name"])) if arm else rate
         extra = math.ceil(target / per - 1e-9) - line["main"]["count"]
         if extra <= 0:
             return None
@@ -358,6 +401,14 @@ class ProductionRows:
             self.save(item, state)
         if state["world_id"] != obs["world_id"] or state["catalog_fingerprint"] != self.catalog.fingerprint:
             return {"status": "blocked", "reason": "production_row_world_or_catalog_changed"}
+        if output_mode(parameters) != state_output(state):
+            # One row per item: a stock row is not rebuilt as a belt row in place.
+            return {
+                "status": "blocked",
+                "reason": "production_row_output_mode_differs",
+                "built": state_output(state),
+                "requested": output_mode(parameters),
+            }
         needs = self._requirements(obs, item)
         if not needs["ok"]:
             return {"status": "blocked", **needs}
@@ -384,16 +435,18 @@ class ProductionRows:
             return bar
         evidence = self.proof(obs, parameters)
         if evidence is None:
-            return {"status": "waiting", "reason": f"waiting for machine-made {item} in the stock chest"}
+            where = "on the output belt" if is_belt_output(state["line"]) else "in the stock chest"
+            return {"status": "waiting", "reason": f"waiting for machine-made {item} {where}"}
         state["phase"] = "verified"
         if isinstance(state.get("layout"), dict) and state["layout"].get("verified_tick") is None:
             state["layout"]["verified_tick"] = obs.get("tick")
         self.save(item, state)
-        return {
-            "status": "succeeded",
-            "reason": f"belt-fed assemblers stock {item} in a capped chest",
-            "evidence": evidence,
-        }
+        reason = (
+            f"belt-fed assemblers put {item} on a published output belt"
+            if is_belt_output(state["line"])
+            else f"belt-fed assemblers stock {item} in a capped chest"
+        )
+        return {"status": "succeeded", "reason": reason, "evidence": evidence}
 
     def proof(self, obs, parameters: dict) -> dict | None:
         self.last_proof_failure = None
@@ -420,6 +473,15 @@ class ProductionRows:
         if any(m.get("products_finished", 0) < 1 for m in machines):
             self.last_proof_failure = {"reason": "machine_has_not_produced"}
             return None
+        if is_belt_output(line):
+            return {
+                "tick": obs["tick"],
+                "machine_units": [m.get("unit_number") for m in machines],
+                "machine_products_finished": [m.get("products_finished") for m in machines],
+                "output_port": dict(line["output"]["position"]),
+                "rated_per_minute": line["rated_per_minute"],
+                "scope": "every machine finished a product onto the output belt; nameplate rate is not a measured rate",
+            }
         chest = actual[(line["tail"]["chest"]["name"], *xy(line["tail"]["chest"]))]
         stock = (chest.get("inventory") or {}).get(parameters["item"], 0)
         if stock < 1:

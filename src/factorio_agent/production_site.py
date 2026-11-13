@@ -28,7 +28,7 @@ from factorio_agent.core.deterministic_builder import _plan
 from .manufacturing import connect_power_groups
 from .planning import overlap, preflight
 from . import planned_tap, remedy
-from .production_layout import audit_line, design_line, input_demand, rows
+from .production_layout import adapter_intrusions, audit_line, design_line, input_demand, rows
 from .production_sources import resolve
 from .site.fit import orientations
 from .site.placement import block_wants, settle
@@ -298,6 +298,10 @@ def _place_one(game, builder, obs, catalog, site, board, design: dict, *, owner:
             routed = _routes(game, builder, obs, board, line, owner, product, block, catalog)
             if not routed["ok"]:
                 failures.append({"allocation": block.name, **routed})
+                continue
+            intrusions = adapter_intrusions(catalog, line, routed["entities"])
+            if intrusions:
+                failures.append({"allocation": block.name, "reason": "lane_merge_fed_by_route", "audit": intrusions})
                 continue
             groups = rows(line)
             power = connect_power_groups(game, builder, obs, groups, routed["entities"] + keepouts)

@@ -14,6 +14,9 @@ Genome fields (JSON):
   the per-edge transport mode follows from the form and is listed in the descriptor;
 * ``machine``: the assembler of the block (the main row for a row form; sub-rows keep
   ``size_row``'s choice);
+* ``merge`` (row): how three belt-fed solid ingredients share two input belts:
+  ``lane_merge`` (``production_layout.lane_merge_adapter``: two full belts side-load onto
+  one lane each of the far belt) or empty (no merge: at most two belt-fed items);
 * ``spare`` (row): growth provision, ``none`` | ``default`` (as many slots again) |
   ``max`` (up to ``production_layout.MAX_SPARE_FACTOR`` x the built count, lane budget permitting);
 * ``grid`` (cluster): ``(columns, rows)``; ``turned``: the input belt continues down the
@@ -72,6 +75,7 @@ from .production_layout import (
     audit_line,
     cluster_line,
     is_cluster,
+    plan_sources,
     rows,
 )
 
@@ -96,6 +100,7 @@ class Genome:
     turned: bool = False
     cells: tuple = ()  # ((recipe, (c, r)), ...) sorted by recipe
     output_side: str = ""
+    merge: str = ""  # row: "" or production_layout.LANE_MERGE
     # Reserved for modules and beacons (empty today; ``generate`` refuses non-empty ones):
     # modules = ((recipe, (module, ...)), ...), beacons = ((beacon, (module, ...)), ...).
     # ``effects`` is the one place their speed / consumption / pollution effects enter the metrics.
@@ -105,7 +110,7 @@ class Genome:
     def key(self) -> str:
         short = self.machine.replace("assembling-machine-", "am")
         if self.form == "row":
-            return f"row-{short}-{self.spare}"
+            return f"row-{short}-{self.spare}" + (f"-{self.merge}" if self.merge else "")
         order = "".join(f"{c}{r}" for _, (c, r) in self.cells)
         bend = "t" if self.turned else "s"
         return f"cl-{short}-{self.grid[0]}x{self.grid[1]}{bend}-{self.output_side[:1]}-{order}"
@@ -119,6 +124,8 @@ class Genome:
         }
         if self.form == "row":
             out["spare"] = self.spare
+            if self.merge:
+                out["merge"] = self.merge
         else:
             out.update(
                 grid=list(self.grid),
@@ -135,7 +142,7 @@ class Genome:
             beacons=tuple((name, tuple(names)) for name, names in (data.get("beacons") or [])),
         )
         if data.get("form") == "row":
-            return cls("row", data["machine"], spare=data.get("spare", "default"), **extra)
+            return cls("row", data["machine"], spare=data.get("spare", "default"), merge=data.get("merge", ""), **extra)
         cells = tuple(sorted((recipe, tuple(cell)) for recipe, cell in (data.get("cells") or {}).items()))
         return cls(
             "cluster",
@@ -159,13 +166,18 @@ def generate(
     sourced: Callable[[str], bool],
     chest: str,
     origin: tuple[float, float] = MAIN_ORIGIN,
+    output: str = "stock_chest",
 ) -> dict:
-    """The canonical line of ``genome``; ValueError when it does not generate for this request."""
+    """The canonical line of ``genome``; ValueError when it does not generate for this request.
+
+    ``output`` is part of the request, not of the genome (``production_layout.OUTPUT_MODES``)."""
     if genome.modules or genome.beacons:
         raise ValueError("module slots and beacons are reserved genome fields; placing them is not implemented")
-    common = dict(inserter=inserter, enabled=enabled, sourced=sourced, chest=chest, origin=origin)
+    common = dict(inserter=inserter, enabled=enabled, sourced=sourced, chest=chest, origin=origin, output=output)
     if genome.form == "row":
-        line = _design_row_line(catalog, product, rate, machine=genome.machine, spare=genome.spare, **common)
+        line = _design_row_line(
+            catalog, product, rate, machine=genome.machine, spare=genome.spare, merge=genome.merge, **common
+        )
     elif genome.form == "cluster":
         line = cluster_line(
             catalog,
@@ -213,8 +225,12 @@ def genomes(catalog: Any, *, product: str, enabled: list[str], sourced: Callable
     recipe = _row_recipe(catalog, product)
     if recipe is None:
         return found
+    try:
+        merge = plan_sources(catalog, recipe, sourced)["merge"] or ""
+    except ValueError:
+        merge = ""
     for machine in _row_machines(catalog, recipe, enabled):
-        found += [Genome("row", machine, spare=spare) for spare in ROW_SPARES]
+        found += [Genome("row", machine, spare=spare, merge=merge) for spare in ROW_SPARES]
     for machine in CLUSTER_MACHINES:
         if machine not in enabled or machine not in catalog.entities:
             continue
@@ -286,7 +302,9 @@ def rate_class(rate: float, requested: float) -> str:
 
 def _growth(catalog: Any, line: dict, genome: Genome) -> dict:
     main = line["main"]
-    tail_rate = inserter_rate(catalog, line["tail"]["arm"]["name"])
+    arm = line["tail"].get("arm")
+    # A belt output has no tail inserter: the row's own output lane caps it (sizing).
+    tail_rate = inserter_rate(catalog, arm["name"]) if arm else float("inf")
     if genome.form == "cluster":
         flips = [e["item"] for e in grow_decision(catalog, main, 2) if e["kind"] == "belt"]
         return {
@@ -590,4 +608,5 @@ def library_request(
 
 def request_args(request: dict) -> dict:
     """The ``generate`` keywords of a request (drops bookkeeping keys)."""
-    return {k: request[k] for k in ("product", "rate", "inserter", "enabled", "sourced", "chest") if k in request}
+    keys = ("product", "rate", "inserter", "enabled", "sourced", "chest", "output")
+    return {k: request[k] for k in keys if k in request}
