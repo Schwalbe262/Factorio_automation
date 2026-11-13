@@ -116,6 +116,37 @@ def alternative_exits(record):
     return [option for _distance, option in sorted(options, key=lambda row: (row[0], row[1]["side"]))]
 
 
+def other_patches(site, world_id, resource):
+    """The plan's other patches of ``resource`` (best first) as ``{"centroid", "bbox", "distance"}``; [] without a plan."""
+    if site is None:
+        return []
+    try:
+        row = site.plan(world_id).resource(resource)
+    except Exception:  # noqa: BLE001 - the plan is preferred, never a new failure mode
+        return []
+    if row is None:
+        return []
+    return [
+        {"centroid": [float(p.centroid[0]), float(p.centroid[1])], "bbox": p.bbox.to_list(), "distance": p.distance}
+        for p in row.others
+    ]
+
+
+def plan_zone_areas(site, world_id, *, exclude_prefix=""):
+    """``[(owner, [[x0, y0], [x1, y1]])]`` of every reserved plan zone, owners with ``exclude_prefix`` left out."""
+    if site is None:
+        return []
+    try:
+        zones = site.world(world_id).zones()
+    except Exception:  # noqa: BLE001 - the plan is preferred, never a new failure mode
+        return []
+    return [
+        ("plan:" + owner, [[r.x0, r.y0], [r.x1, r.y1]])
+        for owner, r in zones
+        if not (exclude_prefix and owner.startswith(exclude_prefix))
+    ]
+
+
 def site_exit(site, world_id, resource):
     """:func:`plan_exit` on the site service's plan; None without a service or plan."""
     if site is None:
