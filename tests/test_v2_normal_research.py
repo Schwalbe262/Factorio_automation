@@ -93,7 +93,17 @@ class EngineResearchTests(unittest.TestCase):
                 "production": {"automation-science-pack": {"consumed": 10}, "logistic-science-pack": {"consumed": 0}},
             }
             request = {"technology": "advanced-material-processing"}
-            self.assertEqual(obj.step(obs, request)["reason"], "waiting_for_science_pack_supply")
+            waiting = obj.step(obs, request)
+            self.assertEqual(waiting["reason"], "waiting_for_science_pack_supply")
+            # eval-4177156614: the ledger showed evidence {}; the wait now names the missing producer.
+            self.assertEqual(
+                waiting["evidence"],
+                {
+                    "technology": "advanced-material-processing",
+                    "packs": ["logistic-science-pack"],
+                    "producers": ["logistic_science"],
+                },
+            )
             obj.green = SimpleNamespace(proof=lambda o: {"science_units": [2]})
             self.assertEqual(obj.step(obs, request)["type"], "research_queue")
 

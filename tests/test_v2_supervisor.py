@@ -905,6 +905,69 @@ class MultiJobTests(Fixture):
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
         self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "row"]])
 
+    def test_site_connection_blocker_is_retried_on_new_facts_and_periodically_without_limit(self):
+        # eval-4177156614: brick_production blocked no_brick_furnace_block_with_complete_connections,
+        # retried once after a success, then nothing for 20+ minutes.
+        from factorio_agent.supervisor import SITE_RETRY_CHANGE_SECONDS, SITE_RETRY_PERIOD_SECONDS
+
+        reason = "no_brick_furnace_block_with_complete_connections"
+        self.s.max_seconds = None  # the test clock runs for hours
+        self.cli.jobs["brick"] = job("brick", "c0", status="blocked", reason=reason, blocked_at_time=self.clock())
+        self.s.work.data["nodes"].append(
+            dict(node("auto_brick", "c0"), job_key="brick", status="blocked", submitted=True, created_at=0)
+        )
+
+        def retries():
+            return [c for c in self.cli.calls if c[0] == "retry"]
+
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        plan = self.s.work.node_for_job("brick")["retry_plan"]
+        self.assertEqual(plan["rule"], "site_connection_retry")
+        self.assertFalse(plan["facts_changed"])
+        self.assertAlmostEqual(plan["next_retry_at_time"], self.clock() + SITE_RETRY_PERIOD_SECONDS, places=0)
+        # A job success alone does not retry it (the answer depends on the map).
+        self.cli.jobs["done"] = job("done", "c2", status="succeeded")
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        # A newly published material source: retried once the change interval passed.
+        (self.root / "material-sources.json").write_text("{}", encoding="utf-8")
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.assertTrue(self.s.work.node_for_job("brick")["retry_plan"]["facts_changed"])
+        self.clock.advance(SITE_RETRY_CHANGE_SECONDS + 1)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(retries(), [["retry", "--key", "brick"]])
+        # Nothing changes any more: a slow periodic retry, with no attempt limit.
+        for count in range(AUTO_RETRY_LIMIT + 2):
+            self.cli.jobs["brick"].update(status="blocked", reason=reason)
+            self.clock.advance(SITE_RETRY_PERIOD_SECONDS - 10)
+            self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+            self.clock.advance(11)
+            self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(len(retries()), AUTO_RETRY_LIMIT + 3)
+        self.assertEqual(self.s.work.node_for_job("brick")["retry_plan"]["attempts"], AUTO_RETRY_LIMIT + 3)
+
+    def test_ready_nodes_behind_a_busy_lane_do_not_keep_the_autopilot_off(self):
+        # eval-4177156614: research nodes for automation-2 and engine stayed ready behind
+        # the waiting advanced-material-processing job; the queue looked full and the
+        # autopilot never proposed logistic science or steel again.
+        calls = []
+
+        def planner(jobs, queue_nodes, observation, capabilities, limit=3):
+            calls.append(limit)
+            return [node("auto_c4", "c4")]
+
+        patcher = patch.object(Supervisor, "_load_autopilot", return_value=planner)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cli.jobs["research"] = job("research", "c0")
+        rows = [dict(node(name, "c0"), parameters={"technology": name}) for name in ("r1", "r2")]
+        self.s.work.merge(rows, CAPS, self.cli.validate_requests, 1)
+        self.s.work.refresh(list(self.cli.jobs.values()), CAPS)
+        self.assertEqual([q["status"] for q in self.s.work.data["nodes"]], ["ready", "ready"])
+        self.assertEqual(self.s.work.queued_count(), 2)
+        self.assertTrue(self.s._autopilot(self.s._snapshot()))
+        self.assertEqual(calls, [3])
+        self.assertIn("auto_c4", [q["id"] for q in self.s.work.data["nodes"]])
+
     def test_stalled_job_without_a_block_timestamp_is_timed_from_first_sight(self):
         self.cli.jobs["stuck"] = job("stuck", "c0", status="blocked", reason="objective_progress_stalled")
         self.assertFalse(self.s._auto_retry(self.s._snapshot()))

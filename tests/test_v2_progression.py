@@ -185,6 +185,30 @@ class AutopilotTests(unittest.TestCase):
         self.assertIn("auto_research_steel_processing", ids(nodes))
         self.assertNotIn("auto_research_logistic_science_pack", ids(nodes))
 
+    def test_green_research_waits_for_the_green_block_which_is_proposed_first(self):
+        # eval-4177156614: three green-pack research steps filled the autopilot batch and the
+        # research lane while no logistic science block existed.
+        jobs = done_through("research_fast_inserter")
+        red, green = (
+            [{"name": "automation-science-pack", "amount": 1}],
+            [{"name": "automation-science-pack", "amount": 1}, {"name": "logistic-science-pack", "amount": 1}],
+        )
+        listed = [
+            {"technology": "gun-turret", "science_ingredients": red},
+            {"technology": "advanced-material-processing", "science_ingredients": green},
+            {"technology": "automation-2", "science_ingredients": green},
+            {"technology": "engine", "science_ingredients": green},
+        ]
+        observation = {"available_research": {"technologies": listed}}
+        nodes = ids(self.propose(jobs, observation=observation, limit=10))
+        self.assertIn("auto_logistic_science", nodes)
+        self.assertIn("auto_research_gun_turret", nodes)
+        for step in ("advanced_material_processing", "automation_2", "engine"):
+            self.assertNotIn("auto_research_" + step, nodes)
+        jobs.append(job("logistic_science"))
+        nodes = ids(self.propose(jobs, observation=observation, limit=10))
+        self.assertIn("auto_research_advanced_material_processing", nodes)
+
     def test_completed_roadmap_proposes_nothing(self):
         # A finished roadmap still retires the starter cells its permanent sources replaced, once each.
         jobs = done_through("chemical_science")

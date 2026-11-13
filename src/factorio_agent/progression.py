@@ -461,6 +461,31 @@ def _research_ready(step: Step, observation: Mapping) -> bool:
     return step.parameters["technology"] in listed
 
 
+def _packs_unsupplied(step: Step, observation: Mapping, succeeded: set[str]) -> list[str]:
+    """Science packs of a research step whose producer block has no succeeded job (sorted).
+
+    Packs come from the receipt's ``available_research`` row of the technology;
+    a pack's producer is ``normal_research.PACK_PRODUCERS``. Such a step is not
+    proposed: its job could only wait (``waiting_for_science_pack_supply``) and
+    hold the research lane, while the producer is its own roadmap step.
+    """
+    if step.capability != RESEARCH_CAPABILITY:
+        return []
+    from .normal_research import PACK_PRODUCERS
+
+    available = observation.get("available_research")
+    rows = available.get("technologies") if isinstance(available, Mapping) else None
+    row = next(
+        (r for r in rows or () if isinstance(r, Mapping) and r.get("technology") == step.parameters["technology"]),
+        None,
+    )
+    packs = {i.get("name") for i in (row or {}).get("science_ingredients") or () if isinstance(i, Mapping)}
+    # Red science has its own bootstrap path (startup science, finite batches): only
+    # later packs hold a research step back.
+    packs.discard("automation-science-pack")
+    return sorted(p for p in packs if p in PACK_PRODUCERS and PACK_PRODUCERS[p] not in succeeded)
+
+
 def _natively_queued(step: Step, observation: Mapping) -> bool:
     """A research step whose technology already sits in the native research queue needs no job.
 
@@ -642,7 +667,7 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
             early = early_ready(step, progress, steps, capabilities, observation, jobs)
             if early is None:
                 continue
-        if not _research_ready(step, observation):
+        if not _research_ready(step, observation) or _packs_unsupplied(step, observation, succeeded):
             continue
         if _natively_queued(step, observation) or not gate_ready(step, jobs, observation):
             continue

@@ -46,6 +46,22 @@ RETRY_CLEARED_BY = {
         {"planned_main_bus", "main_bus", "automation_science", "smelting_capacity", "produce"}
     ),
 }
+# Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan):
+# their answer changes with the map, not with a job success, so they never run out of
+# retries. Retried when the published facts change (board plans and connections,
+# material sources, site plan, researched technologies), at most every
+# SITE_RETRY_CHANGE_SECONDS, and otherwise every SITE_RETRY_PERIOD_SECONDS.
+SITE_RETRY_MARKERS = (
+    "_with_complete_connections",
+    "no_clean_trunk_corridor",
+    "route_port_escape_reserved_by_unbuilt_plan",
+    "site_allocation_failed",
+    "_district_block",
+    "no_legal_site",
+)
+SITE_RETRY_CHANGE_SECONDS = 300
+SITE_RETRY_PERIOD_SECONDS = 900
+SITE_RETRY_FACT_FILES = ("pcb-board.json", "material-sources.json", "site-plan.json")
 QUEUED = ("pending", "ready")
 # Existing nodes in these states absorb a new node with the same capability and parameters.
 DEDUPE_STATUSES = {"pending", "ready", "running", "completed"}
@@ -294,6 +310,19 @@ def _validated_node(node, capabilities, seen):
     return dict(deepcopy(node), depends_on=sorted(set(deps)))
 
 
+def _site_blocked(reason: str) -> bool:
+    """A site/connection blocker (``SITE_RETRY_MARKERS``)."""
+    return any(marker in reason for marker in SITE_RETRY_MARKERS)
+
+
+def _technology_names(value) -> set:
+    if isinstance(value, dict):
+        return {name for name, flag in value.items() if flag}
+    if isinstance(value, (list, tuple)):
+        return {name for name in value if isinstance(name, str)}
+    return set()
+
+
 def _lane(node) -> str:
     """Admission lane of a queue node (see ``jobs.admission_lane``)."""
     return admission_lane(node["capability"], node.get("parameters"))
@@ -498,8 +527,16 @@ class WorkQueue:
         rows = self.ready_nodes()
         return rows[0] if rows else None
 
-    def queued_count(self):
-        return sum(q["status"] in QUEUED for q in self.data["nodes"])
+    def queued_count(self, busy_lanes=None):
+        """Pending/ready nodes, without those whose admission lane is in ``busy_lanes``.
+
+        A node whose lane an active job holds cannot start until that job ends (one
+        job per lane), so it must not make the queue look full: two research nodes
+        behind one waiting research job kept the autopilot off for 20+ minutes
+        (eval-4177156614) while logistic science and steel were ready.
+        """
+        busy = set(busy_lanes or ())
+        return sum(q["status"] in QUEUED and _lane(q) not in busy for q in self.data["nodes"])
 
     def node_for_job(self, key):
         return next((q for q in self.data["nodes"] if q["job_key"] == key), None)
@@ -1011,8 +1048,12 @@ class Supervisor:
                 seen.add(name)
                 self.technology_order.append(name)
 
-    def _queue_low(self):
-        return self.work.queued_count() < LOW_QUEUE
+    def _queue_low(self, jobs=None):
+        """Fewer than ``LOW_QUEUE`` nodes could be dispatched now (``WorkQueue.queued_count``)."""
+        if jobs is None:
+            return self.work.queued_count() < LOW_QUEUE
+        busy = {admission_lane(j["capability"], j.get("parameters")) for j in jobs if j.get("status") in ACTIVE}
+        return self.work.queued_count(busy) < LOW_QUEUE
 
     def _load_roadmap(self):
         """The framework roadmap steps, or None while the progression module is unavailable."""
@@ -1327,19 +1368,23 @@ class Supervisor:
             return None
 
     def _autopilot(self, context):
-        """When fewer than two nodes are pending or ready, merge framework default nodes.
+        """When fewer than two nodes could be dispatched now, merge framework default nodes.
+
+        Ready nodes waiting for a busy admission lane and pending nodes do not count
+        (``WorkQueue.queued_count``): a blocked or waiting step never holds back
+        steps that do not need it.
 
         Autopilot nodes use Luna's queue node format with ids starting ``auto_``
         and pass the same merge validation. A rejected batch is logged and does
         not enter error backoff, so Luna planning and dispatch continue.
         """
-        if not self._queue_low():
+        observation, status, capabilities, _ = context
+        jobs = list(status.get("jobs", {}).values())
+        if not self._queue_low(jobs):
             return False
         planner = self._load_autopilot()
         if planner is None:
             return False
-        observation, status, capabilities, _ = context
-        jobs = list(status.get("jobs", {}).values())
         known = {q["id"] for q in self.work.data["nodes"]}
         try:
             rows = planner(jobs, deepcopy(self.work.data["nodes"]), observation, capabilities, limit=AUTOPILOT_LIMIT)
@@ -1678,6 +1723,9 @@ class Supervisor:
             reason = str(job.get("reason", ""))
             if _unknown(job) or "rollback" in reason or "deadline" in reason:
                 continue
+            if _site_blocked(reason):
+                retried = self._site_retry(job, reason, context) or retried
+                continue
             cleared_by = RETRY_CLEARED_BY.get(reason)
             succeeded = len(done) if cleared_by is None else sum(c in cleared_by for c in done)
             seen = memory.setdefault(key, {"successes": succeeded, "count": 0, "first_seen": self.clock()})
@@ -1713,6 +1761,69 @@ class Supervisor:
             # (fleet auto-1113-1708 seed 1054430559: the belt row's retry after the bus was
             # deferred for a slot and never came back).
         return retried
+
+    def _site_facts(self, observation) -> list:
+        """Published facts a site/connection failure depends on (cheap: file stamps, technology count)."""
+        facts = []
+        for name in SITE_RETRY_FACT_FILES:
+            try:
+                stat = (self.root / name).stat()
+                facts.append([name, stat.st_mtime_ns, stat.st_size])
+            except OSError:
+                facts.append([name, None, None])
+        technologies = observation.get("technologies") if isinstance(observation, dict) else None
+        facts.append(["technologies", len(_technology_names(technologies))])
+        return facts
+
+    def _site_retry(self, job, reason, context) -> bool:
+        """Rule-driven retry of a site/connection blocker; records the next condition on its queue node.
+
+        Retry when the facts (``_site_facts``) changed since the last attempt and
+        SITE_RETRY_CHANGE_SECONDS passed, or when SITE_RETRY_PERIOD_SECONDS passed
+        anyway. Each retry re-plans (the planner allocates sites afresh), with no
+        attempt limit: a site blocker is never left blocked forever.
+        """
+        memory = self.__dict__.setdefault("_site_retries", {})
+        key = job["key"]
+        now = self.clock()
+        facts = self._site_facts(context[0])
+        seen = memory.get(key)
+        if seen is None or seen.get("reason") != reason:
+            since = float(job.get("blocked_at_time") or now)
+            seen = memory[key] = {"reason": reason, "facts": facts, "last": since, "count": 0}
+        changed = facts != seen["facts"]
+        wait = SITE_RETRY_CHANGE_SECONDS if changed else SITE_RETRY_PERIOD_SECONDS
+        node = self.work.node_for_job(key)
+        if now - seen["last"] < wait:
+            # The stall stays visible: the node says when and on what it is retried.
+            plan = {
+                "rule": "site_connection_retry",
+                "reason": reason[:200],
+                "attempts": seen["count"],
+                "next_retry_at_time": round(seen["last"] + wait, 1),
+                "sooner_when_changed": list(SITE_RETRY_FACT_FILES) + ["technologies"],
+                "facts_changed": changed,
+            }
+            if node is not None and node.get("retry_plan") != plan:
+                node["retry_plan"] = plan
+                self.work.save()
+            return False
+        if not self._control_command("retry", key):
+            return False
+        seen.update(facts=facts, last=now, count=seen["count"] + 1)
+        if node is not None:
+            node["retry_plan"] = {"rule": "site_connection_retry", "reason": reason[:200], "attempts": seen["count"]}
+            self.work.save()
+        self._event(
+            "auto_retry",
+            key=key,
+            capability=job.get("capability"),
+            blocked_reason=reason[:200],
+            rule="site_connection_retry",
+            trigger="facts_changed" if changed else "period",
+            attempt=seen["count"],
+        )
+        return True
 
     def _idle(self, seconds):
         until = self.clock() + seconds
