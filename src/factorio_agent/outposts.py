@@ -713,6 +713,10 @@ return {ok=true,remaining=amount,rate=proto.mining_speed*60/prototypes.entity[ar
             return None
         evidence = result.get("evidence") or {}
         blocked = evidence.get("entity")
+        if reason == IN_RESERVATION and blocked is None:
+            # The preflight refusal carries its fields at the top level of the result.
+            evidence = {k: result[k] for k in ("entity", "position") if k in result}
+            blocked = evidence.get("entity")
         if reason == IN_RESERVATION and isinstance(blocked, str) and isinstance(evidence.get("position"), dict):
             # The preflight names the entity and its position separately. A bridge
             # pole planned inside the bank's own reserved columns (plans saved
