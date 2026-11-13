@@ -35,6 +35,20 @@ Rule (``docs/v2/PLANNERS.md``, "Early start"):
    (the exit-side fallback runs before saving; bridge re-plans keep ports).
    The district stores the ports it planned against; when one changes it
    re-plans if nothing of it is built, else it blocks.
+7. Coming research (``technologies_coming``): current research, the native
+   queue, the technology of an active job, and the technology of a roadmap
+   research step the autopilot proposes next (not satisfied, not stalled,
+   every ``after`` step satisfied or in flight, its admission ``requires``
+   succeeded).
+8. Runs early (``runs_early``): a strict ``requires`` is missing, or a
+   ``locked_until`` technology is not researched yet. While early the
+   deadline does not run, contested plates are held, and a hand craft of an
+   item a supply cell makes waits for its machine-made stock (``Deferral``).
+9. Parked (``parked``): a waiting job whose whole buildable plan stands and
+   whose deferred entities wait only for coming research
+   (``evidence.research_only``). It keeps its admission lane but holds no job
+   slot (``jobs.holds_slot``), so the three early outposts, the district and
+   the bus can wait for their research side by side.
 """
 
 from __future__ import annotations
@@ -84,9 +98,10 @@ def _names(value) -> set[str]:
 
 
 def technologies_coming(observation: Mapping, jobs: Iterable[Mapping]) -> set[str]:
-    """Technologies being researched, natively queued, or owned by an active job."""
+    """Technologies being researched, natively queued, owned by an active job, or next on the roadmap (rule 7)."""
     from .progression import STEP_TECHNOLOGY
 
+    jobs = list(jobs)
     coming = set()
     if isinstance(observation.get("research"), str):
         coming.add(observation["research"])
@@ -98,7 +113,66 @@ def technologies_coming(observation: Mapping, jobs: Iterable[Mapping]) -> set[st
         technology = parameters.get("technology") or STEP_TECHNOLOGY.get(job.get("capability"))
         if isinstance(technology, str):
             coming.add(technology)
-    return coming
+    return coming | roadmap_technologies_next(observation, jobs)
+
+
+def roadmap_technologies_next(observation: Mapping, jobs: Iterable[Mapping]) -> set[str]:
+    """Technologies of roadmap research steps the autopilot proposes next (module rule 7)."""
+    from .jobs import CAPABILITIES
+    from .progression import ROADMAP, STEP_TECHNOLOGY, _by_id, _Progress
+
+    progress = _Progress(tuple(jobs), frozenset(_names(observation.get("technologies"))))
+    succeeded = progress.succeeded_capabilities
+    steps = _by_id()
+    found = set()
+    for step in ROADMAP:
+        technology = step.parameters.get("technology") or STEP_TECHNOLOGY.get(step.capability)
+        if not isinstance(technology, str) or step.capability not in CAPABILITIES:
+            continue
+        if progress.satisfied(step) or progress.stalled(step):
+            continue
+        if not set(admission_requires(CAPABILITIES, step.capability)) <= succeeded:
+            continue
+        if all(progress.satisfied(steps[name]) or progress.in_flight(steps[name]) for name in step.after):
+            found.add(technology)
+    return found
+
+
+def runs_early(capabilities: Mapping, capability: str, succeeded: Iterable[str], technologies=None) -> bool:
+    """Module rule 8: a strict ``requires`` is missing or a ``locked_until`` technology is not researched."""
+    early = spec(capabilities, capability)
+    if early is None:
+        return False
+    if is_early(capabilities, capability, succeeded):
+        return True
+    return bool(set(early.get("locked_until", [])) - _names(technologies))
+
+
+RESEARCH_ONLY = "research_only"  # waiting-report evidence key of FactoryBuilder.ensure_plan
+
+
+def parked(job: Mapping) -> bool:
+    """Module rule 9: a waiting job whose built plan waits only for coming research."""
+    evidence = job.get("evidence") if isinstance(job.get("evidence"), Mapping) else {}
+    return job.get("status") == "waiting" and evidence.get(RESEARCH_ONLY) is True
+
+
+def machine_made_items(jobs: Iterable[Mapping], observation: Mapping) -> set[str]:
+    """Items a supply cell makes or is about to make: products of an unretired active or succeeded build job.
+
+    Without any supply cell job the receipt's chosen ``supply_cell_candidates``
+    products count once the assembler recipe is enabled (the cell is proposed then).
+    """
+    rows = [j for j in jobs if j.get("capability") == "supply_cell"]
+    if any((j.get("parameters") or {}).get("retire") for j in rows):
+        return set()
+    builds = [j for j in rows if j.get("status") in ACTIVE_STATUSES | {"succeeded"}]
+    items = {p for j in builds for p in (j.get("parameters") or {}).get("products") or () if isinstance(p, str)}
+    if not rows:
+        found = observation.get("supply_cell_candidates")
+        if isinstance(found, Mapping) and "assembling-machine-1" in _names(observation.get("enabled_recipes")):
+            items |= {p for p in found.get("products") or () if isinstance(p, str)}
+    return items
 
 
 def locks_pending(early: Mapping, observation: Mapping, jobs: Iterable[Mapping], gate=None) -> list[str] | None:
@@ -230,7 +304,33 @@ def district_feed_anchors(root, observation: Mapping) -> dict:
     return {"known": True, "reason": "district plan registered and every bus feed anchor belt built"}
 
 
+def mining_zones(root, observation: Mapping) -> dict:
+    """Outpost inputs: the site plan of this world has a mining zone for every roadmap outpost resource.
+
+    A bank needs only geometry: its zone, output side and feeder corridor
+    come from the site plan (``mining_site.site_exit``); its drills wait for
+    their research (``locked_until``).
+    """
+    from .progression import ROADMAP
+
+    world = observation.get("world_id")
+    site = _read(Path(root) / "site-plan.json")
+    if site.get("world_id") != world or not isinstance(site.get("plan"), Mapping):
+        return {"known": False, "reason": "no site plan for this world"}
+    zones = {
+        z.get("name")
+        for z in site["plan"].get("zones") or ()
+        if isinstance(z, Mapping) and z.get("kind") == "mining" and z.get("output_side")
+    }
+    resources = sorted({s.parameters["resource"] for s in ROADMAP if s.capability == "mining_outpost"})
+    missing = [r for r in resources if "mining:" + r not in zones]
+    if missing:
+        return {"known": False, "reason": "site plan has no mining zone for " + ",".join(missing)}
+    return {"known": True, "reason": "the site plan has a mining zone with an output side for every outpost resource"}
+
+
 INPUT_CHECKS: dict[str, Callable[[Any, Mapping], dict]] = {
+    "mining_zones": mining_zones,
     "mining_bank_ports": mining_bank_ports,
     "district_feed_anchors": district_feed_anchors,
 }
@@ -286,8 +386,17 @@ def early_ready(step, progress, steps: Mapping, capabilities: Mapping, observati
 class Deferral:
     """Which plan entities ``FactoryBuilder.ensure_plan`` leaves for later (module rule 4)."""
 
-    def __init__(self, catalog, observation: Mapping, *, coming: Iterable[str] = (), held: Iterable[str] = ()):
+    def __init__(
+        self,
+        catalog,
+        observation: Mapping,
+        *,
+        coming: Iterable[str] = (),
+        held: Iterable[str] = (),
+        machine_made: Iterable[str] = (),
+    ):
         self.catalog = catalog
+        self.machine_made = set(machine_made)
         self.enabled = (
             observation.get("enabled_recipes") if isinstance(observation.get("enabled_recipes"), Mapping) else None
         )
@@ -317,6 +426,8 @@ class Deferral:
             return None
         if not result.get("type") and result.get("status") == "waiting":
             return str(result.get("reason") or "waiting")
+        if result.get("type") == "craft" and item in self.machine_made:
+            return f"waiting: machine-made {item} from the supply cell; no hand craft while early"
         if result.get("type") == "craft" and self.held:
             from .progression import raw_cost
 
@@ -339,14 +450,15 @@ def deferral(root, observation: Mapping, catalog, capability: str, capabilities:
     if spec(capabilities, capability) is None:
         return None
     jobs = ledger_jobs(root, observation.get("world_id"))
-    early = is_early(capabilities, capability, succeeded_capabilities(jobs))
+    early = runs_early(capabilities, capability, succeeded_capabilities(jobs), observation.get("technologies"))
     researched = _names(observation.get("technologies"))
     locked = set(spec(capabilities, capability).get("locked_until", [])) - researched
     coming = technologies_coming(observation, jobs) & locked
     held = contested_plates(jobs, exclude=(capability,)) if early else set()
+    made = machine_made_items(jobs, observation) if early else set()
     if not early and not coming:
         return None
-    return Deferral(catalog, observation, coming=coming, held=held)
+    return Deferral(catalog, observation, coming=coming, held=held, machine_made=made)
 
 
 def track_early_time(job: dict, tick: int, now: float, early: bool) -> None:

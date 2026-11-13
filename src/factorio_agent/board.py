@@ -456,6 +456,54 @@ def hardware_conflicts(builder, entities, planned):
     return conflicts
 
 
+class _Footprints:
+    """``FactoryBuilder._occupied_by_plan`` without a builder (it reads only the entity rows)."""
+
+    _occupied_by_plan = FactoryBuilder._occupied_by_plan
+
+
+def starter_keepouts(root, obs) -> dict:
+    """What a new starter cell must not cover: ``{"areas": [[x1, y1, x2, y2]], "tiles": ["x,y"]}``.
+
+    Starter cells (``deterministic_bootstrap.discover_cell``,
+    ``mining.StarterCapacity.choose_site``) used to read only the live map, so a
+    cell could be placed on the reserved coal feed (board block
+    ``power_coal_feed``) or any other planned-but-unbuilt block. Areas are the
+    ``reserved_area`` of every board block; tiles (``floor`` corner keys) are
+    every planned-but-unbuilt entity (:func:`planned_unbuilt_hardware`).
+    Empty without a board of this world.
+    """
+    path = Path(root) / "pcb-board.json" if root is not None else None
+    try:
+        board = json.loads(path.read_text(encoding="utf-8")) if path is not None and path.exists() else {}
+    except (OSError, ValueError):
+        board = {}
+    if board.get("world_id") != obs.get("world_id") or not isinstance(board.get("blocks"), dict):
+        return {"areas": [], "tiles": []}
+    areas = []
+    for block in board["blocks"].values():
+        area = block.get("reserved_area") if isinstance(block, dict) else None
+        if isinstance(area, list) and len(area) == 2 and all(isinstance(p, list) and len(p) == 2 for p in area):
+            areas.append([area[0][0], area[0][1], area[1][0], area[1][1]])
+    tiles = planned_unbuilt_hardware(_Footprints(), obs, board["blocks"])
+    keys = sorted({f"{math.floor(x)},{math.floor(y)}" for x, y in tiles})
+    return {"areas": areas, "tiles": keys}
+
+
+# Lua: ``keepout_hit(left, top, right, bottom)`` for a box against ``keepouts``
+# (the JSON of :func:`starter_keepouts`, bound by the caller as ``keepouts``).
+KEEPOUT_LUA = """
+local keepout_tiles={};for _,k in ipairs(keepouts.tiles or {})do keepout_tiles[k]=true end
+local function keepout_hit(l,t,r,b)
+ for _,a in ipairs(keepouts.areas or {})do if l<a[3]-1e-6 and r>a[1]+1e-6 and t<a[4]-1e-6 and b>a[2]+1e-6 then return true end end
+ for x=math.floor(l+1e-6),math.ceil(r-1e-6)-1 do for y=math.floor(t+1e-6),math.ceil(b-1e-6)-1 do
+  if keepout_tiles[x..","..y] then return true end
+ end end
+ return false
+end
+"""
+
+
 CROSSABLE_BELTS = ("transport-belt", "underground-belt")
 # Direction (16-way) -> unit tile vector of a belt's flow.
 _FLOW = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}

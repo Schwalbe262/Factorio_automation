@@ -34,15 +34,28 @@ class StarterCapacity:
             raise RuntimeError(result.get("reason", "cell_survey_failed"))
         return [c for c in result.get("cells", []) if c.get("receiver") and c.get("remaining", 0) > 0]
 
-    def choose_site(self, resource: str) -> dict:
+    def choose_site(self, resource: str, obs: dict | None = None) -> dict:
+        """The best new cell site; with ``obs`` it avoids every board block and planned-unbuilt entity."""
+        from .board import KEEPOUT_LUA, starter_keepouts
+
         receiver = "stone-furnace" if resource in {"iron-ore", "copper-ore"} else "wooden-chest"
+        keepouts = starter_keepouts(self.path.parent, obs) if obs is not None else {"areas": [], "tiles": []}
         return self.game.query(
             """
 local resource="""
             + json.dumps(resource)
             + """;local receiver_name="""
             + json.dumps(receiver)
+            + """;local keepouts=helpers.json_to_table("""
+            + json.dumps(json.dumps(keepouts, separators=(",", ":")))
+            + ")"
+            + KEEPOUT_LUA
             + """
+local function kept_out(p,r)
+ if keepout_hit(p.x-1,p.y-1,p.x+1,p.y+1) then return true end
+ if receiver_name=="wooden-chest" then return keepout_hit(r.x-.5,r.y-.5,r.x+.5,r.y+.5) end
+ return keepout_hit(r.x-1,r.y-1,r.x+1,r.y+1)
+end
 local seen={};local best=nil;local best_score=-math.huge
 for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resource,limit=2000}) do
  local x=math.floor(ore.position.x);local y=math.floor(ore.position.y);local key=x..":"..y
@@ -50,7 +63,7 @@ for _,ore in pairs(s.find_entities_filtered{position={0,0},radius=384,name=resou
   seen[key]=true
   local p={x=x,y=y};local r={x=x,y=y-2}
   if receiver_name=="wooden-chest" then r={x=x-0.5,y=y-1.5} end
-  if s.can_place_entity{name="burner-mining-drill",position=p,direction=0,force=f}
+  if not kept_out(p,r) and s.can_place_entity{name="burner-mining-drill",position=p,direction=0,force=f}
     and s.can_place_entity{name=receiver_name,position=r,direction=0,force=f} then
    local richness=0;local tiles=0;local mixed=false
    for _,entity in pairs(s.find_entities_filtered{area={{x-1,y-1},{x+1,y+1}},type="resource"}) do
@@ -157,7 +170,7 @@ return best or {ok=false,reason="no_clear_starter_capacity_site"}
             self.state["pending"].pop(resource)
             pending = None
         if pending is None:
-            pending = self.choose_site(resource)
+            pending = self.choose_site(resource, obs)
             if not pending.get("ok"):
                 return {"status": "blocked", "reason": pending.get("reason", "capacity_survey_failed")}
             self.state["pending"][resource] = pending

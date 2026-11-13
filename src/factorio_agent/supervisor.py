@@ -22,7 +22,7 @@ from factorio_agent.core.deterministic_character import _identity
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json
 from factorio_agent.errors import CLIError
 from factorio_agent.jobs import MAX_ACTIVE_JOBS, admission_lane
-from factorio_agent.early_start import admission_requires
+from factorio_agent.early_start import admission_requires, parked
 from factorio_agent import incidents as incident_rules
 
 
@@ -1390,18 +1390,21 @@ class Supervisor:
         jobs = list(status.get("jobs", {}).values())
         active = _active_keys(jobs)
         busy = {admission_lane(j["capability"], j.get("parameters")) for j in jobs if j["status"] in ACTIVE}
+        # A job parked for research (early_start.parked) keeps its lane but holds no slot.
+        slots = sum(1 for j in jobs if j["status"] in ACTIVE and not parked(j))
         candidates = [q for q in self.work.ready_nodes() if _lane(q) not in busy]
-        if len(active) >= MAX_ACTIVE_JOBS or not candidates or self._stop_requested():
+        if slots >= MAX_ACTIVE_JOBS or not candidates or self._stop_requested():
             return active
         tick = self._fresh_tick(actor)
         for node in candidates:
-            if len(active) >= MAX_ACTIVE_JOBS or self._stop_requested():
+            if slots >= MAX_ACTIVE_JOBS or self._stop_requested():
                 break
             if _lane(node) in busy:
                 continue
             if self._submit(node, tick):
                 active.append(node["job_key"])
                 busy.add(_lane(node))
+                slots += 1
         return active
 
     def _submit(self, node, tick):

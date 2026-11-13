@@ -61,6 +61,9 @@ class ProposalTests(unittest.TestCase):
     def test_not_when_the_locking_research_is_not_coming(self):
         jobs = [j for j in outposts_in_flight() if j["capability"] != "bootstrap_logistics"]
         observation = {"early_start_inputs": {"smelting_district": INPUTS}}
+        # The roadmap's next research step counts as coming (rule 7) unless it stalled.
+        self.assertIn("auto_smelting_district", ids(self.propose(jobs, observation)))
+        jobs = jobs + [job("bootstrap_logistics", "blocked")]
         self.assertNotIn("auto_smelting_district", ids(self.propose(jobs, observation)))
         # Logistics researching natively counts as coming.
         nodes = self.propose(jobs, dict(observation, research="logistics"))

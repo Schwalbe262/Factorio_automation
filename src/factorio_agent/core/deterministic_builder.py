@@ -208,6 +208,7 @@ COAL_RICHNESS_TIERS = (4000, 2000, 1000, 400, 0)
 # for its item, a later entity whose item is carried is placed instead. These
 # entity types keep plan order; at most this many placement checks per call.
 BUILD_AHEAD_KEEP_ORDER = frozenset({"mining-drill", "inserter"})
+KEEP_ORDER_REASON = "keeps plan order behind deferred entities"
 BUILD_AHEAD_CHECKS = 4
 
 
@@ -409,8 +410,15 @@ return {ok=true,only_actor=own_actor and not other and terrain}
             }
         if deferred:
             reasons = "; ".join(f"{item}: {why}" for item, why in sorted(deferred.items()))
+            # Early start "parked" (early_start.parked): everything else stands and
+            # the rest waits only for coming research, so the job holds no job slot.
+            research = [why.startswith("waiting for research") for why in deferred.values()]
+            order = [why == KEEP_ORDER_REASON for why in deferred.values()]
             return _report(
-                "waiting", ("waiting for deferred plan entities: " + reasons)[:300], deferred=sorted(deferred)
+                "waiting",
+                ("waiting for deferred plan entities: " + reasons)[:300],
+                deferred=sorted(deferred),
+                research_only=any(research) and all(r or o for r, o in zip(research, order)),
             )
         return _report(
             "succeeded",
@@ -431,7 +439,7 @@ return {ok=true,only_actor=own_actor and not other and terrain}
             return True
         entity_type = self.catalog.entities.get(entity["name"], {}).get("type", entity["name"])
         if deferred and entity_type in BUILD_AHEAD_KEEP_ORDER:
-            deferred[item] = "keeps plan order behind deferred entities"
+            deferred[item] = KEEP_ORDER_REASON
             return True
         if int(observation.get("inventory", {}).get(item, 0)) >= 1:
             return False

@@ -14,8 +14,11 @@ Rules (docs/v2/PLANNERS.md "Starter power in two phases"):
 2. While ``coal_feed_mode`` is ``hand_fed``, ``boiler_fuel_action`` keeps the
    boiler stocked; it runs in ``StarterExecutors.starter_upkeep`` and
    ``idle_action`` before the burner cells' fuel (``maintain_fuel``).
-3. ``feed_step_ready`` proposes the roadmap step ``power_coal_feed`` once belts
-   are machine-made (a succeeded supply cell stocking transport belts or a
+3. ``feed_step_ready`` proposes the roadmap step ``power_coal_feed`` once the
+   machine-made belts in stock cover the saved feed (receipt
+   ``coal_feed_belts``: carried + the supply cell's belt chest >= the
+   ``coal_plan`` belts; the cell's job need not have succeeded), or belts are
+   machine-made (a succeeded supply cell stocking transport belts or a
    succeeded ``produce`` row for them), or ``FEED_FALLBACK_TICKS`` after power,
    or at once on an old map whose power job already built the feed.
 4. ``FactoryBuilder.ensure_coal_feed`` builds and proves the feed; success sets
@@ -176,18 +179,75 @@ def belts_machine_made(jobs) -> bool:
     return False
 
 
+def belts_stocked(observation) -> bool:
+    """Receipt ``coal_feed_belts``: machine-made belts in stock (supply cell chest + carried) cover the feed."""
+    row = (observation or {}).get(BELT_RECEIPT)
+    if not isinstance(row, Mapping):
+        return False
+    needed, stocked = row.get("needed"), row.get("stocked")
+    numbers = all(isinstance(v, int) and not isinstance(v, bool) for v in (needed, stocked))
+    return numbers and needed > 0 and stocked >= needed
+
+
 def feed_step_ready(jobs, observation) -> bool:
     """Whether the roadmap may propose ``power_coal_feed`` now (rule 3 of the module doc)."""
     jobs = list(jobs)
     power = _power_job(jobs)
     if power is None:
         return False
-    if legacy_power(power) or belts_machine_made(jobs):
+    if legacy_power(power) or belts_stocked(observation) or belts_machine_made(jobs):
         return True
     since = (power.get("evidence") or {}).get("tick")
     tick = (observation or {}).get("tick")
     numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (since, tick))
     return numbers and tick - since >= FEED_FALLBACK_TICKS
+
+
+BELT_RECEIPT = "coal_feed_belts"
+# Belts of a feed whose reservation failed (POWER_COAL_FEED_BUILDS estimate; saved plans 95 and 141).
+UNPLANNED_FEED_BELTS = 100
+
+
+def feed_belt_receipt(root, observation) -> dict | None:
+    """Observe receipt ``coal_feed_belts``: ``{"needed", "stocked", "chest"}`` while the boiler is hand-fed.
+
+    needed  = transport belts of the saved ``coal_plan`` (``UNPLANNED_FEED_BELTS`` without one)
+    stocked = transport belts carried + in the supply cell's transport-belt product chest
+    None when the plant is belt-fed, power is not built, or the files belong to another world.
+    """
+    import json
+    from pathlib import Path
+
+    def read(name):
+        path = Path(root) / name
+        try:
+            value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    world = observation.get("world_id")
+    builder = read("factory-builder.json")
+    if builder.get("world_id") != world or not builder.get("power_plan") or coal_feed_mode(builder) != HAND_FED:
+        return None
+    plan = builder.get("coal_plan") or {}
+    needed = sum(1 for e in plan.get("entities") or () if e.get("name") == MACHINE_MADE_BELT) or UNPLANNED_FEED_BELTS
+    stocked = int((observation.get("inventory") or {}).get(MACHINE_MADE_BELT, 0) or 0)
+    cell = read("supply-cell.json")
+    row = next((r for r in cell.get("products") or () if r.get("item") == MACHINE_MADE_BELT), None)
+    chest = None
+    if cell.get("world_id") == world and cell.get("phase") != "retired" and row and row.get("output"):
+        chest = row["output"]
+        box = next(
+            (
+                e
+                for e in observation.get("entities", [])
+                if e.get("position") == chest and isinstance(e.get("inventory"), Mapping)
+            ),
+            None,
+        )
+        stocked += int((box or {}).get("inventory", {}).get(MACHINE_MADE_BELT, 0) or 0)
+    return {"needed": needed, "stocked": stocked, "chest": chest}
 
 
 def hand_fed_coal_per_minute(jobs, observation) -> float:
