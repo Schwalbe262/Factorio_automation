@@ -336,6 +336,16 @@ async function loadSvg(info) {
   svg.removeAttribute("width"); svg.removeAttribute("height");
   mapEl.replaceChildren(document.importNode(svg, true));
   svgEl = mapEl.querySelector("svg");
+  // Labels go on top of every line and area: move them into one last group (keeping their layer for the toggles).
+  const top = document.createElementNS("http://www.w3.org/2000/svg", "g"); top.setAttribute("id", "map-labels");
+  for (const t of Array.from(svgEl.querySelectorAll("text"))) {
+    const owner = t.closest("[data-kind]");
+    if (owner && owner !== t && !t.hasAttribute("data-kind")) t.setAttribute("data-kind", owner.getAttribute("data-kind"));
+    const m = t.getCTM(), base = svgEl.getCTM();
+    top.append(t);
+    if (m && base) { const r = base.inverse().multiply(m); if (r.a !== 1 || r.d !== 1 || r.e || r.f || r.b || r.c) t.setAttribute("transform", `matrix(${r.a} ${r.b} ${r.c} ${r.d} ${r.e} ${r.f})`); }
+  }
+  svgEl.append(top);
   if (!vb || !userMoved) vb = info.focus.slice();
   applyVB();
   const z = parseFloat(new URLSearchParams(location.search).get("zoom"));  // ?zoom=0.2 opens zoomed in (shareable view)
