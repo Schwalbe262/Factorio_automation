@@ -186,6 +186,20 @@ class PowerCoalTapFlow(unittest.TestCase):
         self.assertEqual(result["evidence"]["priority"], "branch")
         self.assertIsNotNone(self.controller().proof(self.obs))  # a restarted controller proves it too
 
+    def test_the_wood_splitter_on_the_feed_is_passed_and_kept(self):
+        wood = {"name": "splitter", "position": {"x": 7.5, "y": 10.0}, "direction": 4}
+        plan = dict(COAL_PLAN, entities=[e for e in COAL_PLAN["entities"] if e["position"] != {"x": 7.5, "y": 10.5}])
+        plan["entities"].append(wood)
+        trace = pct.feed_trace(plan, POWER)
+        self.assertTrue(trace["ok"], trace)
+        rows = trace["entities"]
+        self.assertIn(wood, rows)
+        joins = pct.join_candidates(rows, set())
+        self.assertTrue(joins)
+        self.assertTrue(all(j["index"] < rows.index(wood) for j in joins))
+        kept = rows[joins[0]["index"] :]
+        self.assertNotIn(pct._key(wood), {pct._key(e) for e in pct.retired_entities(plan, kept)})
+
     def test_no_patch_bank_keeps_the_starter_feed(self):
         (self.root / "mining-outposts.json").write_text(json.dumps({"world_id": "w", "banks": []}))
         result = self.controller().step(self.obs)

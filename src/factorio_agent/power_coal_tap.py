@@ -93,7 +93,16 @@ def feed_trace(coal_plan: dict, power_plan: dict) -> dict:
     )
     if destination is None or not coal_plan.get("ports"):
         return {"ok": False, "reason": "power_coal_tap_feed_ports_unknown"}
-    traced = trace_corridor(coal_plan, coal_plan["ports"][0], destination)
+    # An in-line splitter of the feed (the wood burner feed's, wood_burner_feed.py) replaced a
+    # feed belt on one of its two tiles; the path passes it.
+    passthrough = {}
+    for e in coal_plan.get("entities", []):
+        if e["name"] == "splitter" and e.get("direction") in VECTORS:
+            vx, vy = VECTORS[e["direction"]]
+            x, y = xy(e)
+            for s in (0.5, -0.5):
+                passthrough[(x - vy * s, y + vx * s)] = e
+    traced = trace_corridor(coal_plan, coal_plan["ports"][0], destination, passthrough=passthrough)
     if not traced.get("ok"):
         return {"ok": False, "reason": "power_coal_tap_feed_trace_failed", "trace": traced}
     return {"ok": True, "entities": traced["entities"], "destination": destination}
@@ -108,7 +117,9 @@ def join_candidates(rows, occupied) -> list[dict]:
     every planned or observed entity.
     """
     found = []
-    for index in range(1, len(rows) - 1):
+    # Joins lie upstream of any in-line splitter (the wood burner feed's), which is then kept.
+    limit = min((i for i, e in enumerate(rows) if e["name"] == "splitter"), default=len(rows) - 1)
+    for index in range(1, min(limit, len(rows) - 1)):
         before, current, after = rows[index - 1 : index + 2]
         direction = current.get("direction", 0)
         if direction not in VECTORS or any(
@@ -348,7 +359,7 @@ class PowerCoalTap:
         boilers = [e for e in power.get("entities", []) if e["name"] == "boiler"]
         for spec in boilers:
             live = _find(obs, spec)
-            held = int(((live or {}).get("inventory") or {}).get("coal", 0) or 0)
+            held = sum(int(n or 0) for n in ((live or {}).get("inventory") or {}).values())  # coal or wood
             if live is None or (held <= 0 and float(live.get("remaining_burning_fuel", 0) or 0) <= 0):
                 return False
         return bool(boilers)
