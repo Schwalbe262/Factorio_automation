@@ -259,6 +259,109 @@ class FluidProductControllerTests(unittest.TestCase):
         self.controller.site = SimpleNamespace(allocate_candidates=lambda *a, **k: [])
         self.assertEqual(self.prepare()["reason"], "fluid_product_no_site_allocation")
 
+    def acid_on_planned_bus(self):
+        """Acid sources in the registry, a built planned bus and a site block beside it (side right)."""
+        import test_v2_planned_tap as tapfix
+
+        from factorio_agent import block_sites
+        from factorio_agent.site.geometry import Rect
+
+        harness = tapfix.Harness(self.root)
+        board = harness.board()
+        board.update(catalog_fingerprint="c")
+        self.write("pcb-board.json", board)
+        sources = {}
+        for n, (fluid, key) in enumerate((("water", "acid-water"), ("petroleum-gas", "acid-gas"))):
+            sources[key] = dict(self.source, item=fluid, position={"x": 80.5, "y": -40.5 - 4 * n}, unit_number=90 + n)
+        self.registry["sources"] = sources
+        self.write("fluid-sources.json", self.registry)
+        snap = dict(
+            amount=100, extent={"left_top": {"x": 80, "y": -50}, "right_bottom": {"x": 81, "y": -40}}, limit=320
+        )
+        self.game.query.return_value = dict(ok=True, snapshots={"water": snap, "petroleum-gas": dict(snap)})
+        _, _, dx, dy = block_sites.footprint(lambda x, y: fluid_product_core(self.catalog, "sulfuric-acid", x, y))
+        x0, y0 = 90, -60
+
+        class Site:
+            def allocate_candidates(self, kind, w, h, *, name, count, returns_to_bus, world_id):
+                rect = Rect(x0, y0, x0 + w, y0 + h)
+                return [SimpleNamespace(name=name + "#0", rect=rect, side="right", along0=20, along1=40)]
+
+        self.controller.site = Site()
+        return harness
+
+    def prepare_acid(self):
+        def belt(game, builder, obs, source, destination, reserved, **kw):
+            ends = [entity("transport-belt", **p["position"], direction=p["facing"]) for p in (source, destination)]
+            return {"ok": True, "entities": ends, "underground_pairs": [], "clear_obstacles": []}
+
+        def route(game, builder, obs, source, destination, core, *args, **kw):
+            first = entity("pipe", source["position"]["x"] + 1, source["position"]["y"])
+            return dict(
+                ok=True,
+                entities=[first, entity("pipe", **destination["position"])],
+                first_neighbor=dict(first, fluidbox_index=1),
+                underground_pairs=[],
+                maximum_underground_span=10,
+                independent_clear_cells=[],
+            )
+
+        with (
+            patch("factorio_agent.planned_tap.max_span", return_value=5),
+            patch("factorio_agent.transport.plan_connection", side_effect=belt),
+            patch("factorio_agent.fluid_products.survey_slots", return_value={"ok": True, "legal": [1]}),
+            patch("factorio_agent.fluid_products.plan_typed_fluid_connection", side_effect=route),
+            patch("factorio_agent.fluid_products.pipeline_extent", return_value={"ok": True}),
+            patch("factorio_agent.fluid_products.connect_power_groups", return_value={"ok": True, "entities": []}),
+            patch("factorio_agent.fluid_products.preflight", return_value={"ok": True, "clear_obstacles": []}),
+            patch("factorio_agent.fluid_products.chemical_plan_isolation", return_value={"ok": True}),
+        ):
+            return self.controller.prepare(self.obs, {"product": "sulfuric-acid"})
+
+    def test_acid_iron_comes_from_a_planned_bus_tap_on_a_planned_world(self):
+        from factorio_agent import planned_bus as pb
+        from factorio_agent.transport import xy
+
+        harness = self.acid_on_planned_bus()
+        self.obs["entities"] = harness.entities  # the observed trunk belts the tap replaces
+        self.controller._iron_source = Mock(side_effect=AssertionError("development-map bus read"))
+        ready = self.prepare_acid()
+        self.assertTrue(ready["ok"], ready)
+        self.assertEqual(ready["iron_supply"], "planned_bus_tap")
+        self.assertNotIn("iron-plate", ready["sources"])
+        (tap,) = ready["taps"]
+        self.assertEqual(
+            (tap["item"], tap["owner"], tap["side"]), ("iron-plate", "fluid_product_sulfuric-acid", "right")
+        )
+        self.assertEqual(tap["demand_per_minute"], 24)
+        tapped = {(e["name"], *xy(e)) for e in tap["entities"]}
+        self.assertFalse(tapped & {(e["name"], *xy(e)) for e in ready["plan"]["entities"]})
+        # The step publishes the tap with the bus and cuts it over before the cell is built.
+        self.controller.state = dict(world_id="w", catalog_fingerprint="c", products={"sulfuric-acid": ready})
+        cut = dict(type="mine", name="transport-belt")
+        with (
+            patch("factorio_agent.planned_tap.cutover", return_value=cut) as cutover,
+            patch("factorio_agent.fluid_products.surface_pipe_proof", return_value={"ok": True}),
+            patch("factorio_agent.fluid_products.fluid_crossing_proof", return_value={"ok": True}),
+            patch("factorio_agent.fluid_products._handoff", return_value={"ok": True}),
+        ):
+            self.assertEqual(self.controller.step(self.obs, {"product": "sulfuric-acid"}), cut)
+        cutover.assert_called_once()
+        self.builder.ensure_plan.assert_not_called()
+        state = json.loads((harness.root / pb.STATE_FILE).read_text(encoding="utf-8"))
+        self.assertEqual([t["name"] for t in state["taps"]], ["fluid_product_sulfuric-acid:iron-plate"])
+        self.assertIsNone(self.controller.proof(self.obs, {"product": "sulfuric-acid"}))
+
+    def test_a_planned_bus_tap_that_fits_nowhere_returns_tap_needs(self):
+        from factorio_agent import plan_needs
+
+        self.acid_on_planned_bus()
+        self.obs["entities"] = []  # no observed trunk belts: every tap row is rejected
+        failed = self.prepare_acid()
+        self.assertFalse(failed["ok"])
+        self.assertEqual(plan_needs.from_result("fluid_product", failed)["kind"], "tap")
+        self.assertEqual(failed["plan_needs"]["item"], "iron-plate")
+
     def test_tap_success_is_a_prerequisite_and_never_premature_product_success(self):
         params = dict(
             name="fluid-acid-iron", item="iron-plate", splitter_y=-10.5, priority="surplus", demand_per_minute=24

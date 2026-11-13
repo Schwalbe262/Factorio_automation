@@ -192,7 +192,8 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     "rocket_parts": (ROUTE_RELAX_1, ROUTE_RELAX_2),
     # Late fluids: their typed pipe routes (chemical_production.plan_typed_fluid_connection) read route_relax.
     "advanced_petroleum": (ROUTE_RELAX_1, ROUTE_RELAX_2),
-    "fluid_product": (ROUTE_RELAX_1, ROUTE_RELAX_2),
+    # The acid cell's iron belt from its planned-bus tap is a transport.plan_connection route (waypoints apply).
+    "fluid_product": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "fluid_distribution": (ROUTE_RELAX_1, ROUTE_RELAX_2),
 }
 

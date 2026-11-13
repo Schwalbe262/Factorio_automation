@@ -490,8 +490,13 @@ class FluidProducts:
             sources = self._sources(obs, product)
             if not sources.get("ok"):
                 return sources
+            from . import block_sites
+
             iron = None
-            if product == "sulfuric-acid":
+            # Planned world: iron comes from a planned-bus tap planned with the cell (block_sites.bus_taps);
+            # the development-map BusTap path stays only without a planned bus.
+            bus = block_sites.planned_bus(self.path.parent, obs) if product == "sulfuric-acid" else None
+            if product == "sulfuric-acid" and bus is None:
                 iron = self._iron_source(obs)
                 if not iron.get("ok"):
                     return self._iron_prerequisite(obs) if iron["reason"] == "acid_paid_iron_tap_required" else iron
@@ -519,19 +524,20 @@ class FluidProducts:
                 (base_x + sign * dx, base_y + dy)
                 for dx, dy in ((0, 0), (24, 0), (0, 18), (24, 18), (0, -18), (24, -18), (0, -36), (24, -36))
             ]
-            from . import block_sites
-
             owner = "fluid_product_" + product
-            sited = block_sites.anchors(
+            sited = block_sites.blocks(
                 self.site, obs, owner, lambda ax, ay: fluid_product_core(self.catalog, product, ax, ay)
             )
-            self._allocations = {anchor: name for anchor, name in sited or ()}
+            self._allocations = {anchor: block.name for anchor, block in sited or ()}
+            blocks = {anchor: block for anchor, block in sited or ()}
             if sited is not None:
                 anchors = list(self._allocations)
                 if not anchors:
                     return dict(ok=False, reason="fluid_product_no_site_allocation", candidate_failures=[])
+            iron_rate = fluid_product_rates(self.catalog, product)["inputs_per_minute"].get("iron-plate", 0)
             budget = PlanningBudget(self.game)
             failures = []
+            tap_failure = None
             for x, y in anchors:
                 if budget.expired():
                     return budget.failure(candidate_failures=failures[-4:])
@@ -544,9 +550,11 @@ class FluidProducts:
                     and py - 0.49 < area[1][1]
                     for px, py in future
                 ):
+                    failures.append({"anchor": {"x": x, "y": y}, "reason": "fluid_product_area_meets_planned_block"})
                     continue
                 land = survey_slots(budget.game, [[area]])
                 if not land.get("ok") or 1 not in land.get("legal", []):
+                    failures.append({"anchor": {"x": x, "y": y}, "reason": "fluid_product_area_not_buildable"})
                     continue
                 es = core["entities"][:]
                 networks = {}
@@ -590,12 +598,32 @@ class FluidProducts:
                     route=dict(underground_pairs=[], maximum_underground_span=maximum),
                 )
                 belt = None
+                taps, ignored = [], ()
                 if iron:
                     belt = plan_connection(budget.game, self.builder, obs, iron["source"], core["iron_port"], es)
                     if not belt.get("ok"):
                         failures.append(belt)
                         continue
                     es = merge_entities(es, belt["entities"])
+                elif bus is not None:
+                    tapped = block_sites.bus_taps(
+                        budget.game,
+                        self.builder,
+                        obs,
+                        bus,
+                        blocks.get((x, y)),
+                        owner=owner,
+                        ports=[core["iron_port"]],
+                        entities=es,
+                        demand={"iron-plate": iron_rate},
+                    )
+                    if not tapped.get("ok"):
+                        tap_failure = tapped
+                        failures.append(dict(tapped, anchor={"x": x, "y": y}))
+                        continue
+                    taps, ignored = tapped["taps"], tuple(tapped["ignored_units"])
+                    es = tapped["entities"]
+                    belt = {"underground_pairs": [q for r in tapped["routes"] for q in r.get("underground_pairs", [])]}
                 power = connect_power_groups(
                     budget.game, self.builder, obs, [core], es + core["output_access"] + core["expansion_keepouts"]
                 )
@@ -604,7 +632,11 @@ class FluidProducts:
                     continue
                 es = merge_entities(es, power["entities"])
                 whole = preflight(
-                    budget.game, self.builder, obs, es + core["output_access"] + core["expansion_keepouts"]
+                    budget.game,
+                    self.builder,
+                    obs,
+                    es + core["output_access"] + core["expansion_keepouts"],
+                    ignored_units=ignored,
                 )
                 if not whole.get("ok"):
                     failures.append(whole)
@@ -622,7 +654,7 @@ class FluidProducts:
                         self.catalog, core, fluid, network["nodes"], network["route"]["underground_pairs"]
                     )
                 plan = _plan(
-                    es,
+                    block_sites.own_entities(es, taps),
                     core["ports"],
                     reserved_area=area,
                     underground_pairs=belt["underground_pairs"] if belt else [],
@@ -660,10 +692,15 @@ class FluidProducts:
                     defense_preview=defense,
                     rated=core["rated"],
                     site_allocation=getattr(self, "_allocations", {}).get((x, y)),
+                    iron_supply="planned_bus_tap" if bus is not None else ("bus_tap" if iron else None),
+                    taps=taps,
                 )
-            return dict(
+            out = dict(
                 ok=False, reason="no_complete_resource_clear_fluid_product_site", candidate_failures=failures[-6:]
             )
+            if tap_failure is not None and failures and failures[-1].get("reason") == tap_failure.get("reason"):
+                out["plan_needs"] = block_sites.tap_needs(owner, tap_failure)
+            return out
         except (OSError, KeyError, TypeError, ValueError) as exc:
             return dict(ok=False, reason="fluid_product_context_or_catalog_invalid", detail=str(exc))
 
@@ -733,7 +770,7 @@ class FluidProducts:
         if not sources.get("ok"):
             return dict(status="blocked", reason="fluid_product_source_unavailable", evidence=sources)
         wanted = dict(sources["sources"])
-        if product == "sulfuric-acid":
+        if product == "sulfuric-acid" and entry.get("iron_supply") != "planned_bus_tap":
             iron = self._iron_source(obs)
             if not iron.get("ok"):
                 return dict(status="blocked", reason="fluid_product_iron_source_unavailable", evidence=iron)
@@ -788,6 +825,21 @@ class FluidProducts:
                 )
                 if not bound.get("ok"):
                     return dict(status="blocked", reason="fluid_product_handoff_not_bound", evidence=bound)
+        taps = entry.get("taps") or []
+        if taps:
+            # Planned-bus iron tap: published with the bus and built first (the trunk is cut only briefly).
+            from . import planned_tap
+
+            blocked = planned_tap.publish(self.path.parent, obs["world_id"], taps)
+            if blocked:
+                return blocked
+            before = [t.get("built") for t in taps]
+            clear = entry["plan"].get("clear_obstacles", [])
+            cut = planned_tap.cutover(self.path.parent, self.builder, obs, taps, clear_obstacles=clear)
+            if [t.get("built") for t in taps] != before:
+                self._save()
+            if cut is not None:
+                return cut
         if not entry.get("construction_authorized"):
             check = preflight(
                 self.game,
@@ -869,7 +921,11 @@ class FluidProducts:
                 k: v for k, v in entry["sources"].items() if k != "iron-plate"
             }:
                 return None
-            if product == "sulfuric-acid":
+            if entry.get("iron_supply") == "planned_bus_tap":
+                if not all(t.get("built") for t in entry.get("taps") or ()):
+                    self.last_proof_failure = dict(reason="fluid_product_planned_bus_tap_not_built")
+                    return None
+            elif product == "sulfuric-acid":
                 iron = self._iron_source(obs)
                 if not iron.get("ok") or iron["source"] != entry["sources"]["iron-plate"]:
                     return None

@@ -12,6 +12,12 @@ candidates with ``None``), as ``site.placement.settle`` does for ``produce``.
 
 Without a site service (development map, tests) ``anchors`` returns None and the caller keeps
 its legacy relative anchors.
+
+Item inputs on a planned world (``planned_bus`` published): ``bus_taps`` plans the core's
+taps with the block (``planned_tap.connect_inputs`` on the core's allocation, as
+``production_site._taps`` does); the controller stores the taps, keeps them out of its own
+plan (``own_entities``), and in ``step`` calls ``planned_tap.publish`` and
+``planned_tap.cutover`` before its ``ensure_plan``.
 """
 
 from __future__ import annotations
@@ -30,20 +36,92 @@ def footprint(build) -> tuple[int, int, float, float]:
 
 def anchors(site, obs, owner: str, build, *, count: int = CANDIDATES, returns_to_bus: bool = False):
     """``[((x, y), allocation_name), ...]`` from the site service, ``[]`` when none fits, None without a site."""
+    found = blocks(site, obs, owner, build, count=count, returns_to_bus=returns_to_bus)
+    return None if found is None else [(anchor, block.name) for anchor, block in found]
+
+
+def blocks(site, obs, owner: str, build, *, count: int = CANDIDATES, returns_to_bus: bool = False):
+    """``anchors`` with the allocation objects: ``[((x, y), allocation), ...]`` (side and along range for taps)."""
     if site is None:
         return None
     width, height, dx, dy = footprint(build)
     try:
-        blocks = site.allocate_candidates(
+        found = site.allocate_candidates(
             KIND, width, height, name=owner, count=count, returns_to_bus=returns_to_bus, world_id=obs["world_id"]
         )
     except Exception:  # noqa: BLE001 - an allocator failure is "no site", never a crash
         return []
-    out = []
-    for block in blocks:
-        x0, y0 = block.rect.x0, block.rect.y0
-        out.append(((x0 + dx, y0 + dy), block.name))
-    return out
+    return [((block.rect.x0 + dx, block.rect.y0 + dy), block) for block in found]
+
+
+def planned_bus(root, obs) -> dict | None:
+    """The published planned main bus of this world (``planned_tap.published``), or None (no bus, dev map)."""
+    import json
+    from pathlib import Path
+
+    from . import planned_tap
+
+    path = Path(root) / "pcb-board.json"
+    try:
+        board = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        return None
+    return planned_tap.published(board, obs.get("world_id")) if isinstance(board, dict) else None
+
+
+def bus_taps(game, builder, obs, bus, allocation, *, owner, ports, entities, demand, route=None) -> dict:
+    """Planned-bus taps and belt routes for a fixed core's item ``ports`` (``planned_tap.connect_inputs``).
+
+    ``allocation`` is the core's district block (side, along range); without one the tap has no
+    side to sit on. The result is ``connect_inputs``'s: ``entities`` = ``entities`` + taps +
+    routes, ``taps`` (published with the bus, built first by ``planned_tap.cutover``), ``routes``,
+    ``ignored_units`` (trunk belts the taps replace). A failure names the item (``plan_needs`` tap).
+    """
+    from . import planned_tap
+    from .transport import plan_connection
+
+    if allocation is None:
+        return {"ok": False, "reason": "planned_bus_tap_needs_site_allocation", "owner": owner}
+    span = planned_tap.max_span(game)
+    if span is None:
+        return {"ok": False, "reason": "planned_bus_underground_span_unknown"}
+    return planned_tap.connect_inputs(
+        game,
+        builder,
+        obs,
+        bus,
+        owner=owner,
+        allocation=allocation,
+        inputs=list(ports),
+        entities=list(entities),
+        demand=dict(demand),
+        span=span,
+        route=route or plan_connection,
+    )
+
+
+def own_entities(entities, taps) -> list[dict]:
+    """``entities`` without the taps' hardware (the taps are published and built with the bus)."""
+    from .transport import xy
+
+    tapped = {(e["name"], *xy(e)) for tap in taps or () for e in tap.get("entities", [])}
+    return [e for e in entities if (e["name"], *xy(e)) not in tapped]
+
+
+def tap_needs(owner: str, failure: dict) -> dict:
+    """The ``plan_needs`` record of a failed ``bus_taps`` (kind ``tap``)."""
+    from . import plan_needs
+
+    inner = failure.get("failures") if isinstance(failure.get("failures"), list) else []
+    return plan_needs.make(
+        "tap",
+        str(failure.get("reason") or "planned_bus_tap_unavailable"),
+        block=owner,
+        item=failure.get("item"),
+        side=failure.get("side"),
+        tried=len(inner) or None,
+        rejected_by=failure.get("rows_rejected") or None,
+    )
 
 
 def keep(site, obs, owner: str, name: str | None) -> None:
