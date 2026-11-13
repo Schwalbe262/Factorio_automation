@@ -180,10 +180,25 @@ class StepTests(Fixture):
         result = self.ctl.step(self.obs(self.temp_entities()))
         self.assertEqual(result["reason"], "startup_science_retirement_waits_for_research_jobs")
 
-    def test_blocked_without_live_permanent_science(self):
+    def test_waits_without_live_permanent_science(self):
+        # No research and the permanent labs hold no red packs: a wait with its unblock named, never a block.
+        base = observed(self.science, lab_status="missing_science_packs", lab_packs=0, research=None)
         obs = self.obs(self.temp_entities())
-        obs["research"] = None
-        self.assertEqual(self.ctl.step(obs)["reason"], "startup_science_retirement_without_permanent_science")
+        obs.update(entities=base["entities"] + self.temp_entities(), research=None)
+        result = self.ctl.step(obs)
+        self.assertEqual(result["status"], "waiting")
+        self.assertEqual(result["reason"], "startup_science_retirement_waits_for_permanent_red_science_supply")
+        self.assertIn("wait_for", result["evidence"])
+        self.assertFalse((self.root / sr.STATE_FILE).exists())
+
+    def test_idle_labs_stocked_with_red_packs_count_as_permanent_science(self):
+        # Seeds 1024125955 / 4031765348 (long-1114-0039): research needs green packs, the permanent
+        # labs idle with red packs from the row's machines; the cell's job is taken over.
+        base = observed(self.science, lab_status="missing_science_packs", lab_packs=40, research="steel-processing")
+        obs = self.obs(self.temp_entities())
+        obs.update(entities=base["entities"] + self.temp_entities(), research="steel-processing")
+        action = self.ctl.step(obs)
+        self.assertEqual((action["type"], action["name"]), ("mine", "inserter"))
 
     def test_records_only_temporary_hardware_and_mines_it_guarded(self):
         temp = self.temp_entities()

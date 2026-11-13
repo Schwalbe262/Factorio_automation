@@ -188,13 +188,27 @@ class StartupScienceRetirement:
             e for e in rows if e and e.get("electric_network_connected") is not False and (e.get("energy") or 0) > 0
         ]
 
-    def _verified(self, obs, science):
+    def _activity(self, obs, science) -> dict | None:
         from .science_growth import lab_activity
 
-        if science is None or not isinstance(obs.get("research"), str) or not obs.get("research"):
+        return lab_activity(science, obs) if science is not None else None
+
+    def _verified(self, obs, science):
+        """The permanent row supplies red science: a lab works, or powered labs hold machine-made red packs.
+
+        Seeds 1024125955 / 4031765348 (no green science yet): after the red
+        technologies the current research needs green packs, every permanent lab
+        idles with red packs in stock and the old rule ("a lab is working and
+        research is set") never held again, so the job blocked for good. Idle
+        labs stocked with red packs from the row's machines are the same proof
+        that the cell's job is taken over.
+        """
+        activity = self._activity(obs, science)
+        if activity is None or activity["machines_observed"] < 1:
             return False
-        activity = lab_activity(science, obs)
-        return activity["machines_observed"] >= 1 and "working" in activity["lab_status"]
+        working = "working" in activity["lab_status"] and isinstance(obs.get("research"), str) and obs.get("research")
+        stocked = activity["labs_powered"] >= 1 and (sum(activity["lab_packs"]) > 0 or activity["belt_packs"] > 0)
+        return bool(working or stocked)
 
     def _record(self, world):
         """Entities of the temporary science hardware (cell without poles, slot labs, starter and batch labs)."""
@@ -252,7 +266,18 @@ class StartupScienceRetirement:
                 }
             science = self._science(world)
             if state.get("phase") == "retiring" and not self._verified(obs, science):
-                return {"status": "blocked", "reason": "startup_science_retirement_without_permanent_science"}
+                # A wait for the permanent row's red supply, never a block (nothing is planned here).
+                activity = self._activity(obs, science) or {}
+                return {
+                    "status": "waiting",
+                    "reason": "startup_science_retirement_waits_for_permanent_red_science_supply",
+                    "evidence": {
+                        "wait_for": "a permanent lab working or holding machine-made red packs",
+                        **{
+                            k: activity[k] for k in ("labs_powered", "machines_observed", "lab_status") if k in activity
+                        },
+                    },
+                }
             if "entities" not in state:
                 state["entities"] = self._record(world)
                 state["recorded_tick"] = obs.get("tick")
