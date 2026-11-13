@@ -460,8 +460,13 @@ def _inside(area, rect):
     return rect[0] <= area[0][0] and rect[1] <= area[0][1] and area[1][0] <= rect[2] and area[1][1] <= rect[3]
 
 
-def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDIDATES, site_exit=None):
+def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDIDATES, site_exit=None, grid=None):
     """Pure coherent grid; score unique ore and contiguous future columns once.
+
+    ``grid`` (:func:`patch_grid` on this policy's lattice) restricts the sites
+    to the grid's row pairs, each starting at its edge-most column (the drills
+    nearest the output edge are built first) and reserving its growth along
+    the row up to ``MAX_PAIRS`` columns (staged growth, ``prepare_extension``).
 
     Sites are searched in the canonical EAST frame of the policy flow and
     returned on the map. The score, compared as a tuple (bigger is better):
@@ -491,13 +496,17 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
     if site_exit and site_exit.get("zone_rect"):
         zone = list(frame.inverse().rect(*site_exit["zone_rect"]))
     anchors = set()
-    for t in canonical_tiles:
+    for t in canonical_tiles if grid is None else ():
         if t["name"] != resource:
             continue
         x, y = _xy(t)
         x = origin["x"] + PAIR_PITCH * math.floor((x - origin["x"]) / PAIR_PITCH)
         y = origin["y"] + BANK_PITCH * math.floor((y - origin["y"]) / BANK_PITCH)
         anchors.update((x + dx, y + dy) for dx in (-4, 0, 4) for dy in (-8, 0, 8))
+    if grid is not None:
+        back = frame.inverse()
+        anchors = {back.point(row["anchor"]["x"], row["anchor"]["y"]) for row in grid["rows"]}
+    growth_limit = MAX_PAIRS if grid is not None else None
 
     def exit_cost(core):
         """On-ore exit cells plus the distance to the corridor start, or None if unreachable."""
@@ -542,7 +551,7 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
             continue
         slots = pairs
         future = core
-        for n in range(pairs, min(MAX_PAIRS, pairs + 2) + 1):
+        for n in range(pairs, (growth_limit or min(MAX_PAIRS, pairs + 2)) + 1):
             q = mining_pair(x, y, n, resource)
             if any(overlap(q["mining_footprint"], a) for a in reservations) or not covered(q):
                 break
@@ -591,6 +600,176 @@ def candidate_sites(snapshot, policy, pairs, reservations, *, maximum=MAX_CANDID
             )
         )
     return result
+
+
+GRID_MIN_ORE_TILES = 4  # a grid drill stands where its mining area holds at least this many resource tiles
+MAX_GRID_ROWS = 16  # row pairs of one patch grid (a 128-tile survey holds at most 16)
+FORBIDDEN_SURVEY_LUA = r"""
+local tiles={};local cliffs={}
+for _,t in pairs(s.find_tiles_filtered{area=x.area,collision_mask="water_tile",limit=x.limit})do
+ tiles[#tiles+1]={x=t.position.x+.5,y=t.position.y+.5}end
+for _,c in pairs(s.find_entities_filtered{area=x.area,type="cliff",limit=x.limit})do
+ for dx=-1,1 do for dy=-1,1 do tiles[#tiles+1]={x=math.floor(c.position.x+dx)+.5,y=math.floor(c.position.y+dy)+.5}end end
+end
+return {ok=true,tiles=tiles}
+"""
+
+
+def forbidden_tiles(game, obs, area, *, limit=MAX_TILES) -> list:
+    """Water and cliff tiles (cliffs as their 3x3 surroundings) in ``area``; [] when the survey fails."""
+    args = {"world_id": obs["world_id"], "area": area, "limit": limit}
+    try:
+        reply = game.query("local x=helpers.json_to_table(" + _payload(args) + ");" + FORBIDDEN_SURVEY_LUA)
+    except (RuntimeError, ValueError):
+        return []
+    tiles = reply.get("tiles") if isinstance(reply, dict) and reply.get("ok") else None
+    return [(t["x"], t["y"]) for t in tiles if _position(t)] if isinstance(tiles, list) else []
+
+
+def _grid_at(ore, other, blocked, reserved, bounds, ox, oy, radius):
+    """The grid of row pairs on lattice origin ``(ox, oy)`` (canonical EAST frame), with its score.
+
+    Row pair ``k``: the left drill row at ``top_y = oy + BANK_PITCH * k`` (facing the
+    collector), the shared collector two tiles below, the right row four below;
+    columns ``x = ox + PAIR_PITCH * j``; the one free tile between row pairs is the
+    pole / service lane. A drill stands where its footprint is free of water,
+    cliffs and other blocks and its mining area holds only the resource, at least
+    ``GRID_MIN_ORE_TILES`` tiles. Every collector runs east to one common edge.
+    """
+    xs = [p[0] for p in ore]
+    ys = [p[1] for p in ore]
+    col0 = ox + PAIR_PITCH * math.floor((min(xs) - radius - ox) / PAIR_PITCH)
+    row0 = oy + BANK_PITCH * math.floor((min(ys) - radius - 4 - oy) / BANK_PITCH)
+    columns = [col0 + PAIR_PITCH * j for j in range(int((max(xs) + radius - col0) // PAIR_PITCH) + 1)]
+    tops = [row0 + BANK_PITCH * k for k in range(int((max(ys) + radius - row0) // BANK_PITCH) + 1)]
+    span = math.floor(radius)
+
+    def valid(x, y):
+        if not (bounds[0][0] <= x - radius and x + radius < bounds[1][0]):
+            return None
+        if not (bounds[0][1] <= y - radius and y + radius < bounds[1][1]):
+            return None
+        foot = {(x + i, y + j) for i in (-1, 0, 1) for j in (-1, 0, 1)}
+        if foot & blocked:
+            return None
+        box = [[x - 1.5, y - 1.5], [x + 1.5, y + 1.5]]
+        if any(overlap(box, r) for r in reserved):
+            return None
+        area = [(x + i, y + j) for i in range(-span, span + 1) for j in range(-span, span + 1)]
+        if any(p in other for p in area):
+            return None
+        cells = [p for p in area if p in ore]
+        return cells if len(cells) >= GRID_MIN_ORE_TILES else None
+
+    rows, covered, drills = [], set(), 0
+    for top in tops[:MAX_GRID_ROWS]:
+        used, placed = [], []
+        for x in columns:
+            hit = [(x, y, cells) for y in (top, top + 4) if (cells := valid(x, y))]
+            if hit:
+                used.append(x)
+                placed += [(x, y) for x, y, _ in hit]
+                for _, _, cells in hit:
+                    covered.update(cells)
+        if used:
+            rows.append({"top_y": top, "columns": used, "drills": placed})
+            drills += len(placed)
+    if not rows:
+        return None
+    edge = max(max(r["columns"]) for r in rows)
+    amount = sum(ore[p] for p in covered)
+    return {
+        "origin": (ox, oy),
+        "rows": rows,
+        "edge_x": edge,
+        "drills": drills,
+        "covered_tiles": len(covered),
+        "unreachable_tiles": len(ore) - len(covered),
+        "covered_amount": amount,
+        # Ore covered first, then fewer drills, then less ore left unreachable (MPP principle 5).
+        "score": (len(covered), -drills, -(len(ore) - len(covered))),
+    }
+
+
+def patch_grid(snapshot, policy, reservations=(), *, forbidden=(), origin=None):
+    """The whole-patch drill grid ("simple" layout of the Mining Patch Planner), in the policy's flow.
+
+    Generalises the paired bank (:func:`paired_mining.mining_pair`): the patch is
+    covered by row pairs of that shape stacked ``BANK_PITCH`` apart across the
+    flow, every collector running in the flow direction to one patch edge (the
+    flow comes from the site plan's output side, i.e. from where the consumers
+    are, :mod:`mining_site`). The lattice shift is searched within one drill pitch
+    (``PAIR_PITCH`` along, ``BANK_PITCH`` across the flow) and scored by
+    :func:`_grid_at`; ``origin`` (map frame, from a bank already on the patch)
+    fixes the lattice instead. ``forbidden`` are water/cliff tiles (map frame);
+    trees are ignored (they are cleared). Pure.
+
+    Returns ``ok``, ``origin`` (map frame, half-tile: a ``make_policy`` grid
+    origin), ``rows`` (map frame: ``anchor`` = the row's edge-most column as a
+    ``mining_pair`` anchor ``(right_x, top_y)``, ``columns``, ``drills``,
+    ``port``), ``drills``, ``covered_tiles``, ``unreachable_tiles``, ``score``,
+    ``shifts_scored``.
+    """
+    validate_policy(policy, snapshot["world_id"], snapshot["catalog_fingerprint"], snapshot["resource"])
+    frame, tiles, bounds, reserved = _canonical_inputs(snapshot, policy, reservations)
+    back = frame.inverse()
+    resource = policy["resource"]
+    ore = {_xy(t): t["amount"] for t in tiles if t["name"] == resource}
+    other = {_xy(t) for t in tiles if t["name"] != resource}
+    if not ore:
+        return {"ok": False, "reason": "mining_grid_patch_has_no_resource"}
+    blocked = {back.point(x, y) for x, y in forbidden}
+    radius = snapshot["native"]["mining_radius"]
+    base = policy["grid_origin"]
+    if origin is not None:
+        fixed = back.point(origin["x"], origin["y"])
+        shifts = [fixed]
+    else:
+        shifts = [(base["x"] + dx, base["y"] + dy) for dx in range(PAIR_PITCH) for dy in range(BANK_PITCH)]
+    best = None
+    for ox, oy in shifts:
+        grid = _grid_at(ore, other, blocked, reserved, bounds, ox, oy, radius)
+        if grid is not None and (best is None or grid["score"] > best["score"]):
+            best = grid
+    if best is None:
+        return {"ok": False, "reason": "mining_grid_has_no_drill_site", "shifts_scored": len(shifts)}
+
+    def world(x, y):
+        mx, my = frame.point(x, y)
+        return {"x": mx, "y": my}
+
+    rows = []
+    for index, row in enumerate(best["rows"]):
+        right = max(row["columns"])
+        rows.append(
+            {
+                "index": index,
+                "anchor": world(right, row["top_y"]),
+                "columns": len(row["columns"]),
+                "drills": [world(x, y) for x, y in row["drills"]],
+                "port": world(best["edge_x"] + 2, row["top_y"] + 2),
+            }
+        )
+    return {
+        "ok": True,
+        "origin": world(*best["origin"]),
+        "flow": policy["flow"],
+        "rows": rows,
+        "drills": best["drills"],
+        "covered_tiles": best["covered_tiles"],
+        "unreachable_tiles": best["unreachable_tiles"],
+        "covered_amount": best["covered_amount"],
+        "score": list(best["score"]),
+        "shifts_scored": len(shifts),
+    }
+
+
+def grid_summary(grid) -> dict:
+    """The record a bank keeps of its patch grid (its own plan is one row pair of it)."""
+    return {
+        k: deepcopy(grid[k])
+        for k in ("origin", "flow", "drills", "covered_tiles", "unreachable_tiles", "score", "shifts_scored")
+    } | {"rows": [{k: deepcopy(r[k]) for k in ("index", "anchor", "columns", "port")} for r in grid["rows"]]}
 
 
 def plan_offore_exit(game, builder, obs, core, future, reservations):
@@ -842,9 +1021,25 @@ def _adopt_growth_poles(entities, future) -> None:
 
 
 def prepare_new_bank(
-    game, builder, obs, resource, count, reservations, *, policy=None, site_exit=None, registered=(), planned=None
+    game,
+    builder,
+    obs,
+    resource,
+    count,
+    reservations,
+    *,
+    policy=None,
+    site_exit=None,
+    registered=(),
+    planned=None,
+    grid_origin=None,
 ):
     """Drop-in current paired-bank planner with policy decided before entities/power.
+
+    Without ``policy`` the whole patch is gridded first (:func:`patch_grid`, shift
+    searched; ``grid_origin`` ``{"origin", "flow"}`` of a bank already on the patch
+    keeps its lattice) and the bank is the grid row pair whose edge columns fit
+    (:func:`candidate_sites` ``grid``); the record is ``patch_grid`` on the bank.
 
     ``site_exit`` (from :func:`mining_site.site_exit`) turns the bank so its
     collector flows toward the plan zone's output side and ranks sites by
@@ -891,7 +1086,41 @@ def prepare_new_bank(
         snapshot = survey_patch(planning, obs, catalog, resource, area)
         if not snapshot.get("ok"):
             return snapshot
-        sites = candidate_sites(snapshot, selected, math.ceil(count / 2), reservations, site_exit=site_exit)
+        grid = None
+        if policy is None:
+            # Whole-patch grid (patch_grid): its lattice becomes the bank's policy grid, so this
+            # bank is one row pair of it; a bank already on the patch fixes the lattice.
+            fixed = (
+                grid_origin if isinstance(grid_origin, dict) and grid_origin.get("flow") == selected["flow"] else None
+            )
+            planned_grid = patch_grid(
+                snapshot,
+                selected,
+                reservations,
+                forbidden=forbidden_tiles(planning, obs, area),
+                origin=fixed["origin"] if fixed else None,
+            )
+            if planned_grid.get("ok"):
+                grid = planned_grid
+        sites = []
+        if grid is not None:
+            gridded = make_policy(
+                obs["world_id"],
+                catalog.fingerprint,
+                resource,
+                flow=selected["flow"],
+                grid_origin=grid["origin"],
+                site_oriented=selected.get("orientation_source") == "site-plan",
+            )
+            sites = candidate_sites(
+                snapshot, gridded, math.ceil(count / 2), reservations, site_exit=site_exit, grid=grid
+            )
+            if sites:
+                selected = gridded
+            else:
+                grid = dict(grid, fallback="no grid row pair fits; historical lattice used")
+        if not sites:
+            sites = candidate_sites(snapshot, selected, math.ceil(count / 2), reservations, site_exit=site_exit)
         failures = []
         product = catalog.entities[resource]["mining_products"]
         if len(product) != 1 or product[0]["name"] != resource:
@@ -1006,6 +1235,7 @@ def prepare_new_bank(
                 wire_hops=bridge["wire_hops"],
                 layout_contract=contract,
                 capacity_profile=profile,
+                **({"patch_grid": grid_summary(grid) | {"fallback": grid.get("fallback")}} if grid else {}),
                 patch_diagnostic=dict(
                     tick=snapshot["tick"],
                     unique_resource_tiles=candidate["unique_resource_tiles"],
