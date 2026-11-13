@@ -128,7 +128,40 @@ every item: net += max(0, installed cells * cell_rate - produced)   # cells buil
 | Field | Default | Meaning |
 |---|---|---|
 | `max_step` | 2 | cells added per decision |
-| `max_cells` / `max_plate_cells` | 8 / 6 | cap for coal / plates and stone (was 4 for plates: starved the early game on seed 283895142; the time comparison against lookahead demand decides below the cap) |
+| `max_cells` / `max_plate_cells` | 12 / 6 | absolute limit (`MAX_STARTER_CELLS`, the capability's `cells` 1..12; coal stays below the burners' need) / cap for stone, and for plates under the `cap` policy (was 4 for plates: starved the early game on seed 283895142) |
+| `plate_cell_policy` | None = `PLATE_CELL_POLICY` | `"demand"` (default) or `"cap"`, see below |
+
+Plate cell policy (decision 2026-11-14, `capacity_planning.PLATE_CELL_POLICY`, one line to turn
+back: `PLATE_CELL_POLICY = PLATE_CELLS_CAP`). It reverses the earlier explicit "6 iron cells"
+instruction on the owner's newer guidance ("when plate supply is short the plant must grow by
+itself instead of waiting"; "over-building can be the better choice"). Evidence, aud-1114-0436
+(12 seeds): every seed reached the 6-cell cap by 11.5-13.9 min and then waited for plates from
+18 to 27 min (district job "waiting for drill-fed iron-plate production" in every slice between
+the logistics research and its first splitter; the starter cells delivered 85-90 iron/min,
+the only plate source until the district's first bank smelts the outposts' ore). The 8-step
+lookahead held 534 iron at 9.9 min; the bill to the bus was ~1500 then.
+
+```
+demand (default), iron and copper only:
+  demand(item)  = progression.retirement_demand: raw cost of every unsatisfied on-path step through
+                  main_bus (the retirement step: starter_retirement needs smelting_district AND
+                  planned_main_bus), open steps left out (their plan is in the shortfall), research
+                  packs (the running one by its remaining share); receipt retirement_demand
+  gate          = lab-time lower bound of that research on the built labs (gate_seconds)
+  T(0) = max(gate, T(0));  T(k) = max(gate, T(k))                                   rule a
+  payback       = cell_rate * (T(k) - fund - build) / 60 > own plate cost per cell     rule b
+  expand k when T(0) - T(k) >= min_saving_seconds and payback (no max_ratio)
+  coal          = fuel_cells_needed with the new cells <= max_cells, else the step shrinks   rule c
+  no fixed count, no unlock closing (mining.closed_by_unlock is False), no "drill researching"
+  skip, and an iron/copper outpost does not end the resource: only the retirement does
+cap: max_plate_cells and max_ratio, the unlock rules below
+```
+
+Expected on the aud-1114-0436 median (toy replay, `plan_capacity` itself, 1673 iron left at
+9.9 min, one 1.3-min capacity job at a time, 15 plates/min a cell): cap 4 -> 6 at 11.3, bill
+done at 29.2 min (824 plates left at 20 min); demand 4 -> 6 at 11.3, -> 8 at 12.7, -> 10 at
+14.1 (the next pair saves 45 s < 60: growth stops by itself), bill done at 23.1 min (464 left at
+20). Coal cells follow (about 8 for 10 iron cells and the hand-fed boiler).
 | `default_cell_rate` | 15.0 | ore/min per burner cell when unmeasured |
 | `fuel_margin` | 1.2 | coal deficit threshold |
 | `fuel_per_cell_per_minute` / `fuel_per_drill_per_minute` | 3.6 / 2.25 | coal burned by a new smelting / drill-only cell |
@@ -144,7 +177,7 @@ descending; a decision whose cell cost uses an item already being expanded is
 dropped; a resource is skipped once its `mining_outpost` succeeded. Pinned by
 `tests/test_v2_capacity_planning.py`, `tests/test_v2_progression.py`.
 
-Around the electric-mining-drill unlock (`mining.closed_by_unlock`, `CELLS_AFTER_UNLOCK = 2`):
+Around the electric-mining-drill unlock, `cap` policy only (`mining.closed_by_unlock`, `CELLS_AFTER_UNLOCK = 2`):
 
 ```
 drill researched  -> iron/copper targets are capped at 2 cells (no node when 2 stand); plate growth is

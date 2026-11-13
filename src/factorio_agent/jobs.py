@@ -44,7 +44,7 @@ CAPABILITIES = {
         "effect": "dedicated burner coal drill and belt to the boiler; verify 30 game seconds, then stop hand-fuelling",
     },
     "starter_capacity": {
-        "parameters": {"resource": "iron-ore|copper-ore|coal|stone", "cells": "integer 1..8, absolute target"},
+        "parameters": {"resource": "iron-ore|copper-ore|coal|stone", "cells": "integer 1..12, absolute target"},
         "requires": ["starter"],
         "effect": "expand productive starter cells to fund construction faster",
     },
@@ -545,6 +545,8 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "resource_supply_options": obs.get("resource_supply_options"),
         "roadmap_material_demand": obs.get("roadmap_material_demand"),
         "roadmap_material_demand_error": obs.get("roadmap_material_demand_error"),
+        "retirement_demand": obs.get("retirement_demand"),
+        "retirement_demand_error": obs.get("retirement_demand_error"),
         "bulk_item_demand": obs.get("bulk_item_demand"),
         "supply_cell_candidates": obs.get("supply_cell_candidates"),
         "research_capacity": obs.get("research_capacity"),
