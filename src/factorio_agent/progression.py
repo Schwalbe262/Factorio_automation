@@ -699,6 +699,9 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     from .trunk_return_feed import trunk_return_feed_nodes  # surplus back onto its patch trunk, once per trunk
 
     proposed += trunk_return_feed_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .head_rework import feed_head_rework_nodes  # a district bank head that limits growth, once per bank
+
+    proposed += feed_head_rework_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
     from .science_retirement import science_retirement_nodes  # obsolete startup science cell
 
     proposed += science_retirement_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]

@@ -78,9 +78,30 @@ slots per row need 225 ore/min, the shared head delivers exactly 225 per row, th
 along column X0+5.5 into each bank's inner coal port (`smelting_site._coal_network`); the
 district keeps its 48 x 32 frame and ports.
 
-Existing blocks keep their head. Growth is guarded (`growth_evidence` ->
-`feed_head_bandwidth_below_next_slot_demand` when the flow model says the next slot would
-starve), and the receipt's `rework` lists built blocks below their demand (status `proposed`).
+Existing blocks keep their head until it limits them. Growth is guarded (`growth_evidence` for
+steel/brick blocks, `SmeltingDistrict._grow` via `head_rework.bank_growth_check` for district
+banks -> `feed_head_bandwidth_below_next_slot_demand` when the flow model says the next slot
+would starve), and the receipt's `rework` lists built blocks below their demand.
+
+Rework (`head_rework.py`, capability `feed_head_rework`, district banks; steel/brick blocks not
+yet, their coal route would have to be planned again): proposed once per bank when the head
+limits the built or the refused rows and the rework (actor time for added + removed entities
+plus the cut-over stop) is cheaper than a second bank. The plan is republished first (state and
+board), the new parts that do not stand where old ones stand are built beside the running head,
+then a stocked cut-over (`head_rework.CUTOVER`, every item carried, room for every mined
+entity, every built furnace holding ore): coal branch onto the new coal port, old coal side-load
+removed (coal never reaches a lane that will carry ore; checked stage by stage with the flow
+model), raw splitter, ore branch, old splitter and lower column, upper coal riser; then the old
+belts are mined and their items reused. Proof: the new head stands, no old part stands, the rows
+carry one item per lane. The shared head feeds 10 stone furnaces per row with margin, the split
+head all 12 reserved slots (24 at a full 48-furnace frame).
+
+Bank shape against the owner's reference (factorioprints "Early Game Saturated Stone Furnace
+Setup": 2 x 24 furnaces facing one shared centre output belt, inputs on the two outer belts,
+ore and coal each split first): `paired_furnace_bank` already has that arrangement (outer input
+belts, one shared centre output, upper row on one lane, lower row on the other; the flow model
+shows both output lanes filled, 225/min each at 12 slots per row). Only the row length differs
+(12 slots per row inside the 48-tile district; a saturated belt needs 24 per row).
 
 ## Rebuilding is allowed
 

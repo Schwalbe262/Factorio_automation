@@ -700,6 +700,14 @@ class SmeltingDistrict:
                 "reason": "paired_bank_full_next_growth_is_another_bank",
                 "evidence": {"capacity_slots": slots, "full_bank_rate_per_minute": 2 * slots * each},
             }
+        if resource in (self.state.get("head_rework") or {}):
+            return {"status": "waiting", "reason": "feed_head_rework_in_progress", "resource": resource}
+        from .head_rework import bank_growth_check
+
+        # The feed head must feed the grown rows (belt_flow); else feed_head_rework replaces it first.
+        refused = bank_growth_check(old, max(wanted, old["per_side_count"]))
+        if refused is not None:
+            return refused
         new = grown_bank(old, max(wanted, old["per_side_count"]))
         if new["entities"] != old["entities"]:
             board_path = self.path.parent / "pcb-board.json"
@@ -1131,6 +1139,8 @@ return {ok=true,legal=legal}
                 return {"status": "blocked", "reason": "smelting_reservation_changed"}
             board["blocks"]["smelting_district"] = self.state["plan"]
             _atomic_json(board_path, board)
+        if self.state.get("head_rework"):  # feed_head_rework (head_rework.py) builds the republished head
+            return {"status": "waiting", "reason": "feed_head_rework_in_progress"}
         cleanup = self.clean_feed_baseline(obs)
         if cleanup is not None:
             return cleanup

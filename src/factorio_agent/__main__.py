@@ -237,6 +237,15 @@ def execute(argv=None, services=None):
                 obs["belt_bandwidth"] = bandwidth_receipt(root, obs)
             except Exception as exc:  # an audit must never break observe
                 obs["belt_bandwidth_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .early_start import ledger_jobs
+            from .head_rework import receipt as head_rework_receipt
+
+            try:  # a district bank head that limits growth (head_rework.feed_head_rework_nodes)
+                rework = head_rework_receipt(root, obs, ledger_jobs(root, obs.get("world_id")))
+                if rework is not None:
+                    obs["feed_head_rework"] = rework
+            except Exception as exc:  # an estimate must never break observe
+                obs["feed_head_rework_error"] = f"{type(exc).__name__}: {exc}"[:200]
             obs["factory_constraints"] = factory_constraints(root, obs, services.catalog(root, game))
             from .normal_research import ready_options
 

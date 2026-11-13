@@ -111,6 +111,13 @@ CAPABILITIES = {
         "native_recipes": ["splitter"],
         "effect": "chest, inserter and side belt with an input-priority splitter replacing one patch trunk belt just downstream of the trunk head and upstream of every tap; the chest is the item's carried surplus sink, so returned items reach every trunk consumer first",
     },
+    # Feed head rework (head_rework.py): proposed when a district bank's shared head limits growth.
+    "feed_head_rework": {
+        "parameters": {"block": "smelting_district", "resource": "iron-ore|copper-ore"},
+        "requires": ["smelting_district"],
+        "native_recipes": ["splitter", "underground-belt"],
+        "effect": "replace a built district bank's shared feed head by the split head in place: plan republished first, new parts built beside the running head, stocked cut-over by guarded mines, old belts mined and reused; each row then gets a full ore lane",
+    },
     "smelting_district": {
         "parameters": {},
         "requires": ["power", "bootstrap_logistics", "mining_outpost"],
@@ -510,6 +517,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "coal_feed_belts": obs.get("coal_feed_belts"),
         "wood_burner_feed": obs.get("wood_burner_feed"),
         "trunk_return_feeds": obs.get("trunk_return_feeds"),
+        "feed_head_rework": obs.get("feed_head_rework"),
         "capabilities": CAPABILITIES,
         "jobs": [
             {k: v for k, v in job.items() if k in {"key", "capability", "status", "reason", "actions", "last_tick"}}

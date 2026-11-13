@@ -45,13 +45,14 @@ RETRY_CLEARED_BY = {
     "production_row_input_source_missing": frozenset(
         {"planned_main_bus", "main_bus", "automation_science", "smelting_capacity", "produce"}
     ),
+    # District growth refused by the flow model: the feed head rework (head_rework.py) clears it.
+    "feed_head_bandwidth_below_next_slot_demand": frozenset({"feed_head_rework"}),
     # normal_research: no block makes one of the technology's packs yet.
     "research_pack_producer_missing": frozenset({"logistic_science", "chemical_science"}),
 }
 # Re-planning blockers (a route, a whole-plan preflight or a site search that found nothing):
 # the world, neighbours and the planning budget change the answer without any job success.
-REPLAN_SUFFIXES = ("_route_failed", "_preflight_failed")
-# Extra quiet-interval retries of such a blocker while no job at all is active.
+REPLAN_SUFFIXES = ("_route_failed", "_preflight_failed")# Extra quiet-interval retries of such a blocker while no job at all is active.
 IDLE_RETRY_LIMIT = 10
 # Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan) are
 # re-planning blockers too. Past AUTO_RETRY_LIMIT every re-planning blocker is still retried,

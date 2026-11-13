@@ -36,6 +36,23 @@ def validate_smelting_capacity(parameters):
     validate_capacity(parameters)
 
 
+def feed_head_rework_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "feed_head_rework")
+    if early is not None:
+        return early
+    return ex.feed_head_rework.step(obs, parameters or {})
+
+
+def feed_head_rework_proof(ex, obs, result, parameters):
+    return ex.feed_head_rework.proof(obs, parameters or {})
+
+
+def validate_feed_head_rework(parameters):
+    from ..head_rework import validate_parameters
+
+    validate_parameters(parameters)
+
+
 def paired_smelting_step(ex, obs, parameters):
     early, _ = shared_upkeep(ex, obs, "paired_smelting")
     if early is not None:
@@ -166,6 +183,9 @@ def chemical_science_proof(ex, obs, result, parameters):
 
 register("smelting_district", step=smelting_district_step, proof=smelting_proof)
 register("smelting_capacity", step=smelting_capacity_step, proof=smelting_proof, validate=validate_smelting_capacity)
+register(
+    "feed_head_rework", step=feed_head_rework_step, proof=feed_head_rework_proof, validate=validate_feed_head_rework
+)
 register("paired_smelting", step=paired_smelting_step, proof=paired_smelting_proof)
 register("furnace_upgrade", step=furnace_upgrade_step, proof=furnace_upgrade_proof, validate=validate_furnace_upgrade)
 register(

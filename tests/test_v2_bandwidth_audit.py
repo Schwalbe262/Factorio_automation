@@ -120,6 +120,10 @@ class DistrictHeadTests(unittest.TestCase):
             }
             self.assertEqual(delivered, {ceiling}, head)
         self.assertEqual(district_bank_audit("split", "copper-ore")["findings"], [])
+        # Shape (owner's reference, "Early Game Saturated Stone Furnace Setup"): inputs on the two
+        # outer belts, one shared centre output whose two lanes the two rows fill (one each).
+        out = next(p for p in district_bank_audit("split")["ports"] if p["name"].startswith("output:"))
+        self.assertEqual(out["lanes"], {"left": 225.0, "right": 225.0})
 
     def test_every_new_district_candidate_has_no_audit_finding(self):
         from factorio_agent.site.fakeworld import make_world
