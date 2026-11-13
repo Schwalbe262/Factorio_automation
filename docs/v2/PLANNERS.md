@@ -413,6 +413,17 @@ queue    only technologies whose every pack has a producer (an assembler with th
 | `build_seconds_per_machine` | 20.0 |
 | `min_saving_seconds` / `max_ratio` / `min_remaining_seconds` | 60.0 / 0.85 / 120.0 |
 
+Real unit (`expansion_costs(unit_bill=...)`, receipt `units`): the ratio rule above assumes shared
+upstream machines (a belt between them), right for red's one gear machine. A pack block whose
+intermediates are direct-inserted or whose next unit is a reserved slot passes its real unit from
+its geometry (`pack_growth.unit_bills`): a split row's free slot = pack machine + 2 inserters +
+pole (the sub-clusters already carry the frame), a cluster or a full frame = a whole second unit
+(six machines for a green cluster). The plate evidence is lifted by the district's unclaimed
+capacity while a district furnace holds full output (`with_spare`, `science_growth.district_spare`).
+eval-1575138435 (~185 min): "+1 assemblers takes 3681s" against a 3613 s wait - the extra green
+rate was capped to nothing by a measured plate net of ~0 and the option paid its build and fund
+with no gain; with the spare and the slot unit the same queue saves ~3000 s (`pack_growth`).
+
 `recommended_science_rate`: `rate = floor(min(30, min_items net / raw_per_pack))`,
 `labs = ceil(rate * sum(units*unit_seconds) / (60 * lab_speed * sum(units*packs)))`.
 Used by the observe receipt (`research_capacity_receipt`) and by
@@ -500,13 +511,64 @@ widens the reservation to six slots (republished) and builds the third machine; 
 once every lab works (8 lab slots). Its taps were declared for 2 machines (iron 24, copper 12/min):
 the decision to grow declares +12 iron and +6 copper per minute to throughput_growth.
 
+A lab missing packs that holds red misses another pack: `starving` (red) needs a short lab with no
+red, and when red backs up while a short lab lacks another pack of the running research the
+receipt says `chain: packs:<pack>`, `missing_pack` and "labs miss <pack> while red packs back up:
+the <pack> block is the limit (pack_growth receipt)" (eval-1575138435 said "the lab feed, not a
+stage": 8 labs, red 24/min backing up, green 5/min; the lab feed audit, `lab_feed.py`, finds
+`source_short` on green and nothing wrong with the feed).
+
 A lab is never added while a built lab is idle. The startup cell (`industry._extend_labs`,
 `_grow_cell`) adds no slot lab while research runs and a powered lab is idle without packs (its
 machines may still grow by its time model: labs starving for packs are a pack shortage), and neither
 grows once the bus science block takes over (`industry.permanent_science_due`: `planned_main_bus`
-succeeded, an `automation_science` job not failed, or the permanent block planned). Green science is
-one cluster (`blocks.cluster`), not a slot row: its growth is a second cluster, not modelled yet.
-Pinned by `tests/test_v2_science_growth.py`, `tests/test_v2_template_power.py`.
+succeeded, an `automation_science` job not failed, or the permanent block planned). Every other
+pack block grows by the next section. Pinned by `tests/test_v2_science_growth.py`,
+`tests/test_v2_template_power.py`.
+
+## Pack block growth (`pack_growth.py`, capability `science_growth {pack, machines}`)
+
+The same chain for every pack block beside the red row (green today; `PACK_STATES` names the
+block state per pack, chemical has a fixed 2-4 machine core without slots and no entry yet):
+
+```
+view     built pack machines, reserved slot groups (core.growth_slots), frame = built + slots,
+         sub-assembler limit = floor(min sub-cluster rate / pack rate), declared tap draw,
+         unit = one slot's entities, else a whole second unit (cluster / split start bill)
+labs     the red block's built labs: missing = status missing_science_packs and none of this pack held
+backlog  lab belt >= 8 of this pack, or every lab >= 2, or a pack machine full_output
+starving missing > 0 and no backlog; short = a pack machine lacks ingredients
+wanted   max(built, min(frame, sub limit, ceil(lab_pack_rate(queue using the pack, labs) / pack rate)))
+declare  plate_draw = per-machine plates x max(built, target, wanted while the labs starve);
+         undeclared = draw - declared taps -> throughput_growth growth_taps (before the build)
+limit    min(frame, sub limit, plate_machine_limit with the district spare)
+how many plan_research_capacity(queue, observed hardware + this pack's stock, unit = the real
+         unit (raw cost, machines), max_step = free slots, labs fixed); build_ahead to
+         recommended_rates[pack] (owner: build-ahead margin when growing)
+no slot  next_step: second_unit_k (k = 1..2) | rebuild_split_k (cluster -> split row of k
+         machines, built beside the running cluster, its entities mined after and reused; no
+         output lost) by the wait-vs-spend rule; implemented: false (needs a second lab entry,
+         or the cluster's guarded removal after the split runs)
+node     science_growth {pack, machines} at SCIENCE_GROWTH_PRIORITY (red growth first, one open)
+build    LogisticScience.grow: plan_growth (pure, dry run) adds the slot groups in order (pole
+         chain), preflight (trees -> clear obstacles); grown plan saved, board block republished
+         over its own previous plan only, built; core.count / growth_slots / rated rate committed
+         once every entity stands powered; grown machines join the supply proof without a first craft
+```
+
+eval-1575138435 at ~185 min (split row: 1 built, 5 slots; 8 labs; queue engine,
+electric-energy-distribution-1, fluid-handling, oil-gathering): the labs draw ~20 green/min,
+wanted 4; with plate headroom the receipt grows 1 -> 6 machines in one go (build ahead to
+30/min: +5 = 100 s build, ~1246 s against a 4332 s wait), with only a district spare of 120
+iron/min 1 -> 5 (the plate limit); with plates short it holds the build and declares 4 machines'
+draw (iron 110/min, copper 30/min: 55 / 22.5 above the declared taps) to throughput_growth. Remedy ladder: `replan` only (slots are
+fixed by the frame; a slot that meets something is a preflight need, no slot is a site need
+naming the next unit); dry run `postmortem.DRY_RUN["science_growth"]`. Bottleneck auditor hook:
+`science_growth.growth_options(bottleneck, observation, state)` routes every science-pack and lab
+bottleneck (any pack) to these receipts (`growth_providers._option` fields); a red/lab bottleneck
+whose receipt names a `missing_pack` gets that pack's option; labs without research in progress are
+a research-queue problem (infeasible option), never a lab or pack surplus. Pinned by
+`tests/test_v2_pack_growth.py`.
 
 ## Plate throughput growth (`throughput_growth.py`, capabilities `mining_outpost`, `smelting_capacity`)
 

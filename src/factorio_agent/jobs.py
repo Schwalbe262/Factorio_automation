@@ -155,10 +155,11 @@ CAPABILITIES = {
     "science_growth": {
         "parameters": {
             "labs": "integer [1,8], built labs of the staged red science block after growth",
-            "machines": "integer [1,8], built red science machines after growth",
+            "machines": "integer [1,8] (red) or [1,12] (pack), built pack machines after growth",
+            "pack": "optional instead of labs: another pack's block (pack_growth.PACK_STATES, today logistic-science-pack)",
         },
         "requires": ["automation_science"],
-        "effect": "build reserved lab and science machine slots of the staged red science block (science_growth.py); proposed only on observed lab activity",
+        "effect": "build reserved lab and science machine slots of the staged red science block (science_growth.py), or the reserved pack slots of another pack block ({pack, machines}: the green split row, pack_growth.py); proposed only on observed lab activity",
     },
     "logistic_science": {
         "parameters": {
@@ -510,6 +511,9 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "research_capacity": obs.get("research_capacity"),
         "research_capacity_error": obs.get("research_capacity_error"),
         "science_growth": obs.get("science_growth"),
+        # Growth of the other pack blocks (pack_growth.py): science_growth {pack, machines} nodes.
+        "pack_growth": obs.get("pack_growth"),
+        "pack_growth_error": obs.get("pack_growth_error"),
         # Plate throughput growth (throughput_growth.py): the autopilot reads it from this summary.
         "throughput_growth": obs.get("throughput_growth"),
         "science_growth_error": obs.get("science_growth_error"),

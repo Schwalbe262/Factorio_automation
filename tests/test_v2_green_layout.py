@@ -65,7 +65,7 @@ class DescriptorTests(unittest.TestCase):
         self.assertEqual(self.split["growth"]["kind"], "in_place")
         self.assertEqual(self.split["growth"]["slots"], gl.FRAME - gl.START)
         self.assertEqual(self.split["growth"]["max_rate_in_place"], 30.0)
-        self.assertEqual(self.split["growth"]["capability"], "not_implemented")
+        self.assertEqual(self.split["growth"]["capability"], "science_growth")
         self.assertEqual(self.cluster["rate_now"], self.split["rate_now"])
 
     def test_the_cluster_is_cheaper_to_start(self):
