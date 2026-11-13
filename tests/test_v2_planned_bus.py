@@ -226,6 +226,26 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue(h.bus.prepare(h.obs())["ok"])
             self.assertEqual(calls[2:], ["copper-plate", "iron-plate"])
 
+    def test_a_failed_feed_route_and_preflight_leave_scalar_evidence(self):
+        # all-1113-2107: three feed-route blocks kept evidence {} (the ledger keeps only scalars).
+        with TemporaryDirectory() as root:
+            h = Harness(root, PLANS[4])
+            h.bus.route = lambda *a, **k: {"ok": False, "reason": "no_route_within_bounds"}
+            failed = h.bus.step(h.obs())
+            self.assertEqual(failed["reason"], "planned_bus_feed_route_failed")
+            self.assertIn("iron-plate: no_route_within_bounds", failed["route_failures"])
+            h.bus.route = h.route
+            h.bus.check = Mock(return_value={
+                "ok": False, "reason": "reserved block placement is obstructed",
+                "entity": {"name": "transport-belt", "position": {"x": 1.5, "y": 2.5}},
+                "blockers": [{"name": "tree-01", "reason": "terrain_or_entity_collision"}],
+            })  # fmt: skip
+            failed = h.bus.step(h.obs())
+            self.assertEqual(failed["reason"], "planned_bus_whole_preflight_failed")
+            self.assertEqual(failed["failed_check"], "reserved block placement is obstructed")
+            self.assertEqual(failed["position"], {"x": 1.5, "y": 2.5})
+            self.assertEqual(failed["first_blocker"], "tree-01: terrain_or_entity_collision")
+
     def test_step_builds_splices_cuts_over_and_proves(self):
         with TemporaryDirectory() as root:
             h = Harness(root, PLANS[7])

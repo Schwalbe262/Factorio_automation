@@ -371,6 +371,20 @@ def publication(state: dict) -> dict:
 
 
 # ----- controller ----------------------------------------------------------------
+def failure_scalars(detail: dict) -> dict:
+    """Scalar fields of a nested preflight failure: the job ledger keeps only scalars as evidence."""
+    out = {"failed_check": str(detail.get("reason"))[:200]}
+    entity = detail.get("entity")
+    if isinstance(entity, dict):
+        out["failed_entity"] = str(entity.get("name"))
+        if isinstance(entity.get("position"), dict):
+            out["position"] = dict(entity["position"])
+    blockers = detail.get("blockers")
+    if isinstance(blockers, list) and blockers and isinstance(blockers[0], dict):
+        out["first_blocker"] = f"{blockers[0].get('name')}: {blockers[0].get('reason')}"[:200]
+    return out
+
+
 def _splitter_over(live: dict, belt: dict):
     """A live splitter with the belt's direction covering the belt's tile, or None."""
     x, y = xy(belt)
@@ -487,7 +501,12 @@ class PlannedBus:
         pairs += routed["pairs"]
         whole = self.check(self.game, self.builder, obs, entities, ignored_units=anchors)
         if not whole.get("ok"):
-            return {"ok": False, "reason": "planned_bus_whole_preflight_failed", "detail": whole}
+            return {
+                "ok": False,
+                "reason": "planned_bus_whole_preflight_failed",
+                "detail": whole,
+                **failure_scalars(whole),
+            }
         ports_out = trunk_ports(bus, trunks)
         common = dict(
             layout_policy="pcb-planned-main-bus-v1",
@@ -545,7 +564,14 @@ class PlannedBus:
                 metrics.append({"item": feed["item"], **(route.get("route_metrics") or {})})
             if good:
                 return {"ok": True, "entities": es, "pairs": pairs, "metrics": metrics}
-        return {"ok": False, "reason": "planned_bus_feed_route_failed", "failures": failures[-4:]}
+        return {
+            "ok": False,
+            "reason": "planned_bus_feed_route_failed",
+            "failures": failures[-4:],
+            # The job ledger keeps only scalar result fields as evidence (all-1113-2107: three
+            # feed-route blocks with evidence {}, cause unknowable after the run).
+            "route_failures": "; ".join(f"{f['item']}: {f.get('reason')}" for f in failures[-4:])[:400],
+        }
 
     # ----- execution ---------------------------------------------------------------
     def _save(self):
