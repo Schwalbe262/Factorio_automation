@@ -86,6 +86,7 @@ Non-negotiable:
 - Sites come only from `SiteService` (`site.placement`, `site.fit`); never add fixed coordinates.
 - Decisions are rules in code (roadmap, planners, auto-retry); the model only answers incidents.
 - Measure progress with `python -B tools/report_run.py runtime/v2/<name>` milestones, not actions/min.
+- Measure a change on a fleet (`python -B tools/fleet.py start --count N --minutes M`), then read one `fleet.py report`; do not watch runs live.
 - Never hand-edit `jobs.json`, state files or the live game; fix the rule, add a test, `lifecycle new-map`.
 - Run `powershell -ExecutionPolicy Bypass -File tools/check.ps1` from PowerShell before every commit.
 - `git add` specific files only; keep the working tree clean (commit or discard, never leave WIP unstaged for days).

@@ -353,7 +353,8 @@ class Lifecycle:
                 raise RuntimeError("supervisor stop marker has no exact saved acknowledgement")
             marker.unlink()
 
-    def _start(self, root, *, visible=True, automation_config=None):
+    def _start(self, root, *, visible=True, automation_config=None, select=True):
+        """``select=False`` (tools/fleet.py) leaves ``runtime/active-runtime.json`` on the interactive map."""
         options = (
             automation_config
             if automation_config is not None
@@ -421,7 +422,8 @@ class Lifecycle:
         if not matches(snapshot, record, root, "supervisor"):
             raise RuntimeError("launched supervisor command line does not match its runtime")
         _atomic_json(root / PROCESS, record)
-        self._select(root)
+        if select:
+            self._select(root)
         _atomic_json(
             root / "controller-config.json",
             dict(
