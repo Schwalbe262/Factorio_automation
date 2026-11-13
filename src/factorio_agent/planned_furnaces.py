@@ -422,10 +422,29 @@ class PlannedFurnaces:
                     "phase": "planned",
                 }
         settle(self.site, obs["world_id"], kind.owner, None)
+        rows = [
+            {k: f[k] for k in ("allocation", "reason", "item", "detail", "port", "escape") if f.get(k) is not None}
+            for f in failures
+        ]
+        # One row per allocation and reason (both turns usually fail alike), so the
+        # job ledger shows which connection fails on every candidate.
+        distinct = [r for i, r in enumerate(rows) if r not in rows[:i]][:8]
         return self._fail(
             f"no_{kind.name}_furnace_block_with_complete_connections",
             candidates=len(blocks),
-            failures=[{k: f.get(k) for k in ("allocation", "reason", "item", "detail")} for f in failures[-6:]],
+            failures=distinct,
+            evidence={
+                "kind": kind.name,
+                "candidates": len(blocks),
+                "failures": distinct,
+                "sources": {
+                    role: {"key": key, **sources[role]["position"]}
+                    for role, key in (("raw", kind.raw_key), ("coal", kind.coal_key))
+                    if key is not None and role in sources
+                },
+                # Facts whose change can turn a failure into a plan (supervisor retry rule).
+                "retry_when": ["material source published or moved", "neighbour plan built", "free site"],
+            },
         )
 
     def _connect(self, obs, board, bus, block, bank, sources, span, rates, others, unbuilt) -> dict:
@@ -470,7 +489,7 @@ class PlannedFurnaces:
             raw_from = sources["raw"]
             raw_route = self.route(self.game, self.builder, obs, raw_from, raw_port, entities + keepouts)
             if not raw_route.get("ok"):
-                return {"ok": False, "reason": raw_route.get("reason", "route_failed"), "item": kind.raw}
+                return _route_failure(raw_route, kind.raw)
             entities = merge_entities(entities, raw_route["entities"])
             used["raw"] = _source_record(kind.raw_key, raw_from)
         routes.append(raw_route)
@@ -480,7 +499,7 @@ class PlannedFurnaces:
             self.game, self.builder, obs, coal_from, coal_port, entities + keepouts, ignored_units=tuple(ignored)
         )
         if not coal_route.get("ok"):
-            return {"ok": False, "reason": coal_route.get("reason", "route_failed"), "item": "coal"}
+            return _route_failure(coal_route, "coal")
         routes.append(coal_route)
         entities = merge_entities(entities, coal_route["entities"])
         connections.append(_connection("coal", coal_from, coal_port, kind.owner))
@@ -824,6 +843,15 @@ class PlannedFurnaces:
             "coal_on_port_belt": items["coal"],
             "scope": "registered coal outlet feeds the furnace block's coal port; no sustained rate",
         }
+
+
+def _route_failure(route: dict, item: str) -> dict:
+    """A failed route as a candidate failure row (reason, item and a sealed port's escape tile)."""
+    row = {"ok": False, "reason": route.get("reason", "route_failed"), "item": item}
+    for key in ("port", "escape"):
+        if route.get(key) is not None:
+            row[key] = route[key]
+    return row
 
 
 def _connection(item, source, destination, owner) -> dict:

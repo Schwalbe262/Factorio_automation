@@ -139,3 +139,39 @@ class LayeredCorridorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SealedEscapeTests(unittest.TestCase):
+    def test_sibling_outlet_sealed_by_an_unbuilt_route_is_named_not_searched(self):
+        # eval-4177156614: the splitter tap has outlets (-97.5, 31.5) "coal" and (-98.5, 31.5)
+        # "brick-coal", both facing south. The steel block's unbuilt coal route leaves the first
+        # one south, then west along y=33.5; with its side-load margin the second outlet's only
+        # escape tile (-98.5, 32.5) is reserved, so no corridor exists until steel is built.
+        from factorio_agent.core.deterministic_builder import FactoryBuilder
+        from factorio_agent.transport import _sealed_escape, unbuilt_external_keepouts
+
+        def belt(x, y, direction, **extra):
+            return {"name": "transport-belt", "position": {"x": x, "y": y}, "direction": direction, **extra}
+
+        built = [belt(-97.5, 31.5, 8, unit_number=2765), belt(-98.5, 31.5, 8, unit_number=2766)]
+        steel_route = [
+            belt(-97.5, 31.5, 8),
+            belt(-97.5, 32.5, 8),
+            belt(-97.5, 33.5, 12),
+            belt(-98.5, 33.5, 12),
+            belt(-99.5, 33.5, 12),
+            belt(-100.5, 33.5, 8),
+            belt(-100.5, 34.5, 8),
+        ]
+        blocks = {"steel_production": {"reserved_area": [[43, 119], [55, 149]], "entities": steel_route}}
+        obs = {"entities": built}
+        builder = FactoryBuilder.__new__(FactoryBuilder)
+        hard = unbuilt_external_keepouts(builder, obs, blocks)
+        source = {"item": "coal", "facing": 8, "position": {"x": -98.5, "y": 31.5}}
+        destination = {"item": "coal", "facing": 4, "position": {"x": 51.5, "y": 156.5}}
+        self.assertEqual(
+            _sealed_escape(source, destination, hard), {"port": "source", "escape": {"x": -98.5, "y": 32.5}}
+        )
+        # Once the steel route stands, its belts are crossable hardware: the escape is free.
+        obs = {"entities": built + [dict(e, unit_number=3000 + i) for i, e in enumerate(steel_route)]}
+        self.assertIsNone(_sealed_escape(source, destination, unbuilt_external_keepouts(builder, obs, blocks)))

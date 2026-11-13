@@ -258,6 +258,40 @@ class SitePlanTests(unittest.TestCase):
             self.write_connections(world, board["connections"])
             self.assertEqual(steel.prepare(world.obs)["reason"], "dedicated_material_coal_output_taken")
 
+    def test_every_candidate_failure_reaches_the_job_evidence(self):
+        # eval-4177156614: the ledger kept only {"candidates": 4, "kind": "brick"}; the failing
+        # connection (coal outlet sealed by the unbuilt steel route) was invisible.
+        with TemporaryDirectory() as directory:
+            world = World(Path(directory), None)
+            sources = material_sources(world)
+
+            def sealed_coal(game, builder, obs, source, destination, reserved=(), **kwargs):
+                if source["item"] == "coal":
+                    return {
+                        "ok": False,
+                        "reason": "route_port_escape_reserved_by_unbuilt_plan",
+                        "port": "source",
+                        "escape": {"x": 1.5, "y": 2.5},
+                    }
+                return route(game, builder, obs, source, destination, reserved)
+
+            brick = controller(world, "brick")
+            brick.route = sealed_coal
+            result = brick.production_step(dict(world.obs, enabled_recipes={"stone-brick": True}))
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["reason"], "no_brick_furnace_block_with_complete_connections")
+            evidence = result["evidence"]
+            self.assertEqual(evidence["candidates"], result["candidates"])
+            self.assertTrue(evidence["failures"])
+            self.assertEqual(
+                {(f["item"], f["reason"], f["port"]) for f in evidence["failures"]},
+                {("coal", "route_port_escape_reserved_by_unbuilt_plan", "source")},
+            )
+            # One row per candidate, not one per orientation.
+            self.assertEqual(len(evidence["failures"]), len({f["allocation"] for f in evidence["failures"]}))
+            self.assertEqual(evidence["sources"]["coal"]["key"], "brick-coal")
+            self.assertEqual(evidence["sources"]["raw"]["x"], sources["stone"]["position"]["x"])
+
     @staticmethod
     def write_connections(world, connections):
         board = world.board()

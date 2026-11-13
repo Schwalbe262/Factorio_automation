@@ -9,7 +9,7 @@ from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import _plan
 from .board import built_keys, entity
-from .routing import VECTORS, route_trunks
+from .routing import LONG_ROUTE_TURNS, VECTORS, route_trunks
 from .resource_policy import (
     RESOURCES,
     mining_reservations,
@@ -266,6 +266,19 @@ def unbuilt_external_keepouts(builder, obs, blocks, *, released_block=None):
             if not (x + 0.49 > area[0][0] and x - 0.49 < area[1][0] and y + 0.49 > area[0][1] and y - 0.49 < area[1][1])
         )
     return hard
+
+
+def _sealed_escape(source, destination, hard) -> dict | None:
+    """The port whose forced escape tile (one step along its facing) is in ``hard``, or None."""
+    for role, port, sign in (("source", source, 1), ("destination", destination, -1)):
+        facing = port.get("facing")
+        if facing not in VECTORS:
+            continue
+        dx, dy = VECTORS[facing]
+        cell = (port["position"]["x"] + sign * dx, port["position"]["y"] + sign * dy)
+        if cell in hard:
+            return {"port": role, "escape": {"x": cell[0], "y": cell[1]}}
+    return None
 
 
 def _production_keepouts(game, builder, obs, source, destination, reserved, bounds, *, released_unbuilt_receiver=None):
@@ -586,6 +599,12 @@ def plan_connection(
     )
     if not production.get("ok"):
         return production
+    sealed = _sealed_escape(source, destination, production["hard"])
+    if sealed is not None:
+        # The forced first/last tile lies in another block's unbuilt plan (or its
+        # side-load margin): no corridor exists until that plan is built, then
+        # its belts are ordinary crossable hardware. Say so; do not search.
+        return {"ok": False, "reason": "route_port_escape_reserved_by_unbuilt_plan", **sealed}
     zones = mining_reservations(game, obs["world_id"])
     pipe_candidates = [
         {"name": "pipe", "position": e["position"], "unit_number": e["unit_number"]}
@@ -819,6 +838,7 @@ return {ok=true,blocked=blocked,clearable=clearable,max_span=prototypes.entity["
             end_direction=destination["facing"],
             max_nodes=node_budget,
             candidate_validator=accepts_layers,
+            long_route_turns=LONG_ROUTE_TURNS,
         )
         compiled = compile_crossings(route, foreign, maximum_span=survey["max_span"], verified_pipes=pipes)
         if compiled.get("ok"):
