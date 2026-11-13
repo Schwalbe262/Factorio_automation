@@ -13,6 +13,16 @@ from factorio_agent.core.deterministic_state import _atomic_json
 
 
 TARGETS = {"automation", "electric-mining-drill"}
+# Lab centres tried around each powered pole, nearest first. The first eight
+# are the historical ring; the ring at 3 still overlaps the small pole's
+# supply area (2.5) with the 3x3 lab. Needed once the lab keeps off the
+# reserved coal feed: on seed 2005199778 the feed belt ran past every pole of
+# the plant and the eight-site ring found no site (no_powered_lab_site).
+LAB_OFFSETS = [(2, 0), (-2, 0), (0, 2), (0, -2), (2, 2), (-2, -2), (2, -2), (-2, 2)] + sorted(
+    ((dx, dy) for dx in range(-3, 4) for dy in range(-3, 4) if max(abs(dx), abs(dy)) == 3),
+    key=lambda o: (abs(o[0]) + abs(o[1]), o),
+)
+LAB_OFFSETS_LUA = "{" + ",".join("{%d,%d}" % o for o in LAB_OFFSETS) + "}"
 
 
 def validate_parameters(parameters: dict) -> None:
@@ -53,7 +63,8 @@ class StarterResearch:
             site = self.game.query(
                 "local keepouts=helpers.json_to_table("
                 + payload
-                + ")"
+                + ");local LAB_OFFSETS="
+                + LAB_OFFSETS_LUA
                 + KEEPOUT_LUA
                 + """
 local supplied={}
@@ -62,7 +73,7 @@ for _,generator in pairs(s.find_entities_filtered{force=f,type="generator"}) do
 end
 for _,pole in pairs(s.find_entities_filtered{force=f,type="electric-pole"}) do
  if pole.electric_network_id and supplied[pole.electric_network_id] then
-  for _,offset in ipairs({{2,0},{-2,0},{0,2},{0,-2},{2,2},{-2,-2},{2,-2},{-2,2}}) do
+  for _,offset in ipairs(LAB_OFFSETS) do
    local p={x=math.floor(pole.position.x)+0.5+offset[1],y=math.floor(pole.position.y)+0.5+offset[2]}
    if not keepout_hit(p.x-1.5,p.y-1.5,p.x+1.5,p.y+1.5) and s.can_place_entity{name="lab",position=p,force=f} then return {ok=true,position=p} end
   end

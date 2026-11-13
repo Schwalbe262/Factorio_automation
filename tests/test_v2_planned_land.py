@@ -124,6 +124,13 @@ class StarterLabTests(unittest.TestCase):
             self.assertEqual(research.lab({"world_id": "w", "entities": []})["status"], "blocked")
             script = game.query.call_args.args[0]
             self.assertIn("keepout_hit(p.x-1.5,p.y-1.5,p.x+1.5,p.y+1.5)", script)
+            # A wider ring than the historical eight sites: the feed can run past every plant pole.
+            from factorio_agent.research import LAB_OFFSETS, LAB_OFFSETS_LUA
+
+            self.assertEqual(LAB_OFFSETS[:2], [(2, 0), (-2, 0)])
+            self.assertEqual(len(LAB_OFFSETS), 32)
+            self.assertIn("local LAB_OFFSETS={{2,0},{-2,0}", script)
+            self.assertIn(LAB_OFFSETS_LUA, script)
             self.assertIn('\\"30,34\\"', script)  # a planned feed belt tile is in the keepouts
 
 
