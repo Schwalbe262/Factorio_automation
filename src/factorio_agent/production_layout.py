@@ -85,7 +85,7 @@ from .blocks.cluster_audit import audit_cluster
 from .blocks.params import inserter_rate
 from .blocks.geometry import bounding_box, footprint, step, xy
 from .blocks.row import RowShape, extend_row, row_block
-from .blocks.sizing import RowSizing, size_row
+from .blocks.sizing import RowSizing, fluid_ingredient, size_row
 from .blocks.stock_tail import audit_stock_tail, stock_tail
 from .board import entity
 from .site.transform import Transform
@@ -183,7 +183,13 @@ def _size(
         enabled_recipes=enabled,
         inserter=inserter,
         lanes=lanes,
+        fluid=fluid_ingredient(catalog.recipes[recipe]) is not None,
     )
+
+
+def fluid_inputs(line: dict) -> list[dict]:
+    """The line's typed fluid input ports (a fluid row has one, on the main row's header)."""
+    return [p for p in line["inputs"] if p.get("kind") == "fluid"]
 
 
 def unsourced_raw(catalog: Any, recipe: str, sourced: Callable[[str], bool]) -> list[str]:

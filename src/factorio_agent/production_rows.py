@@ -51,6 +51,7 @@ from .production_layout import (
     audit_line,
     design_line,
     extend_line,
+    fluid_inputs,
     input_demand,
     is_belt_output,
     rows,
@@ -72,7 +73,8 @@ if not inv or not inv.supports_bar() then return {ok=false,reason="production_ro
 return {ok=true,slots=inv.get_bar()-1,size=#inv}"""
 
 
-OPTIONAL = ("output",)
+OPTIONAL = ("output", "fluid_source")
+SOURCE_KEY = re.compile(r"[a-z][a-z0-9-]{0,47}")
 
 
 def validate_parameters(parameters) -> None:
@@ -85,6 +87,10 @@ def validate_parameters(parameters) -> None:
         raise ValueError("produce requires item and rate_per_minute (optional: output)")
     if parameters.get("output", "stock_chest") not in OUTPUT_MODES:
         raise ValueError(f"produce output must be one of {', '.join(OUTPUT_MODES)}")
+    if "fluid_source" in parameters and (
+        not isinstance(parameters["fluid_source"], str) or not SOURCE_KEY.fullmatch(parameters["fluid_source"])
+    ):
+        raise ValueError("produce fluid_source must be a fluid-sources.json registry key")
     item, rate = parameters["item"], parameters["rate_per_minute"]
     if not isinstance(item, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", item):
         raise ValueError("produce item must be a catalog item name")
@@ -104,6 +110,10 @@ def choose_inserter(enabled: list[str], limits=DEFAULT_LIMITS) -> str | None:
 
 def choose_chest(enabled: list[str]) -> str | None:
     return next((name for name in CHESTS if name in enabled), None)
+
+
+def _fluid_recipe(catalog, recipe: str) -> bool:
+    return any(r.get("type") == "fluid" for r in (catalog.recipes.get(recipe) or {}).get("ingredients", ()))
 
 
 def output_mode(parameters: dict) -> str:
@@ -150,7 +160,10 @@ class ProductionRows:
         enabled = _enabled(obs)
         recipe = (self.catalog.recipe_for_product(item) or {}).get("name")
         inserter, chest = choose_inserter(enabled), choose_chest(enabled)
-        missing = [name for name in (recipe, "transport-belt", "small-electric-pole") if name and name not in enabled]
+        pipes = ("pipe", "pipe-to-ground") if recipe and _fluid_recipe(self.catalog, recipe) else ()
+        missing = [
+            name for name in (recipe, "transport-belt", "small-electric-pole", *pipes) if name and name not in enabled
+        ]
         if recipe is None:
             return {"ok": False, "reason": "production_row_no_recipe", "item": item}
         if missing or inserter is None or chest is None:
@@ -200,6 +213,17 @@ class ProductionRows:
             "long-handed-inserter" not in needs["enabled"]
         ):
             return {"ok": False, "reason": "production_row_recipes_locked", "missing": ["long-handed-inserter"]}
+        fluid = fluid_inputs(line)
+        if fluid:
+            # The row layout carries its header port; routing a published fluid source to it
+            # (fluid_handoffs declare/bind, typed pipe route) is not implemented yet.
+            return {
+                "ok": False,
+                "reason": "production_row_fluid_input_unrouted",
+                "item": fluid[0]["item"],
+                "fluid_source": parameters.get("fluid_source"),
+                "needs": "a typed pipe route from the published fluid source to the row's header port",
+            }
         for port in line["inputs"]:
             found = resolve(board, item, port["item"], owner=owner)
             if not found["ok"]:

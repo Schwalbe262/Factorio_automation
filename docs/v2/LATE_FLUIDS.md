@@ -42,6 +42,24 @@ as surplus, because cracking cannot go upward.
 pending build and blocked on reconciliation (and could overwrite the binding). `step` now
 re-reads the checkpoint (`_reload`).
 
+## Fluid rows (`produce` with one fluid ingredient)
+
+Processing units, rocket fuel, concrete, electric engines and solid fuel are `produce` rows
+(`blocks.row` fluid rows, `blocks.sizing` `fluid=True`): the machine comes from the recipe's
+category and must have an input fluid box (assembling machine 2+, chemical plant); it is turned
+so the box opens on the output side (`row.fluid_slot`, from the catalog's
+`fluidbox_prototypes`). That column carries no output arm but a pipe-to-ground riser under the
+output belt onto a header pipe over every slot; the header's west end is the row's typed
+`fluid` input port (one fluid per row). `audit_row._check_fluid` checks every machine's box,
+riser pair, one header network with the port, and no foreign fluid neighbour; growth extends
+risers in place. `rocket_plan` gives the row a `fluid_source` key and a `FluidSupply` row.
+
+**Not done:** routing that source to the header port. `ProductionRows.design` blocks
+`production_row_fluid_input_unrouted` (with `fluid_source`) until the row declares and binds a
+`fluid_handoffs` edge and lays the typed pipe route (`plan_typed_fluid_connection` with the
+first-neighbour gap, as `chemical_production` does). Electric engines remain a bill gap
+(`produce_unfit`): engine units leave the engine row only through its stock chest.
+
 ## Known limits
 
 * `fluid_product` sulfuric acid takes iron from the development-map bus tap (`bus-factory.json`,

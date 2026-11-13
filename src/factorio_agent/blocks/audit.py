@@ -70,7 +70,8 @@ class Scene:
         return nameplate
 
     def ports(self, direction: str) -> list[dict]:
-        return [p for p in self.plan["ports"] if p.get("direction") == direction]
+        """Belt ports (a fluid row's typed pipe port is audited by ``_check_fluid``)."""
+        return [p for p in self.plan["ports"] if p.get("direction") == direction and p.get("kind") != "fluid"]
 
 
 def _kind(catalog: Any, e: dict) -> str:
@@ -138,7 +139,7 @@ def _belt_items(lanes: dict, tile) -> set:
 def _check_ingredients(s: Scene, lanes: dict) -> list[str]:
     errors = []
     for m in s.machines:
-        needed = {i["name"] for i in s.recipe(m).get("ingredients", ())}
+        needed = {i["name"] for i in s.recipe(m).get("ingredients", ()) if i.get("type", "item") == "item"}
         got = set()
         for arm in s.arms:
             if s.machine_at(arm.drop) is not m:
@@ -180,7 +181,7 @@ def _check_products(s: Scene, inputs: dict) -> list[str]:
 def _check_belt_lines(s: Scene) -> list[str]:
     errors = []
     covered = set()
-    for port in s.plan["ports"]:
+    for port in s.ports("input") + s.ports("output"):
         p, facing = xy(port), port.get("facing")
         belt = s.belts.get(p)
         if belt is None or belt["direction"] != facing:
@@ -241,7 +242,8 @@ def _check_throughput(s: Scene, lanes: dict) -> list[str]:
     for m in s.machines:
         crafts = s.crafts(m)
         for row in s.recipe(m).get("ingredients", ()):
-            demand[row["name"]] += crafts * float(row.get("amount", 0))
+            if row.get("type", "item") == "item":  # a fluid comes through the header (_check_fluid)
+                demand[row["name"]] += crafts * float(row.get("amount", 0))
         for row in s.recipe(m).get("products", ()):
             product_total[row["name"]] += crafts * float(row.get("amount", 0))
         errors += _check_machine_arms(s, m, lanes, crafts)
@@ -283,6 +285,86 @@ def _check_declared_rate(s: Scene) -> list[str]:
     return [f"declared_rate_above_nameplate:{xy(m)}" for m in s.machines if declared > s.nameplate(m) + 1e-9]
 
 
+def _fluid_tile(s: Scene, m: dict):
+    """The tile in front of the machine's first input fluid box, or None."""
+    from ..routing import VECTORS
+    from .sizing import input_fluid_boxes
+
+    boxes = input_fluid_boxes(s.catalog.entities.get(m["name"]) or {})
+    normal = [
+        c
+        for c in (boxes[0].get("pipe_connections") if boxes else None) or ()
+        if c.get("connection_type", "normal") == "normal"
+    ]
+    if not normal:
+        return None
+    d = int(m.get("direction") or 0)
+    p = normal[0]["positions"][d // 4]
+    vx, vy = VECTORS[(normal[0]["direction"] + d) % 16]
+    return (xy(m)[0] + p["x"] + vx, xy(m)[1] + p["y"] + vy)
+
+
+def _underground_span(catalog: Any) -> int:
+    for box in (catalog.entities.get("pipe-to-ground") or {}).get("fluidbox_prototypes") or ():
+        for c in box.get("pipe_connections") or ():
+            if c.get("connection_type") == "underground" and c.get("max_underground_distance"):
+                return int(c["max_underground_distance"])
+    return 10
+
+
+def _header(port: dict, pipes: dict) -> set:
+    found, todo = set(), [xy(port)] if xy(port) in pipes else []
+    while todo:
+        t = todo.pop()
+        if t not in found:
+            found.add(t)
+            todo += [step(t, d) for d in (0, 4, 8, 12) if step(t, d) in pipes]
+    return found
+
+
+def _check_fluid(s: Scene) -> list[str]:
+    """Fluid row: every machine's input fluid box has a riser (pipe-to-ground facing it, its
+    underground partner) onto one header network that holds the fluid port and nothing foreign."""
+    fluid = s.plan.get("fluid") or {}
+    port = next((p for p in s.plan["ports"] if p.get("kind") == "fluid"), None)
+    needs = any(any(i.get("type") == "fluid" for i in s.recipe(m).get("ingredients", ())) for m in s.machines)
+    if not needs and not fluid and port is None:
+        return []
+    if port is None or not fluid or port.get("item") != fluid.get("item"):
+        return ["fluid_port_missing"]
+    pipes = {xy(e): e for e in s.plan["entities"] if _kind(s.catalog, e) == "pipe"}
+    ptgs = {xy(e): e for e in s.plan["entities"] if _kind(s.catalog, e) == "pipe-to-ground"}
+    header = _header(port, pipes)
+    if not header:
+        return ["fluid_port_not_on_pipe"]
+    span, errors, used = _underground_span(s.catalog), [], set()
+    for m in s.machines:
+        tile = _fluid_tile(s, m)
+        riser = ptgs.get(tile) if tile else None
+        if riser is None or s.machine_at(step(tile, riser["direction"])) is not m:
+            errors.append(f"fluid_box_not_connected:{xy(m)}")
+            continue
+        down = (riser["direction"] + 8) % 16
+        partner = next(
+            (
+                step(tile, down, k)
+                for k in range(1, span + 2)
+                if (ptgs.get(step(tile, down, k)) or {}).get("direction") == down
+            ),
+            None,
+        )
+        if partner is None or step(partner, down) not in header:
+            errors.append(f"fluid_riser_not_on_header:{xy(m)}")
+            continue
+        used |= {tile, partner}
+    for t in header:
+        for d in (0, 4, 8, 12):
+            q = step(t, d)
+            if q in ptgs and q not in used:
+                errors.append(f"foreign_fluid_neighbour:{q}")
+    return errors
+
+
 def audit_row(catalog: Any, plan: dict, *, limits: RowLimits = DEFAULT_LIMITS) -> list[str]:
     """Return sorted, de-duplicated finding codes (``code:detail``); empty = OK."""
     scene, errors = _scene(catalog, plan, limits)
@@ -295,4 +377,5 @@ def audit_row(catalog: Any, plan: dict, *, limits: RowLimits = DEFAULT_LIMITS) -
     errors += _check_power(scene)
     errors += _check_throughput(scene, lanes)
     errors += _check_declared_rate(scene)
+    errors += _check_fluid(scene)
     return sorted(set(errors))
