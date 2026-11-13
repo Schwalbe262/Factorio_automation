@@ -397,6 +397,18 @@ def survey_patch(game, obs, catalog, resource, area, *, maximum_tiles=MAX_TILES)
             for t in result["tiles"]
         )
     ):
+        from . import evidence_capture
+
+        evidence_capture.note(  # post-mortem: which receipt field broke the check
+            "mining_patch_receipt",
+            area=area,
+            maximum_tiles=maximum_tiles,
+            world_ids=[obs["world_id"], result.get("world_id")],
+            tiles_type=type(result.get("tiles")).__name__,
+            tiles=len(result["tiles"]) if isinstance(result.get("tiles"), (list, dict)) else None,
+            surface_index=result.get("surface_index"),
+            first_tiles=result.get("tiles")[:5] if isinstance(result.get("tiles"), list) else result.get("tiles"),
+        )
         return {"ok": False, "reason": "mining_patch_native_receipt_changed"}
     native = result.get("native", {})
     if (
@@ -1344,6 +1356,28 @@ def prepare_new_bank(
                     faces_neighbour=bool(candidate.get("faces_neighbour")),
                     **({"site_score": list(candidate["score"])} if site_exit is not None else {}),
                 ),
+            )
+        from . import evidence_capture
+
+        if evidence_capture.active():  # post-mortem: each candidate failed exactly one check, in order
+            evidence_capture.note(
+                "mining_bank_candidates",
+                resource=resource,
+                area=area,
+                patch_tiles=len(snapshot.get("tiles") or []),
+                flow=selected.get("flow"),
+                site_exit=(site_exit or {}).get("side"),
+                grid=evidence_capture.outcome(grid) if grid else None,
+                reservations=reservations,
+                candidates=[
+                    dict(
+                        footprint=(c.get("future_plan") or {}).get("mining_footprint"),
+                        score=c.get("score"),
+                        unique_resource_tiles=c.get("unique_resource_tiles"),
+                        failure=f,
+                    )
+                    for c, f in zip(sites, failures)
+                ],
             )
         return {
             "ok": False,

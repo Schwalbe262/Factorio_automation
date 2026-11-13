@@ -252234,3 +252234,11 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - metrics: the receipt shape now grows labs 2 -> 4; plate limit 2 -> 7 with 60/30 spare in the unit test.
 - result: offline only.
 - next action: live map: science_growth grows labs, blocked_by_missing_pack names logistic-science-pack.
+
+## 2026-11-14 Part 52 - post-mortem of fleet problem runs (triage, read-only snapshot, keep-alive)
+- goal: problem runs examined against the live game before their server stops (causes of planned_bus_feed_route_failed {}, empty mine candidates, mining_patch_native_receipt_changed, district corridors were not recorded).
+- actions: tools/fleet_triage.py (healthy/blocked/stalled/slow/errored + waste detectors); factorio_agent.postmortem (ReadOnlyGame: act/save refuse, writing Lua refused before sending; sandbox copy of the run's JSON; DRY_RUN prepare+step for mining_outpost, planned_main_bus, smelting_district, produce, supply_cell, dedicated_materials; area dumps; cause); evidence_capture notes in planning.preflight, transport.plan_connection, paired_mining.prepare_new_bank, mining_layout_policy (candidates, patch receipt), smelting (candidates); fleet.py: watcher pauses due runs, triages, snapshots, keeps --keep-problem N (default 1) paused, settle/release on timeout or capacity; inspect [--gui], revive, postmortem; report "problem runs"; waste_report cause.
+- metrics: 22 new unit tests with fakes; smoke on a copied real run: StarterExecutors builds on the sandbox with 0 queries; all 6 dry-run prepares run to a planner answer without a refused write.
+- result: offline only; no fleet started.
+- failure reason / open: hypothesis for mining_patch_native_receipt_changed: an empty Lua table serialises as {} (not a list) so the tiles check fails; the new mining_patch_receipt note (tiles_type) will confirm on the next problem run.
+- next action: next round: read the "problem runs" section and one probes/<job>.json per blocker class.

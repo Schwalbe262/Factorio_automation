@@ -997,6 +997,18 @@ return {ok=true,legal=legal}
         stages = {
             stage: sum(f["stage"] == stage for f in failures) for stage in dict.fromkeys(f["stage"] for f in failures)
         }
+        from . import evidence_capture
+
+        if evidence_capture.active():  # post-mortem: every candidate, filtered before or after the land survey
+            legal = set(survey.get("legal", []))
+            evidence_capture.note(
+                "smelting_district_candidates",
+                offered=len(planned) + len(fallback),
+                after_block_filters=len(candidates),
+                land_legal=[c["area"] for i, c in enumerate(candidates, 1) if i in legal],
+                land_illegal=[c["area"] for i, c in enumerate(candidates, 1) if i not in legal],
+                failures=failures,
+            )
         return {
             "ok": False,
             "reason": "no_clear_pcb_smelting_district_with_corridors",

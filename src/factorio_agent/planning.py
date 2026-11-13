@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from . import evidence_capture
 from .resource_policy import policy_specs, mining_reservations, RESOURCE_CHECK_LUA
 
 
@@ -52,6 +53,20 @@ return {ok=true,legal=legal}
 
 
 def preflight(game, builder, obs, entities, *, ignored_units=()):
+    result = _preflight(game, builder, obs, entities, ignored_units=ignored_units)
+    if evidence_capture.active():  # post-mortem dry run only (factorio_agent.postmortem)
+        evidence_capture.note(
+            "preflight",
+            entities=len(entities),
+            names=sorted({str(e.get("name")) for e in entities}),
+            box=evidence_capture.box(entities),
+            clear_obstacles=len(result.get("clear_obstacles") or []) if isinstance(result, dict) else None,
+            outcome=evidence_capture.outcome(result),
+        )
+    return result
+
+
+def _preflight(game, builder, obs, entities, *, ignored_units=()):
     boxes = [builder._occupied_by_plan([e]) for e in entities]
     if sum(map(len, boxes)) != len(set().union(*boxes)):
         return {"ok": False, "reason": "whole_block_prospective_overlap"}
