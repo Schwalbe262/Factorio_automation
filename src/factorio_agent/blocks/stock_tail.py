@@ -35,7 +35,24 @@ from ..routing import VECTORS
 from .geometry import footprint, step, xy
 from .params import DEFAULT_LIMITS, RowLimits, inserter_rate, inserter_reach, pole_radius, pole_reach
 
-STOCK_STACKS = 2
+STOCK_STACKS = 2  # the bar of a new chest, before any demand is known
+MIN_STOCK_STACKS = 1
+BAR_RECHECK_TICKS = 1800  # the bar follows upcoming demand, re-evaluated every 30 game seconds
+
+
+def adaptive_stacks(demand_units, stack_size, chest_slots) -> int:
+    """Chest slots to leave open: the upcoming demand in stacks, within the chest.
+
+    Some items are used in bursts (a district takes hundreds of belts at
+    once), so a fixed two stacks made a job wait for the machines while the
+    chest sat capped (user rule: size the limit from what will be used).
+    Unknown demand keeps ``STOCK_STACKS``.
+    """
+    if not isinstance(chest_slots, int) or chest_slots < 1:
+        chest_slots = STOCK_STACKS
+    if not isinstance(demand_units, (int, float)) or not isinstance(stack_size, (int, float)) or stack_size <= 0:
+        return min(chest_slots, STOCK_STACKS)
+    return max(MIN_STOCK_STACKS, min(chest_slots, math.ceil(demand_units / stack_size)))
 
 
 def _output_port(plan: dict) -> dict:

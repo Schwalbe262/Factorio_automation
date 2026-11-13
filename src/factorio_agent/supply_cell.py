@@ -886,21 +886,31 @@ class SupplyCell:
     def _bar(self, obs, state):
         from .production_rows import BAR_LUA
 
-        done = set(state.get("bars", []))
+        from .blocks.stock_tail import BAR_RECHECK_TICKS, adaptive_stacks
+
+        # The bar follows the upcoming demand of each product; it is looked at
+        # again every BAR_RECHECK_TICKS, not set once.
+        checked = state.get("bars_tick")
+        tick = obs.get("tick", 0)
+        if isinstance(checked, (int, float)) and 0 <= tick - checked < BAR_RECHECK_TICKS:
+            return None
+        demand = self.demand(obs)
+        done = set()
         for row in state["products"]:
             key = f"{row['output']['x']},{row['output']['y']}"
-            if key in done:
-                continue
             name = self._chest_name(state)
             payload = json.dumps(json.dumps({"name": name, "position": row["output"]}))
             native = self.game.query(BAR_LUA.replace("PAYLOAD", payload))
             if not isinstance(native, dict) or not native.get("ok"):
                 return {"status": "blocked", **(native if isinstance(native, dict) else {"reason": "bar_query_failed"})}
-            if native.get("slots") != OUTPUT_STACKS:
-                return {"type": "bar", "name": name, "position": dict(row["output"]), "slots": OUTPUT_STACKS}
+            stack = (self.catalog.items.get(row["item"]) or {}).get("stack_size")
+            wanted = adaptive_stacks(demand.get(row["item"]), stack, native.get("size"))
+            if native.get("slots") != wanted:
+                return {"type": "bar", "name": name, "position": dict(row["output"]), "slots": wanted}
             done.add(key)
-            state["bars"] = sorted(done)
-            self._save(state)
+        state["bars"] = sorted(done)
+        state["bars_tick"] = tick
+        self._save(state)
         return None
 
     def _chest_name(self, state):

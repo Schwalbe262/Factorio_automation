@@ -234,18 +234,44 @@ class ProductionRows:
             _atomic_json(path, board)
         return None
 
+    def _upcoming_units(self, obs, item: str):
+        """Units of ``item`` the next roadmap steps place (``supply_demand.item_demand``), or None when unknown."""
+        from .supply_cell import DEMAND_HORIZON
+        from .supply_demand import item_demand
+
+        root = self.path(item).parent
+        try:
+            ledger = json.loads((root / "jobs.json").read_text(encoding="utf-8"))
+            jobs = [job for job in ledger.get("jobs", {}).values() if job.get("world_id") == obs.get("world_id")]
+            row = item_demand(self.catalog, jobs, obs, horizon=DEMAND_HORIZON, root=root).get(item)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+        return row.get("count") if isinstance(row, dict) else None
+
     def _bar(self, obs, state: dict) -> dict | None:
-        if state.get("bar_set"):
+        from .blocks.stock_tail import BAR_RECHECK_TICKS, adaptive_stacks
+
+        # The bar follows the item's upcoming demand (belts are used hundreds at
+        # a time); it is looked at again every BAR_RECHECK_TICKS.
+        checked = state.get("bar_tick")
+        tick = obs.get("tick", 0)
+        if state.get("bar_set") and isinstance(checked, (int, float)) and 0 <= tick - checked < BAR_RECHECK_TICKS:
             return None
         chest = state["line"]["tail"]["chest"]
         payload = json.dumps(json.dumps({"name": chest["name"], "position": chest["position"]}))
         native = self.game.query(BAR_LUA.replace("PAYLOAD", payload))
         if not isinstance(native, dict) or not native.get("ok"):
             return {"status": "blocked", **(native if isinstance(native, dict) else {"reason": "bar_query_failed"})}
-        slots = state["line"]["bar_slots"]
+        stack = (self.catalog.items.get(state["item"]) or {}).get("stack_size")
+        slots = max(
+            state["line"]["bar_slots"],
+            adaptive_stacks(self._upcoming_units(obs, state["item"]), stack, native.get("size")),
+        )
+        slots = min(slots, native.get("size") or slots)
         if native.get("slots") != slots:
             return {"type": "bar", "name": chest["name"], "position": chest["position"], "slots": slots}
         state["bar_set"] = True
+        state["bar_tick"] = tick
         self.save(state["item"], state)
         return None
 
