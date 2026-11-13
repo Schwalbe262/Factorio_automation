@@ -571,9 +571,10 @@ def assess(b: Mapping, observation: Mapping, state: Mapping) -> dict[str, Any]:
     return dict(row, status="propose", gate=None, nodes=[n.get("id") for n in chosen["nodes"]])
 
 
-def growth_nodes(bottlenecks, jobs, queue_nodes, observation, capabilities, *, limit: int = 2) -> list[dict]:
+def growth_nodes(bottlenecks, jobs, queue_nodes, observation, capabilities, *, limit: int = 2, root=None) -> list[dict]:
     """Queue nodes for the ranked bottlenecks: one package per bottleneck, at most ``limit`` packages."""
-    state = {"jobs": list(jobs), "queue_nodes": list(queue_nodes), "capabilities": capabilities}
+    # ``root``: the runtime folder, for providers that read saved block states (block_options).
+    state = {"jobs": list(jobs), "queue_nodes": list(queue_nodes), "capabilities": capabilities, "root": root}
     known = {n.get("id") for n in queue_nodes}
     out: list[dict] = []
     packages = 0

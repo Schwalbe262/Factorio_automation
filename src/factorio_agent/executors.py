@@ -61,7 +61,10 @@ class StarterExecutors:
         from .site.service import SiteService
 
         # One map survey + master plan per runtime, shared by every site consumer.
-        self.site = SiteService(game)
+        from .rocket_plan import site_config
+
+        # A new site plan reserves bus lanes for the rocket bill's shared items (rocket_plan.bus_lane_order).
+        self.site = SiteService(game, config=site_config(catalog))
         from .outposts import MiningOutposts
 
         self.outposts = MiningOutposts(game, self.bootstrap, self.builder, site=self.site)

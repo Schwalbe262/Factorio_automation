@@ -882,7 +882,7 @@ def receipt(root, catalog, jobs, observation) -> dict | None:
     bottlenecks, idle = diagnose(stats, catalog, observation) if sustained(stats) else ([], [])
     from .jobs import CAPABILITIES
 
-    context = {"jobs": jobs, "queue_nodes": queue, "capabilities": CAPABILITIES}
+    context = {"jobs": jobs, "queue_nodes": queue, "capabilities": CAPABILITIES, "root": str(root)}
     for row in bottlenecks:
         row["proposal"] = assess(row, observation, context)
     out["bottlenecks"] = bottlenecks

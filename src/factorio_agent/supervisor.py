@@ -1979,7 +1979,13 @@ class Supervisor:
             nodes = [
                 n
                 for n in growth_nodes(
-                    rows, jobs, deepcopy(self.work.data["nodes"]), observation, capabilities, limit=GROWTH_LIMIT
+                    rows,
+                    jobs,
+                    deepcopy(self.work.data["nodes"]),
+                    observation,
+                    capabilities,
+                    limit=GROWTH_LIMIT,
+                    root=str(getattr(self, "root", "")) or None,
                 )
                 if str(n.get("id", "")).startswith("auto_") and n.get("id") not in known
             ]

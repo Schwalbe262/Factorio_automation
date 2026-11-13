@@ -120,5 +120,34 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(option["cost"], {"assembling-machine-1": 1})
 
 
+class RootWiringTests(unittest.TestCase):
+    def test_growth_nodes_and_the_bottleneck_receipt_hand_the_runtime_root_to_providers(self):
+        from unittest.mock import patch
+
+        from factorio_agent import bottleneck_audit, growth_providers
+        from factorio_agent.jobs import CAPABILITIES
+
+        seen = []
+
+        def spy(root, world_id=None):
+            seen.append(root)
+            return []
+
+        row = {
+            "block": "advanced_circuit_production",
+            "item": "advanced-circuit",
+            "kind": "at_capacity",
+            "lost_seconds_per_minute": 30,
+        }
+        with patch("factorio_agent.block_growth.growth_options", side_effect=spy):
+            growth_providers.growth_nodes([row], [], [], {"world_id": "w", "tick": 1}, CAPABILITIES, root="R")
+            bottleneck_audit.assess(
+                row, {"world_id": "w"}, {"jobs": [], "queue_nodes": [], "capabilities": CAPABILITIES, "root": "Q"}
+            )
+        self.assertEqual(seen[:2], ["R", "Q"])
+        source = Path(bottleneck_audit.__file__).read_text(encoding="utf-8")
+        self.assertIn('"root": str(root)', source)  # receipt() builds the provider context with its root
+
+
 if __name__ == "__main__":
     unittest.main()

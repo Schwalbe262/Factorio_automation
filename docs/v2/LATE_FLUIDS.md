@@ -86,7 +86,12 @@ arms, poles, belts), the `pack_growth.block_view` contract. A built block report
 `PACK_STATES["chemical-science-pack"] = "chemical-science.json"` (the state has `plan`,
 `core.growth_slots`) and an in-place extension in `ChemicalScience` before a slot can be built. The rocket bill's `bus` rows
 declare lanes by demand (`lanes_needed`, `lanes_short` against the site plan's `lane_order`,
-`taps` per consuming recipe); the site plan's lane order itself is unchanged.
+`taps` per consuming recipe). A new site plan reserves them: `StarterExecutors` builds its
+`SiteService` with `rocket_plan.site_config(catalog)`, whose `lane_order` is the default plus one
+lane per missing belt of every shared non-raw bill item (`bus_lane_order`, keeping
+`SPARE_LANES` free; on 2.1.20: `plastic-bar`; ores stay on their mine trunks). An existing map
+keeps its saved `site-plan.json`; there is no bus-lane extension capability yet, so
+`tools/rocket_plan.py <run>` reports the shortfall against that map's lanes (`short`).
 
 ## Known limits
 
