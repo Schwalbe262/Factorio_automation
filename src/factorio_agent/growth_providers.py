@@ -168,6 +168,26 @@ def plates_options(b, observation, state) -> list[dict]:
             options.append(
                 _option("plates", kind="rebuild", feasible=False, reason=f"feed head rework: {row.get('reason')}")
             )
+    from .remote_smelting import remote_smelting_nodes
+
+    # Home growth of the ore is blocked for want of a site: the next patch gets a smelting block.
+    remote = [
+        n
+        for n in remote_smelting_nodes(state["jobs"], state["queue_nodes"], observation, state["capabilities"])
+        if (n.get("parameters") or {}).get("resource") == resource
+    ]
+    if remote:
+        options.append(
+            _option(
+                "plates",
+                kind="copy",
+                capability="remote_smelting",
+                parameters=remote[0]["parameters"],
+                nodes=remote,
+                reason=remote[0]["reason"],
+                gain_per_minute=_number(remote[0]["parameters"].get("rate_per_minute")),
+            )
+        )
     receipt = observation.get("throughput_growth")
     rows = receipt.get("plates") if isinstance(receipt, Mapping) else None
     row = next((r for r in rows or () if isinstance(r, Mapping) and r.get("plate") == plate), None)

@@ -305,8 +305,12 @@ def layout(view: BusView, item: str, side: str, along: int, *, span: int, foreig
 FEED = "feed"  # tap record kind of a feed: plates enter the bus instead of leaving it
 
 
-def feed_layout(view: BusView, item: str, side: str, along: int, *, span: int) -> dict:
+def feed_layout(view: BusView, item: str, side: str, along: int, *, span: int, reach: int = 0) -> dict:
     """One *feed* of ``item`` from ``side``: a tap mirrored about its splitter row ``s = along + 3``.
+
+    ``reach`` moves the port that many tiles farther out on the branch row (the belts between
+    are the feed's): a route then ends beyond a line that runs beside the band, such as a pipe
+    the feed bridges (``remote_smelting``).
 
     A block that makes ``item`` away from the district (a remote smelting block) puts its
     plates onto the built trunk of ``item`` (``remote_smelting``). Rows, bus-local::
@@ -336,7 +340,7 @@ def feed_layout(view: BusView, item: str, side: str, along: int, *, span: int) -
     if a + 1 >= view.lengths[lane.index]:
         return {"ok": False, "reason": "feed_beyond_built_trunk", "along": along}
     edge = bus.half if s > 0 else -bus.half - 1
-    port_lateral = edge + s
+    port_lateral = edge + s * (1 + reach)
     partner = lane.offset + s
     built = view.built_offsets()
     if partner in built:
@@ -424,7 +428,9 @@ def feed_layout(view: BusView, item: str, side: str, along: int, *, span: int) -
     }
 
 
-def feed_candidates(view: BusView, item: str, side: str, *, span: int, limit: int = ATTEMPTS, accept=None):
+def feed_candidates(
+    view: BusView, item: str, side: str, *, span: int, limit: int = ATTEMPTS, accept=None, reach: int = 0
+):
     """Up to ``limit`` feasible feeds of ``item`` from ``side``, nearest the bus head first.
 
     Nearest the head first: a feed there reaches every tap of the lane (the remote block's
@@ -440,7 +446,7 @@ def feed_candidates(view: BusView, item: str, side: str, *, span: int, limit: in
         if not view.window_free(along):
             rejected["feed_window_taken"] += 1
             continue
-        row = feed_layout(view, item, side, along, span=span)
+        row = feed_layout(view, item, side, along, span=span, reach=reach)
         if not row["ok"]:
             rejected[row["reason"]] += 1
         elif accept is not None and not accept(row):

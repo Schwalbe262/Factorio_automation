@@ -291,6 +291,7 @@ DRY_RUN = {
     "steam_expansion": DryRun(lambda ex, obs, p: ex._steam_stage(p).prepare(obs)),
     "power_coal_tap": DryRun(lambda ex, obs, p: ex.power_coal_tap.prepare(obs)),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
+    "remote_smelting": DryRun(lambda ex, obs, p: ex.remote_smelting(p["resource"]).prepare(obs, p)),
     "oil_gathering": DryRun(
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).prepare(obs),
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).step(obs),
