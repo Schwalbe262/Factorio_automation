@@ -37,7 +37,7 @@ read incrementally and a missing or half-written JSON keeps its last good value.
 | 진행 중 (now) | `jobs.json` (every non-succeeded job: status, reason, actions, age, evidence digest of blocked jobs), `work_queue.json` (open nodes), `logs/controller-events.jsonl` (`autopilot`, `auto_retry`, `dispatch_deferred`) |
 | 완료 (done) | report milestones (`job-events.jsonl` terminal successes); `progression.ROADMAP` matched against jobs/queue: done / active / queued / blocked / ready / not started |
 | 최근 활동 | last 40 `action_intent` rows of `job-events.jsonl` with their result, report's repeated-action top 3, `open_incidents` of the controller state, last controller errors |
-| 레이아웃 | `site-map.json` + `site-plan.json` drawn by `site.planrender.render_dashboard_svg` (map, zones, corridors, rail, bus lanes, allocations) with the `pcb-board.json` blocks' `reserved_area` on top; a placeholder until `SiteService` wrote the plan |
+| 레이아웃 | `site-map.json` + `site-plan.json` drawn by `site.planrender.render_dashboard_svg` (map, zones, corridors, rail, bus lanes, allocations) with the `pcb-board.json` blocks' `reserved_area` on top and the board's built belts/undergrounds as tile cells (`belt_layer`: dark inside the block's reservation, red/orange outside, blue for a block without one; one `<path>` per kind and state); a placeholder until `SiteService` wrote the plan |
 
 Tab `병렬 실행` (`#fleets`, endpoint `/api/fleets`): every `<base>/fleets/*.json`
 manifest newest first (commit from the manifest or `fleets/reports/<name>.report.txt`,
@@ -154,6 +154,18 @@ then min/median/max per column, how many runs reached it, blocked/failed job
 reasons across runs (numbers normalized; count, example seed) and controller
 errors (`tools/report_run.py`). 16 runs fit in about 35 lines; `--json` has
 the full rows.
+
+Stall and tidiness columns (also per run in `report_run.py`, there with a per-block
+table): `last` = game minute of the last terminal job success, `dry` = the longest span
+without any success, `drynow` = game time since the last success at the end of the run
+(`report_run.progress_stall`, from `job-events.jsonl`); a run with `drynow` above
+`report_run.STALL_DRY_MINUTES` (30) is `stalled`, counted in the header line and listed
+under "stalled runs" with the reasons of its blocked jobs at the end (not the watcher's
+tick stall). `tidy` = share of the board's built belts outside their block's
+`reserved_area` (`factorio_agent.layout_tidiness.board_tidiness(board, site_plan)`:
+data in, data out, so a planner sweep can score planned boards the same way; per block
+belts / outside / undergrounds / splitters / curves, plus belts outside every reservation
+and plan area, and the board's connections with the longest).
 
 ## Capability and subsystem reference
 

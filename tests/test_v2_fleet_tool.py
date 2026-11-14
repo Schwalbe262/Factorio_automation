@@ -242,6 +242,79 @@ class ReportTests(unittest.TestCase):
         lines = fleet.format_report(dict(name="f"), rows, agg, window_text="0-30")
         self.assertLessEqual(len(lines), 40)
 
+    def test_progress_stall_metrics(self):
+        import report_run
+
+        events = [
+            dict(event="submitted", key="a", time=0, tick=0),
+            dict(event="terminal", key="a", time=1, status="succeeded", tick=10 * MIN),
+            dict(event="action_intent", key="b", time=2, tick=50 * MIN),
+            dict(event="terminal", key="b", time=3, status="succeeded"),  # no tick: the last earlier one
+            dict(event="terminal", key="c", time=4, status="blocked", tick=60 * MIN),
+            dict(event="terminal", key="d", time=5, status="succeeded", evidence={"tick": 55 * MIN}),
+        ]
+        self.assertEqual(report_run.success_ticks(events), [10 * MIN, 50 * MIN, 55 * MIN])
+        value = report_run.progress_stall(events, 100 * MIN)
+        self.assertEqual(
+            {k: value[k] for k in ("last_success_min", "longest_dry_min", "longest_dry_start_min", "dry_now_min")},
+            dict(last_success_min=55.0, longest_dry_min=45.0, longest_dry_start_min=55.0, dry_now_min=45.0),
+        )
+        self.assertTrue(value["stalled"])
+        self.assertFalse(report_run.progress_stall(events, 70 * MIN)["stalled"])  # 15 min dry
+        middle = report_run.progress_stall(events, 60 * MIN)
+        self.assertEqual((middle["longest_dry_min"], middle["longest_dry_start_min"]), (40.0, 10.0))
+        none = report_run.progress_stall([dict(event="submitted", tick=0)], 40 * MIN)
+        self.assertEqual((none["last_success_min"], none["dry_now_min"], none["stalled"]), (None, 40.0, True))
+        self.assertIsNone(report_run.progress_stall([])["dry_now_min"])
+
+    def test_report_counts_and_lists_stalled_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            stuck = fixture_run(
+                base / "a",
+                11,
+                ends={"starter": 2, "power": 10},
+                blocked=[("brick_production", "no x 1")],
+                tick=90 * MIN,
+            )
+            fine = fixture_run(base / "b", 22, ends={"starter": 2, "power": 70}, tick=80 * MIN)
+            tool = fleet.Fleet(base=directory)
+            rows = [tool.run_report(run, 0, 30) for run in (stuck, fine)]
+            self.assertEqual(
+                (rows[0]["last_success_min"], rows[0]["dry_now_min"], rows[0]["stalled"]), (10.0, 80.0, True)
+            )
+            self.assertFalse(rows[1]["stalled"])
+            self.assertEqual(rows[0]["blocked_now"], [("no x #", "brick_production")])
+            agg = fleet.aggregate(rows)
+            self.assertEqual(agg["stalled"], 1)
+            self.assertEqual(agg["dry_now_min"]["max"], 80.0)
+            lines = fleet.format_report(dict(name="f"), rows, agg, window_text="0-30")
+            self.assertIn("| stalled 1/2", lines[0])
+            self.assertIn("last   dry drynow tidy", lines[1])
+            start = lines.index(next(line for line in lines if line.startswith("stalled runs")))
+            self.assertTrue(lines[start + 1].strip().startswith("11"), lines[start + 1])
+            self.assertIn("dry 80.0 min", lines[start + 1])
+            self.assertIn("[brick_production] no x #", lines[start + 2])
+
+    def test_report_tidy_column_from_the_board(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            run = fixture_run(base / "a", 11, ends={"power": 10}, tick=20 * MIN)
+            belts = [dict(name="transport-belt", position=dict(x=x + 0.5, y=0.5), direction=4) for x in range(4)]
+            write(
+                base / "a" / "pcb-board.json", {"blocks": {"b": {"reserved_area": [[0, 0], [1, 1]], "entities": belts}}}
+            )
+            row = fleet.Fleet(base=directory).run_report(run, 0, 30)
+            self.assertEqual(row["tidy"], 0.75)
+            lines = fleet.format_report(dict(name="f"), [row], fleet.aggregate([row]), window_text="0-30")
+            self.assertIn("  75%", lines[2])
+            import report_run
+
+            table = report_run.tidiness_lines(report_run.report(base / "a")["tidiness"])
+            self.assertIn("4 belts in 1 blocks, 3 outside their reservation (share 0.75)", table[0])
+            self.assertTrue(table[2].split()[:3] == ["b", "4", "3"], table[2])
+            self.assertEqual(report_run.tidiness_lines(None), ["tidiness: no pcb-board.json"])
+
     def test_quick_summary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

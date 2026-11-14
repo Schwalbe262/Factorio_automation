@@ -252,7 +252,9 @@ class Dashboard:
         key = (self.job_events.changes, self.controller.changes, self.files["jobs"].signature)
         if key != self._report_key or self._report is None:
             try:
-                self._report = report_run.report(self.root, job_events=job_events, controller=controller, jobs=jobs)
+                self._report = report_run.report(
+                    self.root, job_events=job_events, controller=controller, jobs=jobs, layout=False
+                )
                 self._report_key = key
             except Exception as error:  # a half-shaped file must not break the page
                 if self._report is None:
@@ -542,7 +544,8 @@ class Dashboard:
         try:
             worldmap = WorldMap.from_json(json.dumps(stored_map["map"]))
             plan = MasterPlan.from_dict(stored_plan["plan"])
-            svg = render_dashboard_svg(worldmap, plan, blocks, scale=SCALE)
+            bus = board.get("shared_main_bus") if blocks else None
+            svg = render_dashboard_svg(worldmap, plan, blocks, scale=SCALE, shared_bus=bus)
             focus = dashboard_focus(worldmap, plan, blocks, scale=SCALE)
         except Exception as error:  # keep the last good drawing
             info = dict(self._layout["info"] or {"available": False}, error=_text(repr(error), 300))

@@ -11,7 +11,9 @@ corner of the surveyed bounds.
 :func:`render_dashboard_svg` adds what the read-only run dashboard
 (``tools/dashboard.py``) needs on top: the bus lane table, allocation
 outlines and the blocks registered on the board (``pcb-board.json``), so the
-plan and what was actually registered can be compared on one map.
+plan and what was actually registered can be compared on one map, and the
+board's built belts as tile cells, coloured by whether they lie inside their
+block's ``reserved_area`` (``layout_tidiness.belt_cells``).
 """
 
 from __future__ import annotations
@@ -30,6 +32,9 @@ RAIL_COLOUR = "#7b2cbf"
 ALLOCATION_COLOUR = "#e07b00"
 BOARD_COLOUR = "#00a3a3"
 START_COLOUR = "#ff00ff"
+# Built belt cells (board entities): inside the block's reservation, outside it, block without one.
+BELT_COLOURS = {"inside": "#3a3a3a", "outside": "#e63946", "unreserved": "#5a7bd8"}
+UNDERGROUND_COLOURS = {"inside": "#8a8a8a", "outside": "#ff9f1c", "unreserved": "#9fb3ea"}
 # Bus lane colours: plates take their ore's colour, other materials a hashed one.
 LANE_COLOURS = {"iron-plate": COLOURS["iron-ore"], "copper-plate": COLOURS["copper-ore"]}
 MARKER = (
@@ -152,12 +157,40 @@ def _box(marks: _Marks, rect: Rect, colour: str, width: float, extra: str) -> No
     )
 
 
-def render_dashboard_svg(world: WorldMap, plan, blocks=None, scale: int = 2) -> str:
-    """``render_plan_svg`` plus bus lanes, allocation outlines and board blocks.
+def belt_layer(marks: _Marks, blocks=None, shared_bus=None) -> None:
+    """The built belts of the board as tile cells: one ``<path>`` per (belt/underground, state).
+
+    State ``inside`` / ``outside`` the block's own reservation, ``unreserved`` for a block
+    without one; ~3,000 belts stay a few short paths (``data-kind="belts"`` / ``"undergrounds"``,
+    ``data-state``, ``data-count``)."""
+    from ..layout_tidiness import belt_cells
+
+    cells = belt_cells({"blocks": blocks or {}, "shared_main_bus": shared_bus})
+    groups: dict[tuple[str, str], set] = {}
+    counts: dict[tuple[str, str], int] = {}
+    for cell in cells:
+        state = "unreserved" if cell["inside"] is None else ("inside" if cell["inside"] else "outside")
+        key = ("undergrounds" if cell["kind"] == "underground" else "belts", state)
+        groups.setdefault(key, set()).update(cell["tiles"])
+        counts[key] = counts.get(key, 0) + 1
+    s = marks.scale
+    for (kind, state), tiles in sorted(groups.items()):
+        colour = (UNDERGROUND_COLOURS if kind == "undergrounds" else BELT_COLOURS)[state]
+        d = "".join("M{0:g} {1:g}h{2:g}v{2:g}h{3:g}z".format(*marks._px(x, y), s, -s) for x, y in sorted(tiles))
+        marks.parts.append(
+            f'<path data-kind="{kind}" data-state="{state}" data-count="{counts[(kind, state)]}" d="{d}" '
+            f'fill="{colour}" fill-opacity="0.85"/>'
+        )
+
+
+def render_dashboard_svg(world: WorldMap, plan, blocks=None, scale: int = 2, *, shared_bus=None) -> str:
+    """``render_plan_svg`` plus bus lanes, allocation outlines, board blocks and built belts.
 
     ``blocks`` is the ``pcb-board.json`` ``blocks`` mapping (name -> block);
     each block with a valid ``reserved_area`` is drawn as a filled outline
-    with its name. Overlay elements carry ``data-kind`` / ``data-name``.
+    with its name, and the belts of every block's ``entities`` (plus those of
+    ``shared_bus``, the board's ``shared_main_bus``) as cells (``belt_layer``).
+    Overlay elements carry ``data-kind`` / ``data-name``.
     """
     svg = render_plan_svg(world, plan, scale=scale)
     marks = _Marks(world.bounds() or Rect(0, 0, CHUNK_TILES, CHUNK_TILES), scale)
@@ -185,6 +218,7 @@ def render_dashboard_svg(world: WorldMap, plan, blocks=None, scale: int = 2) -> 
         extra = f' fill="{BOARD_COLOUR}" fill-opacity="0.18" data-kind="board" data-name="{escape(str(name))}"'
         _box(marks, rect, BOARD_COLOUR, scale * 1.0, extra)
         _label(marks, rect, str(name), BOARD_COLOUR, "board")
+    belt_layer(marks, blocks, shared_bus if isinstance(shared_bus, dict) else None)
     sx, sy = marks._px(*plan.start)
     marks.parts.append(
         f'<circle data-kind="start" cx="{sx}" cy="{sy}" r="{scale * 2}" fill="{START_COLOUR}" stroke="#000" '

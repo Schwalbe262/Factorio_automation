@@ -58,6 +58,7 @@ sys.path.insert(0, str(REPO / "tools"))
 from factorio_agent.core.deterministic_character import _identity  # noqa: E402
 from factorio_agent.core.deterministic_state import RunLock, _atomic_json  # noqa: E402
 from factorio_agent import actor_client  # noqa: E402
+from report_run import STALL_DRY_MINUTES  # noqa: E402
 
 # Fleet ports start above the interactive lifecycle range (34261+/27061+, 100 slots).
 UDP_BASE, TCP_BASE, PORT_SPAN = 34400, 27400, 400
@@ -489,12 +490,22 @@ def explore_requested(flag, env=None):
     return bool(flag) or settings(None, env=env).explore
 
 
-def blocked_rows(jobs):
-    """(normalized reason, capability) of every blocked or failed job."""
+# Progress-stall columns from ``report_run.progress_stall`` (game minutes; a run is ``stalled`` when
+# ``dry_now_min`` > ``report_run.STALL_DRY_MINUTES``). Not the watcher's tick stall (``stalled_runs``).
+STALL_KEYS = ("last_success_min", "longest_dry_min", "longest_dry_start_min", "dry_now_min")
+# Report cells after the milestones: header, row key, width.
+EXTRA_COLUMNS = (("last", "last_success_min", 6), ("dry", "longest_dry_min", 6), ("drynow", "dry_now_min", 7))
+
+
+def _tidy_cell(share, width=5):
+    """``tidy`` cell: per cent of the board's belts outside their block's reservation."""
+    return ("-" if not isinstance(share, (int, float)) else f"{round(100 * share)}%").rjust(width)
+
+
+def blocked_rows(jobs, statuses=("blocked", "failed")):
+    """(normalized reason, capability) of every blocked or failed job (or of the given ``statuses``)."""
     return [
-        (normalize_reason(j.get("reason")), j.get("capability"))
-        for j in jobs.values()
-        if j.get("status") in ("blocked", "failed")
+        (normalize_reason(j.get("reason")), j.get("capability")) for j in jobs.values() if j.get("status") in statuses
     ]
 
 
@@ -529,6 +540,8 @@ def aggregate(runs):
         lab_idle_seconds=stats(r.get("lab_idle_seconds") for r in runs),
         actor_critical_seconds=stats(r.get("actor_critical_seconds") for r in runs),
         actor_slack_seconds=stats(r.get("actor_slack_seconds") for r in runs),
+        **{key: stats(r.get(key) for r in runs) for key in STALL_KEYS + ("tidy",)},
+        stalled=sum(bool(r.get("stalled")) for r in runs),
         query_load={
             key: stats((r.get("query_load") or {}).get(key) for r in runs)
             for key in ("queries_per_minute", "share_percent", "per_slice", "ms_per_action")
@@ -618,12 +631,18 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
         lines[0] += " | respawn emulation on"
     if fleet.get("explore"):
         lines[0] += " | layout EXPLORATION on (runner-up variants by seed)"
+    stalled = [r for r in runs if r.get("stalled")]
+    lines[0] += (
+        f" | stalled {len(stalled)}/{len(runs)} (no job success for > {STALL_DRY_MINUTES:g} game min at the end)"
+    )
     lines.append(
         "seed".ljust(11)
         + " up "
         + " cli "
         + " gmin"
         + "".join(h.rjust(_width(h)) for h in heads)
+        + "".join(h.rjust(w) for h, _, w in EXTRA_COLUMNS)
+        + "tidy".rjust(5)
         + "  lab_idle crit/slack_s  furthest"
     )
     short = dict(live="on", none="none", detached="det", down="-")
@@ -636,6 +655,8 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
             + " "
             + _cell(r.get("game_minutes"), 5)
             + "".join(_cell(r["milestones"].get(step), _width(h)) for h, step in COLUMNS)
+            + "".join(_cell(r.get(key), w) for _, key, w in EXTRA_COLUMNS)
+            + _tidy_cell(r.get("tidy"))
             + _cell(r.get("lab_idle_seconds"), 10)
             + f" {_cell(r.get('actor_critical_seconds'), 5).strip()}/{_cell(r.get('actor_slack_seconds'), 5).strip()}".ljust(
                 13
@@ -646,8 +667,15 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
         cells = [(agg["columns"][h] or {}).get(key) for h in heads]
         lab = (agg["lab_idle_seconds"] or {}).get(key)
         gmin = (agg["game_minutes"] or {}).get(key)
+        extra = "".join(_cell((agg.get(k) or {}).get(key), w) for _, k, w in EXTRA_COLUMNS)
+        tidy = _tidy_cell((agg.get("tidy") or {}).get(key))
         lines.append(
-            key.ljust(20) + _cell(gmin, 5) + "".join(_cell(c, _width(h)) for h, c in zip(heads, cells)) + _cell(lab, 10)
+            key.ljust(20)
+            + _cell(gmin, 5)
+            + "".join(_cell(c, _width(h)) for h, c in zip(heads, cells))
+            + extra
+            + tidy
+            + _cell(lab, 10)
         )
     # Same 25-character lead as the header (seed, up, cli, gmin) so each count sits under its head.
     reached = [f"{(agg['columns'][h] or {}).get('n', 0)}/{len(runs)}" for h in heads]
@@ -691,6 +719,26 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     for r in failed[:4]:
         lines.append(f"launch failed {r['seed']}: {r['launch_error'][:100]}")
     lines += problem_lines(runs)
+    lines += stalled_lines(runs)
+    return lines
+
+
+def stalled_lines(runs, top=12, reasons=3):
+    """Problem runs that stopped progressing: last success, dry span, blocked reasons active at the end."""
+    rows = sorted((r for r in runs if r.get("stalled")), key=lambda r: -(r.get("dry_now_min") or 0))
+    if not rows:
+        return []
+    lines = [f"stalled runs (no job success for > {STALL_DRY_MINUTES:g} game min; blocked/failed reasons at the end):"]
+    for r in rows[:top]:
+        lines.append(
+            f"  {str(r['seed']).ljust(11)} last success {_cell(r.get('last_success_min'), 1).strip()}"
+            f", dry {_cell(r.get('dry_now_min'), 1).strip()} min at gmin {_cell(r.get('game_minutes'), 1).strip()}"
+        )
+        shown = list(dict.fromkeys(r.get("blocked_now") or r.get("blocked_reasons") or []))
+        for reason, capability in shown[:reasons]:
+            lines.append(f"      [{capability}] {reason}")
+        if len(shown) > reasons:
+            lines.append(f"      ... {len(shown) - reasons} more")
     return lines
 
 
@@ -1774,6 +1822,7 @@ class Fleet:
         row["layouts"] = run_layouts(root, milestones=reached)
         row["furthest"] = dict(step=far[1], minute=far[2], index=far[0]) if far else None
         row["blocked_reasons"] = blocked_rows(timeline.jobs)
+        row["blocked_now"] = blocked_rows(timeline.jobs, statuses=("blocked",))
         try:  # the minute the run's own iron supply could have paid each step (waste_report)
             import waste_report
 
@@ -1786,6 +1835,9 @@ class Fleet:
             wall_minutes=summary.get("wall_minutes"),
             actions=summary.get("actions"),
             query_load=summary.get("query_load"),
+            **{key: summary.get(key) for key in STALL_KEYS},
+            stalled=bool(summary.get("stalled")),
+            tidy=((summary.get("tidiness") or {}).get("totals") or {}).get("outside_share"),
         )
         top = min(hi, row["game_minutes"] or hi)
         if top > lo:

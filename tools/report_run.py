@@ -42,10 +42,11 @@ def rows(path):
                 yield row
 
 
-def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=None):
+def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=None, layout=True):
     """The run summary. ``job_events``, ``controller`` (row lists) and ``jobs``
     (the ledger's ``jobs`` mapping) may be passed in already loaded, as the
-    dashboard does with its incremental readers; missing ones are read here."""
+    dashboard does with its incremental readers; missing ones are read here.
+    ``layout`` False leaves out the board tidiness (``tidiness``: one read of ``pcb-board.json``)."""
     root = Path(root)
     if job_events is None:
         job_events = list(rows(root / "job-events.jsonl"))
@@ -127,6 +128,7 @@ def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=Non
         "longest_gaps_seconds": [round(g) for g in sorted(gaps, reverse=True)[:5]],
         "jobs_succeeded": len(milestones),
         "minutes_since_last_success": round(minutes - last_success, 1) if last_success is not None else None,
+        **progress_stall(job_events, _state_tick(root)),
         "milestones": milestones,
         "final_milestone": rocket_launch(milestones, jobs),
         "recent_100_actions_top": repeated,
@@ -148,7 +150,89 @@ def report(root, gap_seconds=30.0, *, job_events=None, controller=None, jobs=Non
         "per_job": per_job,
         **incident_report(root, controller),
         **test_mode_label(root),
+        **({"tidiness": tidiness(root)} if layout else {}),
     }
+
+
+TICKS_PER_MINUTE = 3600
+# A run is ``stalled`` when no job succeeded for more than this many game minutes at its end
+# (16 long runs: last success at a median ~85 game min while they ran on to 233-327 min).
+STALL_DRY_MINUTES = 30.0
+
+
+def success_ticks(job_events):
+    """Game ticks of the terminal job successes, in event order.
+
+    A terminal row without ``tick`` takes its evidence tick, else the last earlier event tick
+    (as ``tools/critical_path.Run`` does)."""
+    ticks, last = [], None
+    for r in job_events:
+        tick = r.get("tick")
+        if type(tick) is not int:
+            evidence = r.get("evidence") if isinstance(r.get("evidence"), dict) else {}
+            tick = evidence.get("tick") if type(evidence.get("tick")) is int else None
+        if r.get("event") == "terminal" and r.get("status") == "succeeded":
+            tick = tick if tick is not None else last
+            if tick is not None:
+                ticks.append(tick)
+        if type(r.get("tick")) is int:
+            last = r["tick"]
+    return ticks
+
+
+def progress_stall(job_events, end_tick=None, *, threshold=STALL_DRY_MINUTES):
+    """Stall metrics from the terminal job successes, in game minutes.
+
+    ``last_success_min``: game minute of the last success; ``longest_dry_min`` and
+    ``longest_dry_start_min``: the longest span without any success (from the first observed tick,
+    between successes, and from the last success to the end); ``dry_now_min``: game time from the last
+    success (or the first tick) to ``end_tick`` (default: the newest event tick); ``stalled``:
+    ``dry_now_min`` > ``threshold``."""
+    ticks = [r["tick"] for r in job_events if type(r.get("tick")) is int]
+    successes = sorted(success_ticks(job_events))
+    marks = ticks + successes + ([end_tick] if type(end_tick) is int else [])
+    if not marks:
+        return dict(
+            last_success_min=None,
+            longest_dry_min=None,
+            longest_dry_start_min=None,
+            dry_now_min=None,
+            stalled=False,
+            stall_threshold_min=threshold,
+        )
+    start, end = min(marks), max(marks)
+    edges = [start, *successes, end]
+    span, since = max(((b - a, a) for a, b in zip(edges, edges[1:])), default=(0, start))
+    minute = lambda t: round(t / TICKS_PER_MINUTE, 1)  # noqa: E731
+    dry_now = minute(end - (successes[-1] if successes else start))
+    return dict(
+        last_success_min=minute(successes[-1]) if successes else None,
+        longest_dry_min=minute(span),
+        longest_dry_start_min=minute(since),
+        dry_now_min=dry_now,
+        stalled=dry_now > threshold,
+        stall_threshold_min=threshold,
+    )
+
+
+def _state_tick(root):
+    """``last_observed_tick`` of the controller state (the run's newest tick), or None."""
+    try:
+        state = json.loads((Path(root) / "logs" / "controller-state.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    tick = state.get("last_observed_tick") if isinstance(state, dict) else None
+    return tick if type(tick) is int else None
+
+
+def tidiness(root):
+    """``layout_tidiness.run_tidiness`` of the run folder, or None (no board, or a broken one)."""
+    from factorio_agent.layout_tidiness import run_tidiness
+
+    try:
+        return run_tidiness(root)
+    except Exception:  # a report section never breaks the report
+        return None
 
 
 FINAL_CAPABILITY = "rocket_launch"  # the roadmap's last stage (rocket_feed.RocketLaunch)
@@ -347,6 +431,30 @@ def incident_report(root, controller):
     }
 
 
+def tidiness_lines(value, top=15):
+    """The tidiness section: whole-base line, connections, then the blocks with most belts outside."""
+    if not value:
+        return ["tidiness: no pcb-board.json"]
+    t, c = value["totals"], value["connections"]
+    lines = [
+        f"tidiness: {t['belts']} belts in {t['blocks']} blocks, {t['outside']} outside their reservation"
+        f" (share {t['outside_share']}), {t['outside_plan']} outside every reservation/plan area,"
+        f" {t['undergrounds']} undergrounds, {t['splitters']} splitters, {t['turns']} turns;"
+        f" {c['count']} connections, longest {c['longest']} ({c['longest_item']}, {c['longest_owner']})",
+        "  block                              belts outside share  ug  spl turns off_plan",
+    ]
+    for b in value["blocks"][:top]:
+        share = "-" if b["outside_share"] is None else f"{b['outside_share']:.2f}"
+        outside = "-" if b["outside"] is None else b["outside"]
+        lines.append(
+            f"  {b['block'][:34]:34s} {b['belts']:5d} {outside!s:>7} {share:>5} {b['undergrounds']:3d}"
+            f" {b['splitters']:4d} {b['turns']:5d} {b['outside_plan']:8d}"
+        )
+    if len(value["blocks"]) > top:
+        lines.append(f"  ... {len(value['blocks']) - top} more blocks (--json has all)")
+    return lines
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("runtime", type=Path)
@@ -387,6 +495,8 @@ def main(argv=None):
                     "  {window:>7s} min  actions={actions:4d}  hand logistics {hand_logistics_share:.0%}"
                     "  building {building_share:.0%}".format(**row)
                 )
+        elif key == "tidiness":
+            print("\n".join(tidiness_lines(value)))
         elif key == "incidents":
             print("incidents:")
             for row in value:
