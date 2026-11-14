@@ -372,6 +372,11 @@ DRY_RUN = {
         lambda ex, obs, p: ex._steam_stage(p).step(obs),
         saved=lambda ex, obs, p: _steam_saved(ex._steam_stage(p), obs),
     ),
+    "electric_coal": DryRun(
+        lambda ex, obs, p: ex.electric_coal.plan(obs),
+        lambda ex, obs, p: ex.electric_coal.step(obs),
+        saved=lambda ex, obs, p: _state_of(ex.electric_coal),
+    ),
     "power_coal_tap": DryRun(
         lambda ex, obs, p: ex.power_coal_tap.prepare(obs),
         lambda ex, obs, p: ex.power_coal_tap.step(obs),

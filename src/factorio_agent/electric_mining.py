@@ -15,6 +15,18 @@ burner did. The cells differ only in where their burner fuel inserter stands:
   (identity-guarded) before the electric drill is placed.
 
 Any other layout is refused with ``electric_coal_unsupported_coal_layout``.
+
+Power loop (fleet aud-1114-0930): the electric drill feeds the boiler that powers it. Order of
+operations: pole chain built and on a generating network, coal reserve buffered
+(``CUTOVER_BOILER_FUEL_J``, ``CUTOVER_BELT_COAL``), then the burner drill is mined and the
+electric one built. Afterwards a brownout is not a failure (``drill_power``); a dead plant is
+restarted by ``power_coal_feed.dead_plant_restart`` and otherwise blocks with a ``power`` need.
+
+Remedy ladder (``remedy.RELAXATIONS["electric_coal"]``, what-if ``ElectricCoal.plan``): replan,
+then the site rung (the legacy cell tries the whole pole goal ring), then the clear rung (a pole
+of ours in the footprint is relocated by ``pole_relocation``). Unowned starter cell parts in the
+footprint are mined without a rung (``_clearable_starter``); an entity of another live block
+is never removed: its owner is named in the ``preflight`` need.
 """
 
 from __future__ import annotations
@@ -34,6 +46,14 @@ EAST = 4
 # electric footprint (ElectricCoal._clearable_starter), at most this many.
 STARTER_CELL_NAMES = frozenset({"burner-mining-drill", "stone-furnace", "wooden-chest", "iron-chest"})
 MAX_CLEARED_STARTER = 4
+# Remedy ladder options (remedy.RELAXATIONS["electric_coal"]): the site rung lets the legacy
+# cell try the whole pole goal ring; the clear rung relocates a pole of ours out of the footprint.
+POWER_RING_OPTION = "electric_coal_power_ring"
+RELOCATE_POLE_OPTION = "electric_coal_relocate_pole"
+# Coal buffered for the switch-over (the burner drill is mined before the electric one is built,
+# a few seconds without a feed drill): boiler fuel and coal already on the feed belts.
+CUTOVER_BOILER_FUEL_J = 8_000_000
+CUTOVER_BELT_COAL = 8
 LEGACY_TRUNK_POLICY = "pcb-trunks-v1"
 # Template, layout policy and fuel inserter (dx, dy, direction) relative to
 # the burner drill centre. Both generators only ever emit east-facing cells.
@@ -110,6 +130,51 @@ def matching_belt(entities, drop):
 
 def _same_spec(a, b):
     return a["name"] == b["name"] and a["position"] == b["position"]
+
+
+def drill_power(obs, drill) -> str:
+    """Power of the observed electric coal drill: ``powered``, ``brownout``, ``dead`` or ``unconnected``.
+
+    Fleet aud-1114-0930 (2118231430, 3317405034, 3416914852): one boiler, twenty electric drills; the
+    plant was overloaded, the drill read ``low_power`` with its buffer sometimes empty, and one
+    ``energy <= 0`` sample blocked the upgrade for good although coal still arrived. A brownout is the
+    plant's size, not this drill's fault: the drill mines at the satisfied fraction. ``dead`` (no
+    generating engine on its network: the boiler ran dry, 2363694308) needs the plant restarted.
+    """
+    from .power_grid import supplied_networks
+
+    if not drill.get("electric_network_connected"):
+        return "unconnected"
+    if drill.get("status_name") == "low_power":
+        return "brownout"
+    if float(drill.get("energy", 0) or 0) > 0:
+        return "powered"
+    if drill.get("electric_network_id") is not None and drill["electric_network_id"] in supplied_networks(obs):
+        return "brownout"  # engines generate at their limit; the drill's buffer reads empty this tick
+    return "dead"
+
+
+def poles_on_plant(obs, power_plan) -> bool:
+    """True when an observed pole of ``power_plan`` stands on a network with a generating engine.
+
+    The cutover mines the burner drill (the plant's only coal feed until then) before the electric
+    drill stands, so the pole chain must be proven live first. A plan without poles counts as live
+    (the drill sits on an existing pole's supply area).
+    """
+    from .power_grid import supplied_networks
+
+    poles = [e for e in (power_plan or {}).get("entities") or () if e.get("name") == "small-electric-pole"]
+    if not poles:
+        return True
+    networks = supplied_networks(obs)
+    wanted = {(p["position"]["x"], p["position"]["y"]) for p in poles}
+    return any(
+        e.get("name") == "small-electric-pole"
+        and (e["position"]["x"], e["position"]["y"]) in wanted
+        and e.get("electric_network_id") in networks
+        and e.get("electric_network_id") is not None
+        for e in obs.get("entities", ())
+    )
 
 
 def classify_coal_layout(plan):
@@ -195,6 +260,20 @@ class ElectricCoal:
         )
 
     def prepare(self, obs):
+        """``plan`` and, when it fits, save its state (the cutover starts in ``fund_and_power``)."""
+        result = self.plan(obs)
+        if not result.get("ok"):
+            return result
+        self.state = result.pop("state")
+        _atomic_json(self.path, self.state)
+        return result
+
+    def plan(self, obs):
+        """The cutover plan without writing anything (the remedy what-if, ``postmortem.DRY_RUN``).
+
+        ``{"ok": True, "state": ..., ...}`` or a failure; an obstructed footprint that is not ours
+        to clear carries ``plan_needs`` (kind ``preflight``, the blocker and its owner).
+        """
         self.builder._sync(obs)
         old = self.builder.state.get("coal_plan")
         layout = classify_coal_layout(old)
@@ -214,23 +293,38 @@ class ElectricCoal:
         # this controller, may stand in the electric footprint, and starter cell
         # entities no block owns (``_clearable_starter``), mined first as well.
         ignore = [original["unit_number"]] + [row["unit_number"] for row in displaced if row["unit_number"]]
+        relocate = []
         for _ in range(MAX_CLEARED_STARTER + 1):
             survey = self._footprint_survey(ignore, replacement)
             clear = self._clearable_starter(obs, survey)
             if clear is None:
-                break
+                pole = self._relocatable_pole(obs, survey)
+                if pole is None:
+                    break
+                # Clear rung: a pole of ours is moved (pole_relocation) before the cutover.
+                relocate.append({"position": deepcopy(pole["position"]), "unit_number": pole["unit_number"]})
+                ignore.append(pole["unit_number"])
+                continue
             spec = {"name": clear["name"], "position": deepcopy(clear["position"])}
             displaced.append({"spec": spec, "unit_number": clear["unit_number"]})
             ignore.append(clear["unit_number"])
         if not survey.get("ok"):
-            return survey
+            return self._with_needs(obs, survey)
         recipient = matching_belt(old["entities"], survey["drop"])
         if recipient is None:
             return {"ok": False, "reason": "electric_drop_does_not_match_retained_belt"}
         power = self._plan_power(obs, layout, old, replacement)
         if not power.get("ok"):
-            return power
-        self.state = {
+            return dict(
+                power,
+                plan_needs={
+                    "kind": "power",
+                    "reason": power.get("reason"),
+                    "at": replacement["position"],
+                    "change": "a pole chain from the generating grid to the electric coal drill",
+                },
+            )
+        state = {
             "world_id": obs["world_id"],
             "old": old["drill"],
             "old_unit_number": original["unit_number"],
@@ -243,9 +337,11 @@ class ElectricCoal:
             "obsolete_inserters": [self.find(obs, e) for e in layout["obsolete"]],
             "coal_plan_before": deepcopy(old),
         }
-        _atomic_json(self.path, self.state)
+        if relocate:
+            state["relocate_poles"] = relocate
         return {
             "ok": True,
+            "state": state,
             "wire_hops": power["wire_hops"],
             "replacement": replacement,
             "retained_drop_belt": recipient,
@@ -289,38 +385,83 @@ return {ok=true,drop=drop,remaining=amount}
         cell is hand-served busywork the planner may rebuild elsewhere; it is mined (paid,
         identity-guarded) with the displaced fuel inserter. Board blocks and power plans are kept.
         """
+        live = self._obstruction(obs, survey)
+        if live is None or live["name"] not in STARTER_CELL_NAMES:
+            return None
+        return None if self._owner(obs, live) else live
+
+    def _obstruction(self, obs, survey):
+        """The observed entity of ours (an int unit number) the footprint survey stopped at, or None."""
         if survey.get("ok") or survey.get("reason") != "electric_upgrade_footprint_obstructed":
             return None
-        if survey.get("entity") not in STARTER_CELL_NAMES:
-            return None
-        live = self.find(obs, {"name": survey["entity"], "position": survey.get("position")})
-        if live is None or type(live.get("unit_number")) is not int:
-            return None
+        live = self.find(obs, {"name": survey.get("entity"), "position": survey.get("position")})
+        return live if live is not None and type(live.get("unit_number")) is int else None
+
+    def _owner(self, obs, live):
+        """The plan or board block that lists ``live`` (``"power_plan"``, ``"coal_plan"``, a block key), or None."""
         key = (live["name"], live["position"]["x"], live["position"]["y"])
-        plans = [self.builder.state.get(name) or {} for name in ("power_plan", "coal_plan")]
-        owned = {
-            (e["name"], e["position"]["x"], e["position"]["y"]) for plan in plans for e in plan.get("entities") or ()
-        }
+        owners = [(name, self.builder.state.get(name) or {}) for name in ("power_plan", "coal_plan")]
         root = Path(self.game.cfg.runtime_dir)
         try:
             board = json.loads((root / "pcb-board.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             board = {}
         blocks = board.get("blocks") if board.get("world_id") == obs.get("world_id") else None
-        for block in (blocks or {}).values():
-            owned |= {(e["name"], e["position"]["x"], e["position"]["y"]) for e in block.get("entities") or ()}
-        return None if key in owned else live
+        owners += [(name, block) for name, block in (blocks or {}).items() if isinstance(block, dict)]
+        for name, plan in owners:
+            if any((e["name"], e["position"]["x"], e["position"]["y"]) == key for e in plan.get("entities") or ()):
+                return name
+        return None
+
+    def _relocatable_pole(self, obs, survey):
+        """Under the clear rung (``remedy`` option ``RELOCATE_POLE_OPTION``): our pole in the footprint, else None.
+
+        The pole may carry power on to other poles or machines, so it is never simply mined:
+        ``pole_relocation`` links what it feeds first (paid, verified), republishes its owner's plan,
+        then mines it guarded. A pole of another live block is moved, not the block.
+        """
+        from .remedy import option
+
+        if not option(RELOCATE_POLE_OPTION):
+            return None
+        live = self._obstruction(obs, survey)
+        return live if live is not None and live["name"] == "small-electric-pole" else None
+
+    def _with_needs(self, obs, survey):
+        """A failed footprint survey with ``plan_needs`` naming the blocker and its owner (remedy ladder)."""
+        if survey.get("reason") != "electric_upgrade_footprint_obstructed":
+            return survey
+        live = self._obstruction(obs, survey)
+        owner = self._owner(obs, live) if live is not None else None
+        blocker = {"entity": survey.get("entity"), "position": survey.get("position"), "owner": owner}
+        change = (
+            f"the {survey.get('entity')} of {owner} moved out of the electric coal footprint"
+            if owner
+            else f"the {survey.get('entity')} removed from the electric coal footprint"
+        )
+        return dict(
+            survey,
+            plan_needs={
+                "kind": "preflight",
+                "reason": survey["reason"],
+                "check": "electric_coal_footprint",
+                "blockers": [blocker],
+                "change": change,
+            },
+        )
 
     def _plan_power(self, obs, layout, old, replacement):
         """Plan the pole chain to the electric drill with ``plan_connection``.
 
-        The legacy variant keeps its single goal at ``POWER_GOAL_OFFSET``.
-        Other variants try the ring of tiles touching the 3x3 footprint, that
-        offset first, skipping tiles a retained plan entity occupies; the
-        first candidate's failure is reported when none connects.
+        The legacy variant keeps its single goal at ``POWER_GOAL_OFFSET``, unless the ladder's
+        site rung (``POWER_RING_OPTION``) is active. Other variants try the ring of tiles
+        touching the 3x3 footprint, that offset first, skipping tiles a retained plan entity
+        occupies; the first candidate's failure is reported when none connects.
         """
+        from .remedy import option
+
         center = replacement["position"]
-        if layout["variant"] == "legacy_trunk":
+        if layout["variant"] == "legacy_trunk" and not option(POWER_RING_OPTION):
             goals = [POWER_GOAL_OFFSET]
         else:
             retained = [
@@ -400,6 +541,63 @@ return {ok=true,drop=drop,remaining=amount}
             self.builder.state["electric_coal_cutover"] = marker
             self.builder._save()
 
+    def _unpowered(self, obs, actual):
+        """None while the built drill has power (a brownout counts: it still mines); else its remedy.
+
+        ``unconnected``: the saved pole chain is re-ensured (a missing pole is rebuilt, paid);
+        ``dead``: the plant that this drill feeds ran dry, the coal -> boiler -> drill loop. Its
+        provider is ``power_coal_feed.dead_plant_restart`` (one hand fill: carried coal, wood, or
+        coal collected from a starter chest); when nothing can be fetched the job blocks with a
+        ``power`` need naming that restart.
+        """
+        state = drill_power(obs, actual)
+        if state in ("powered", "brownout"):
+            return None
+        if state == "unconnected":
+            result = self.builder.ensure_plan(obs, self.state["power_plan"])
+            if result.get("status") != "succeeded":
+                return result
+            reason = "replacement_electric_drill_not_connected"
+            change = "the electric coal drill's pole chain connected to the grid"
+        else:
+            from .power_coal_feed import dead_plant_restart
+
+            restart = dead_plant_restart(self.builder, self.bootstrap, getattr(self.builder, "catalog", None), obs)
+            if restart is not None:
+                return restart
+            reason = "replacement_electric_drill_has_no_power"
+            change = "the boiler restarted with one fuel fill (dead_plant_restart: carried coal, wood or a chest)"
+        return {
+            "status": "blocked",
+            "reason": reason,
+            "evidence": {"drill_power": state, "drill_status": actual.get("status_name")},
+            "plan_needs": {"kind": "power", "reason": reason, "at": actual["position"], "change": change},
+        }
+
+    def _relocate_poles(self, obs):
+        """The clear rung's pole moves (``relocate_poles``, from ``plan``) before the cutover; None when done."""
+        rows = self.state.get("relocate_poles") or []
+        if not rows:
+            return None
+        from .pole_relocation import PoleRelocation
+
+        relocation = PoleRelocation(self.game, self.builder, getattr(self.builder, "catalog", None))
+        center = self.state["replacement"]["position"]
+        footprint = [[[center["x"] - 1.5, center["y"] - 1.5], [center["x"] + 1.5, center["y"] + 1.5]]]
+        for row in rows:
+            live = self.find(obs, {"name": "small-electric-pole", "position": row["position"]})
+            fault = None
+            if live is not None:
+                if live.get("unit_number") != row["unit_number"]:
+                    return {"status": "blocked", "reason": "footprint_pole_identity_changed"}
+                fault = {"position": dict(row["position"]), "unit_number": row["unit_number"]}
+            elif not relocation.active(obs):
+                continue
+            result = relocation.step(obs, fault, keep_out=footprint)
+            if result is not None:
+                return result
+        return None
+
     def step(self, obs):
         if not obs.get("technologies", {}).get("electric-mining-drill"):
             return {"status": "blocked", "reason": "electric_mining_research_required"}
@@ -411,6 +609,7 @@ return {ok=true,drop=drop,remaining=amount}
                     "status": "blocked",
                     "reason": result.get("reason", "electric_upgrade_preflight_failed"),
                     **({"evidence": evidence} if evidence else {}),
+                    **({"plan_needs": result["plan_needs"]} if result.get("plan_needs") else {}),
                 }
         if self.state["world_id"] != obs["world_id"]:
             return {"status": "blocked", "reason": "electric_upgrade_world_changed"}
@@ -418,19 +617,29 @@ return {ok=true,drop=drop,remaining=amount}
         actual = self.find(obs, new)
         if actual is None:
             if self.state["phase"] == "fund_and_power":
+                moved = self._relocate_poles(obs)
+                if moved is not None:
+                    return moved
                 if obs.get("inventory", {}).get("electric-mining-drill", 0) < 1:
                     return self.bootstrap.ensure_item(obs, "electric-mining-drill", 1)
                 result = self.builder.ensure_plan(obs, self.state["power_plan"])
                 if result.get("status") != "succeeded":
                     return result
+                # Order of operations: the burner drill is the plant's only coal feed until the
+                # cutover, so the new pole chain must be on a generating network before it goes.
+                if not poles_on_plant(obs, self.state["power_plan"]):
+                    return {
+                        "status": "waiting",
+                        "reason": "electric coal poles wait for a generating network before the burner feed is mined",
+                    }
                 self.builder._sync(obs)
                 evidence = self.builder.power_evidence(
                     self.builder.state["power_plan"], self.builder.state["coal_plan"]
                 )
                 if (
                     not evidence.get("ok")
-                    or evidence.get("boiler_fuel", 0) < 8_000_000
-                    or evidence.get("coal_on_belts", 0) < 8
+                    or evidence.get("boiler_fuel", 0) < CUTOVER_BOILER_FUEL_J
+                    or evidence.get("coal_on_belts", 0) < CUTOVER_BELT_COAL
                 ):
                     return {
                         "status": "waiting",
@@ -476,8 +685,9 @@ return {ok=true,drop=drop,remaining=amount}
             self.builder._save()
         if self.builder.state.pop("electric_coal_cutover", None) is not None:
             self.builder._save()
-        if not actual.get("electric_network_connected") or actual.get("energy", 0) <= 0:
-            return {"status": "blocked", "reason": "replacement_electric_drill_has_no_power"}
+        unpowered = self._unpowered(obs, actual)
+        if unpowered is not None:
+            return unpowered
         if self.state["phase"] != "verify_output":
             self.state["phase"] = "verify_output"
             self.state["sample_started_tick"] = obs["tick"]
@@ -521,11 +731,13 @@ return {ok=true,drop=drop,remaining=amount}
         ):
             return None
         actual = self.find(obs, self.state["replacement"])
-        if not actual or not actual.get("electric_network_connected") or actual.get("energy", 0) <= 0:
+        # A brownout (``low_power``) is no failed upgrade: the drill mines at the satisfied fraction,
+        # and the coal on its output below is the proof (drill_power).
+        if not actual or drill_power(obs, actual) not in ("powered", "brownout"):
             return None
         if self.state.get("replacement_unit_number") not in (None, actual["unit_number"]):
             return None
-        if actual.get("status_name") in {"no_minable_resources", "no_mineable_resources", "no_power", "low_power"}:
+        if actual.get("status_name") in {"no_minable_resources", "no_mineable_resources", "no_power"}:
             return None
         receiver = self.find(obs, self.state["receiver"])
         if not receiver:
@@ -551,6 +763,7 @@ return {ok=true,drop=drop,remaining=amount}
             "tick": obs["tick"],
             "electric_drill_unit": actual["unit_number"],
             "power_connected": True,
+            "drill_power": drill_power(obs, actual),
             "observed_coal_on_direct_output": evidence["coal"],
             "output_evidence_tick": evidence["tick"],
             "coal_on_direct_output_now": coal,
