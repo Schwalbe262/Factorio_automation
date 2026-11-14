@@ -997,6 +997,50 @@ class CoverageTests(unittest.TestCase):
 
         self.assertTrue(_replannable("planner_fault:ValueError:conflicting shared port configuration"))
 
+    # Fleet long-1114-0612: the reasons the 4 runs' blocked jobs held from game minute 29-90 to ~240.
+    LONG_FLEET_END_STATE = {
+        "no_steel_furnace_block_with_complete_connections": "site",
+        "no_brick_furnace_block_with_complete_connections": "site",
+        "objective_progress_stalled": "other",
+        "job_deadline_exceeded": "other",
+        "replacement_electric_drill_has_no_power": "power",
+        "electric_upgrade_footprint_obstructed": "site",
+        "planned_bus_feed_route_failed": "route",
+        "mine_trunk_tap_unavailable": "route",
+    }
+
+    def test_no_reason_of_the_long_fleet_end_state_is_terminal(self):
+        from factorio_agent.supervisor import blocked_category, permanent_block
+
+        for reason, category in self.LONG_FLEET_END_STATE.items():
+            self.assertEqual(blocked_category(reason), category, reason)
+            self.assertFalse(permanent_block(reason), reason)
+        self.assertEqual(blocked_category("action_outcome_unknown_reconcile_required"), "unknown_outcome")
+        self.assertEqual(blocked_category("world_rollback_requires_reconciliation"), "unknown_outcome")
+        self.assertEqual(blocked_category("some_reason_nobody_named_yet"), "other")
+        self.assertFalse(permanent_block("some_reason_nobody_named_yet"))
+        self.assertTrue(permanent_block("supply_cell_retired"))
+
+
+class LongFleetEndStateTests(LadderFixture):
+    """Every long-1114-0612 end-state reason of a job off the ladder is retried past the quick retries."""
+
+    def test_each_end_state_reason_is_retried_on_the_backoff_past_the_quick_retries(self):
+        from factorio_agent.supervisor import AUTO_RETRY_LIMIT, BACKOFF_MAX_MINUTES
+
+        self.s.max_seconds = None
+        self.cli.jobs["busy"] = job("busy", "power", status="running")  # the run is not idle
+        reasons = CoverageTests.LONG_FLEET_END_STATE
+        for index, reason in enumerate(reasons):
+            key = "j" + str(index)
+            self.blocked(key, "electric_coal", reason)
+            self.cli.jobs[key]["blocked_at_tick"] = 0
+            self.s.__dict__.setdefault("_auto_retries", {})[key] = {"successes": 0, "count": AUTO_RETRY_LIMIT}
+        for _ in range(len(reasons) + 1):
+            self.cli.tick += BACKOFF_MAX_MINUTES * 3600
+            self.s._auto_retry(self.s._snapshot())
+        self.assertEqual(sorted(c[2] for c in self.retries()), sorted("j" + str(i) for i in range(len(reasons))))
+
 
 if __name__ == "__main__":
     unittest.main()

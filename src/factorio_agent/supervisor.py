@@ -78,10 +78,9 @@ SUPPLY_RETRY_REASONS = frozenset(
     }
 )
 # Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan) are
-# re-planning blockers too. Past AUTO_RETRY_LIMIT every re-planning blocker is still retried,
-# with no limit, when the published facts change (board plans and connections, material
-# sources, site plan, researched technologies; at most every SITE_RETRY_CHANGE_SECONDS) and
-# otherwise every SITE_RETRY_PERIOD_SECONDS, also while other jobs run (eval-4177156614:
+# re-planning blockers too: quiet-interval retries, and their backoff (BACKOFF_MINUTES) is cut to
+# BACKOFF_FACTS_MINUTES when the published facts change (board plans and connections, material
+# sources, site plan, researched technologies), also while other jobs run (eval-4177156614:
 # brick_production was retried once, then stayed blocked 20+ minutes).
 SITE_RETRY_MARKERS = (
     "_with_complete_connections",
@@ -98,8 +97,6 @@ SITE_RETRY_MARKERS = (
     "_district_block",
     "no_legal_site",
 )
-SITE_RETRY_CHANGE_SECONDS = 300
-SITE_RETRY_PERIOD_SECONDS = 900
 # Remedy ladder (remedy.py, _remedy_ladder): one read-only what-if per cycle, per job at most every
 # REMEDY_CHECK_SECONDS; with every rung spent, "replan" again after REMEDY_FACTS_SECONDS once the
 # published facts changed, else after REMEDY_RECHECK_SECONDS (eval-1575138435: three jobs blocked
@@ -127,6 +124,104 @@ def _replannable(reason: str) -> bool:
         or reason in REPLAN_REASONS
         or _site_blocked(reason)
     )
+
+
+# Structured categories of a blocked reason (blocked_category): the auto-retry reads the category,
+# not a growing list of names. Unknown outcomes and rollbacks are reconciled, never retried.
+BLOCK_CATEGORIES = ("site", "route", "material", "power", "research", "threat", "executor", "unknown_outcome", "other")
+# Blocks that are final by design: the block was retired/superseded or the request names nothing
+# that exists. They stay blocked (a blocked_job incident shows them); every other reason, known or
+# not, is retried on the backoff schedule below.
+PERMANENT_BLOCK = re.compile(r"(_retired$|_retired_use_|superseded|^unknown_technology$)")
+# Game-time backoff of a blocked job (Supervisor._backoff_retry), measured from its block: the n-th
+# retry after BACKOFF_MINUTES[n] game minutes, the last entry repeating, never a final strike
+# (fleet long-1114-0612: all 4 runs stopped succeeding at 29-90 game min and idled to ~240 with
+# every remaining job past its 3 retries). New published facts (_site_facts) cut the wait of a
+# site/route/executor block to BACKOFF_FACTS_MINUTES. A retry whose failure (reason, needs,
+# evidence) is identical to the previous attempt doubles the wait, up to BACKOFF_MAX_MINUTES, so a
+# plan that fails the same way cannot keep the actor or a slot busy. At most one backoff retry per
+# supervisor cycle.
+BACKOFF_MINUTES = (2, 5, 10, 20)
+BACKOFF_FACTS_MINUTES = 5
+BACKOFF_MAX_MINUTES = 160
+BACKOFF_FACTS_CATEGORIES = frozenset({"site", "route", "executor"})
+_CATEGORY_WORDS = (
+    ("research", ("research", "technolog", "recipe")),
+    ("threat", ("enemy", "enemies", "biter", "nest", "hostile", "attack", "spawner", "turret", "defen")),
+    ("site", ("site", "footprint", "obstruct", "placement", "reserv", "slot", "collision", "over_resource", "anchor")),
+    ("route", ("route", "corridor", "connection", "tap", "trunk", "belt", "pipe", "feed", "lane", "escape")),
+    ("power", ("power", "electric", "energ", "steam", "boiler")),
+    ("material", ("item", "plate", "ore", "coal", "fuel", "stock", "suppl", "ingredient", "missing", "science")),
+)
+_NEEDS_CATEGORY = {
+    "route": "route",
+    "tap": "route",
+    "site": "site",
+    "bank": "site",
+    "preflight": "site",
+    "plan": "site",
+    "built": "site",
+    "power": "power",
+}
+
+
+def blocked_category(reason: str, evidence=None, needs=None) -> str:
+    """The category of a blocked reason (``BLOCK_CATEGORIES``): name rules first, then needs, evidence, words."""
+    reason = str(reason or "")
+    if "outcome_unknown" in reason or "rollback" in reason:
+        return "unknown_outcome"
+    if reason.startswith(plan_needs.EXECUTOR_FAILURE) or reason.startswith("planner_fault:"):
+        return "executor"
+    if reason.endswith("_route_failed"):
+        return "route"
+    if _replannable(reason):
+        return "site"
+    if reason in SUPPLY_RETRY_REASONS:
+        return "power" if "power" in reason else "material"
+    kind = needs.get("kind") if isinstance(needs, dict) else None
+    if kind in _NEEDS_CATEGORY:
+        return _NEEDS_CATEGORY[kind]
+    if isinstance(evidence, dict):
+        if any(k in evidence for k in ("technology", "missing_technologies", "required_technology")):
+            return "research"
+        if any(k in evidence for k in ("missing_items", "required_items")) or {"item", "need"} <= set(evidence):
+            return "material"
+    for category, words in _CATEGORY_WORDS:
+        if any(word in reason for word in words):
+            return category
+    return "other"
+
+
+def permanent_block(reason: str) -> bool:
+    """A block that is final by design (``PERMANENT_BLOCK``); never retried, shown as an incident."""
+    return bool(PERMANENT_BLOCK.search(str(reason or "")))
+
+
+def backoff_seconds(attempts: int, identical: int, facts_changed: bool) -> float:
+    """Game seconds before the next backoff retry (``BACKOFF_MINUTES``; identical failures double it)."""
+    minutes = BACKOFF_MINUTES[min(max(attempts, 0), len(BACKOFF_MINUTES) - 1)]
+    if facts_changed:
+        minutes = min(minutes, BACKOFF_FACTS_MINUTES)
+    return 60.0 * min(BACKOFF_MAX_MINUTES, minutes * 2 ** min(max(identical, 0), 8))
+
+
+def _failure_signature(job) -> str:
+    """Reason, needs and evidence of a block (what the plan met); equal for an identical failure."""
+    evidence = job.get("evidence") if isinstance(job.get("evidence"), dict) else {}
+    needs = job.get("needs") if isinstance(job.get("needs"), dict) else {}
+    try:
+        return _hash([str(job.get("reason") or ""), plan_needs.signature(needs) if needs else "", evidence])
+    except (TypeError, ValueError):
+        return _hash([str(job.get("reason") or ""), repr(sorted(evidence.items()))[:2000]])
+
+
+def _game_seconds(context) -> float:
+    """Game time of a snapshot (observation tick, else the ledger's last tick) in seconds."""
+    for source, field in ((context[0], "tick"), (context[1], "last_tick")):
+        value = source.get(field) if isinstance(source, dict) else None
+        if type(value) in (int, float) and math.isfinite(value):
+            return value / 60.0
+    return 0.0
 
 
 QUEUED = ("pending", "ready")
@@ -2109,15 +2204,22 @@ class Supervisor:
 
         Most blockers are a missing prerequisite ("coal bank required") that a
         later success removes. Waiting for the planner to notice wastes minutes,
-        so the framework retries by itself, at most AUTO_RETRY_LIMIT times per
-        job. Unknown action outcomes, rollbacks and deadlines are never retried.
+        so the framework retries by itself: at most AUTO_RETRY_LIMIT quick retries
+        per job, then (and whenever no quick trigger applies) the game-time backoff
+        of ``_backoff_retry``, with no final strike. Every blocked job is thus either
+        on the remedy ladder, scheduled on the backoff (its queue node's
+        ``retry_plan``), or final: an unknown outcome or rollback (``reconcile``
+        only) or a ``permanent_block``; those stay a ``blocked_job`` incident.
         """
         jobs = list(context[1].get("jobs", {}).values())
         done = [job.get("capability") for job in jobs if job["status"] == "succeeded"]
         memory = self.__dict__.setdefault("_auto_retries", {})
+        self._backoff_spent = False  # at most one backoff retry per cycle (retry storms)
         # Planning failures with needs and a pure planner walk the remedy ladder instead.
         on_ladder, retried = self._remedy_ladder(context)
-        for job in jobs:
+        # The longest-waiting backoff first: one retry per cycle must not starve the others.
+        backoff = self.__dict__.get("_backoff", {})
+        for job in sorted(jobs, key=lambda j: backoff.get(j["key"], {}).get("last", float("-inf"))):
             key = job["key"]
             if key in on_ladder:
                 continue
@@ -2126,9 +2228,11 @@ class Supervisor:
                 # that keeps blocking cannot be retried without limit.
                 if job["status"] == "succeeded":
                     memory.pop(key, None)
+                    self.__dict__.get("_backoff", {}).pop(key, None)
                 continue
             reason = str(job.get("reason", ""))
-            if _unknown(job) or "rollback" in reason or "deadline" in reason:
+            category = blocked_category(reason, job.get("evidence"), job.get("needs"))
+            if _unknown(job) or category == "unknown_outcome" or permanent_block(reason):
                 continue
             cleared_by = RETRY_CLEARED_BY.get(reason)
             succeeded = len(done) if cleared_by is None else sum(c in cleared_by for c in done)
@@ -2146,10 +2250,8 @@ class Supervisor:
                 # feeds on the 4th attempt).
                 idle_run = not any(other["status"] in ACTIVE for other in jobs)
                 if not (idle_run and _replannable(reason) and quiet and seen.get("idle", 0) < IDLE_RETRY_LIMIT):
-                    if _replannable(reason) or cleared_by is not None:
-                        # Never blocked forever: new facts or the slow period re-plan it.
-                        since = float(seen.get("first_seen", self.clock()))
-                        retried = self._replan_retry(job, reason, context, since) or retried
+                    # Never blocked forever: the game-time backoff (sooner on new facts) retries it.
+                    retried = self._backoff_retry(job, reason, category, context) or retried
                     continue
                 if self._control_command("retry", key):
                     seen.update(idle=seen.get("idle", 0) + 1, first_seen=self.clock())
@@ -2182,14 +2284,11 @@ class Supervisor:
                 >= AUTO_RETRY_STALL_SECONDS
             )
             if succeeded <= seen["successes"] and not stalled_long_enough:
-                if cleared_by is not None:
-                    # A clearing success is only the fast path: a new rule (a restart on new code)
-                    # or a newly published port clears it too, so new facts or the slow period
-                    # re-plan it (eval-1575138435: the engine belt row blocked at 360 min on a
-                    # missing steel source stayed blocked 140+ min after its route rule landed;
-                    # no produce/bus success came).
-                    since = float(job.get("blocked_at_time") or seen.get("first_seen", self.clock()))
-                    retried = self._replan_retry(job, reason, context, since) or retried
+                # A success is only the fast path: a new rule (a restart on new code), a newly
+                # published port or upkeep clears a block too, so the backoff re-plans it without
+                # one (eval-1575138435: the engine belt row blocked at 360 min on a missing steel
+                # source stayed blocked 140+ min after its route rule landed; no produce/bus success came).
+                retried = self._backoff_retry(job, reason, category, context) or retried
                 continue
             if self._control_command("retry", key):
                 seen.update(successes=succeeded, count=seen["count"] + 1, first_seen=self.clock())
@@ -2386,31 +2485,52 @@ class Supervisor:
         facts.append(["technologies", len(_technology_names(technologies))])
         return facts
 
-    def _replan_retry(self, job, reason, context, since) -> bool:
-        """A re-planning blocker past AUTO_RETRY_LIMIT; records the next condition on its queue node.
+    def _backoff_retry(self, job, reason, category, context) -> bool:
+        """Retry a blocked job on the game-time backoff; records the next retry on its queue node.
 
-        Retry when the facts (``_site_facts``) changed since the last attempt and
-        SITE_RETRY_CHANGE_SECONDS passed, or when SITE_RETRY_PERIOD_SECONDS passed
-        anyway (``since``: the last counted retry). Each retry re-plans (the planner
-        allocates sites afresh), with no attempt limit: never left blocked forever.
+        The n-th retry comes ``backoff_seconds`` game seconds after the block (``BACKOFF_MINUTES``),
+        sooner once the published facts (``_site_facts``) changed for a site/route/executor block.
+        A block whose failure (``_failure_signature``) equals the one before the last retry is an
+        identical failure: each one doubles the wait. A retry re-plans (the planner runs its step
+        afresh); there is no attempt limit, so no job is left blocked with nothing pending. At most
+        one backoff retry per cycle; a deferred retry (no slot) is no attempt.
         """
-        memory = self.__dict__.setdefault("_site_retries", {})
+        memory = self.__dict__.setdefault("_backoff", {})
         key = job["key"]
-        now = self.clock()
+        now = _game_seconds(context)
+        tick = job.get("blocked_at_tick")
+        blocked_at = tick / 60.0 if type(tick) in (int, float) else now
+        episode = tick if tick is not None else job.get("blocked_at_time", reason)
+        failure = _failure_signature(job)
         facts = self._site_facts(context[0])
         seen = memory.get(key)
         if seen is None or seen.get("reason") != reason:
-            seen = memory[key] = {"reason": reason, "facts": facts, "last": since, "count": 0}
+            # A new reason starts the schedule afresh (the job got further).
+            seen = memory[key] = {
+                "reason": reason,
+                "episode": episode,
+                "failure": failure,
+                "facts": facts,
+                "last": min(blocked_at, now),
+                "attempts": 0,
+                "identical": 0,
+            }
+        elif seen["episode"] != episode:
+            # Blocked again after a retry: the same plan meeting the same failure doubles the wait.
+            identical = seen["identical"] + 1 if failure == seen["failure"] else 0
+            seen.update(episode=episode, failure=failure, identical=identical, last=min(blocked_at, now))
         changed = facts != seen["facts"]
-        wait = SITE_RETRY_CHANGE_SECONDS if changed else SITE_RETRY_PERIOD_SECONDS
+        wait = backoff_seconds(seen["attempts"], seen["identical"], changed and category in BACKOFF_FACTS_CATEGORIES)
         node = self.work.node_for_job(key)
-        if now - seen["last"] < wait:
-            # The stall stays visible: the node says when and on what it is retried.
+        if now - seen["last"] < wait or getattr(self, "_backoff_spent", False):
+            # The block stays visible: the node says when and on what it is retried.
             plan = {
-                "rule": "replan_retry",
+                "rule": "backoff_retry",
+                "category": category,
                 "reason": reason[:200],
-                "attempts": seen["count"],
-                "next_retry_at_time": round(seen["last"] + wait, 1),
+                "attempts": seen["attempts"],
+                "identical_failures": seen["identical"],
+                "next_retry_at_tick": round((seen["last"] + wait) * 60),
                 "sooner_when_changed": list(SITE_RETRY_FACT_FILES) + ["technologies"],
                 "facts_changed": changed,
             }
@@ -2420,18 +2540,27 @@ class Supervisor:
             return False
         if not self._control_command("retry", key):
             return False
-        seen.update(facts=facts, last=now, count=seen["count"] + 1)
+        self._backoff_spent = True
+        seen.update(facts=facts, last=now, attempts=seen["attempts"] + 1)
         if node is not None:
-            node["retry_plan"] = {"rule": "replan_retry", "reason": reason[:200], "attempts": seen["count"]}
+            node["retry_plan"] = {
+                "rule": "backoff_retry",
+                "category": category,
+                "reason": reason[:200],
+                "attempts": seen["attempts"],
+                "identical_failures": seen["identical"],
+            }
             self.work.save()
         self._event(
             "auto_retry",
             key=key,
             capability=job.get("capability"),
             blocked_reason=reason[:200],
-            rule="replan_retry",
-            trigger="facts_changed" if changed else "period",
-            attempt=seen["count"],
+            rule="backoff_retry",
+            category=category,
+            trigger="facts_changed" if changed else "backoff",
+            attempt=seen["attempts"],
+            identical_failures=seen["identical"],
         )
         return True
 

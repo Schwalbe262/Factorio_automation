@@ -1112,5 +1112,6 @@ Episode closes `resolved` or `expired` after `outcome_minutes = 10`; one model
 consultation per incident per `incident_retry_seconds = 300`, none sooner than
 `decision_interval` (60) after the last; document capped at
 `DOCUMENT_CHAR_CAP = 24000`; at most `MAX_NEW_NODES = 3` per `add_nodes`.
-`AUTO_RETRY_LIMIT = 3` retries per job. Pinned by `tests/test_v2_incidents.py`,
+`AUTO_RETRY_LIMIT = 3` quick retries per job, then the game-time backoff
+(`BACKOFF_MINUTES`, no final strike; ARCHITECTURE.md "Auto-retry"). Pinned by `tests/test_v2_incidents.py`,
 `tests/test_v2_supervisor.py`.

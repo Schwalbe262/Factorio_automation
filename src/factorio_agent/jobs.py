@@ -1023,8 +1023,7 @@ SAVE_INTERVAL_SECONDS = 60
 # Thirty game minutes / one hour killed jobs that wait legitimately in a long
 # run (retirement waiting for cells to cool, research waiting for packs, a
 # growth step waiting for materials): seed 2644599892 lost nine jobs that way.
-JOB_DEADLINE_TICKS = 648000  # three game hours
-JOB_DEADLINE_SECONDS = 10800  # three hours of wall time
+JOB_DEADLINE_TICKS = 648000  # three game hours (game time only; a retry starts a fresh budget)
 # Exceptions that mean "this planner cannot read its inputs", never a game or connection failure.
 PLANNER_FAULTS = (FileNotFoundError, LookupError, TypeError, AttributeError, ValueError, StopIteration)
 UNKNOWN_BATCH_OUTCOMES = (
@@ -1034,6 +1033,16 @@ UNKNOWN_BATCH_OUTCOMES = (
     "mall_stock_transfer_outcome_unknown",
     "infrastructure_repair_outcome_unknown",
 )
+
+
+def _block_without_plan(ledger: Ledger, key: str, job: dict, reason: str, tick: int) -> None:
+    """A deadline or stall block: stamped like any block, and no planning failure (stale needs dropped,
+    so the remedy ladder does not re-plan a former failure; the supervisor's backoff retries it)."""
+    job.update(status="blocked", reason=reason, blocked_at_tick=tick, blocked_at_time=time.time())
+    job.pop("needs", None)
+    job.pop("next_remedy", None)
+    ledger.save()
+    ledger.event(key, "terminal", status="blocked", reason=reason, evidence=job.get("evidence") or {}, tick=tick)
 
 
 def _advance_job(
@@ -1068,13 +1077,10 @@ def _advance_job(
     succeeded = {j["capability"] for j in ledger.data["jobs"].values() if j["status"] == "succeeded"}
     early = runs_early(CAPABILITIES, job["capability"], succeeded, obs.get("technologies"))
     track_early_time(job, obs["tick"], time.time(), early)
-    if (
-        obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) - job.get("early_ticks", 0) > JOB_DEADLINE_TICKS
-        or time.time() - job["created_at"] - job.get("paused_seconds", 0) - job.get("early_seconds", 0)
-        > JOB_DEADLINE_SECONDS
-    ):
-        job.update(status="blocked", reason="job_deadline_exceeded")
-        ledger.save()
+    if obs["tick"] - job["created_tick"] - job.get("paused_ticks", 0) - job.get("early_ticks", 0) > JOB_DEADLINE_TICKS:
+        # Game time only: wall time also counts a slow server, a stopped supervisor or a paused
+        # game (fleet long-1114-0612 seed 2398990848: five jobs over the wall-clock deadline).
+        _block_without_plan(ledger, key, job, "job_deadline_exceeded", obs["tick"])
         return "terminal", {}
     if (root / "stop.json").exists():
         job.update(status="waiting", reason="operator_stop_requested")
@@ -1084,8 +1090,7 @@ def _advance_job(
     if progress != job.get("progress"):
         job.update(progress=progress, progress_at_tick=obs["tick"], progress_at_time=time.time())
     if obs["tick"] - job["progress_at_tick"] > 18000:
-        job.update(status="blocked", reason="objective_progress_stalled")
-        ledger.save()
+        _block_without_plan(ledger, key, job, "objective_progress_stalled", obs["tick"])
         return "terminal", {}
     started = time.perf_counter()
     try:
