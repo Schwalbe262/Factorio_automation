@@ -16,7 +16,9 @@ Kinds, in severity order (most severe first):
   so the incident opens only once auto-retry did not apply or is exhausted.
 - ``no_progress``: jobs are active, no job succeeded for ``progress_minutes``
   and the recent action sample is repetitive (top two actions at least
-  ``repeat_share`` of the sample).
+  ``repeat_share`` of the sample). Also per job (subject: the job key): a job
+  that only waits, with the same reason, evidence and action count for
+  ``wait_stall_minutes`` game minutes, while other jobs may still succeed.
 - ``planner_review``: optional periodic review every ``review_minutes``.
 
 An episode closes ``resolved`` when its condition clears, or ``expired`` after
@@ -57,6 +59,8 @@ class IncidentConfig:
     - ``outcome_minutes`` (10): an episode still open after this is ``expired``.
     - ``review_minutes`` (None): periodic ``planner_review``; off by default.
     - ``rejection_log_seconds`` (300): one ``decision_rejected`` per incident per window.
+    - ``wait_stall_minutes`` (20): a job waiting this many game minutes with no state change is a
+      ``no_progress`` incident of its own (DEBUGGING_A_STALL.md: pure waits raised none before).
     """
 
     blocked_grace_seconds: float = 60
@@ -68,6 +72,24 @@ class IncidentConfig:
     outcome_minutes: float = 10
     review_minutes: float | None = None
     rejection_log_seconds: float = 300
+    wait_stall_minutes: float = 20
+
+
+def _wait_state(job: Mapping) -> str:
+    """What a waiting job shows (reason, evidence without clocks, actions); a change is progress."""
+    evidence = job.get("evidence") if isinstance(job.get("evidence"), Mapping) else {}
+    clean = {k: v for k, v in evidence.items() if not any(w in str(k) for w in ("tick", "time", "seconds"))}
+    try:
+        text = json.dumps([job.get("reason"), clean, job.get("actions")], sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        text = repr([job.get("reason"), job.get("actions")])
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _game_seconds(observation: Mapping) -> float | None:
+    """Game time of the observation; None without a tick (the wait rule is measured in game time only)."""
+    tick = observation.get("tick") if isinstance(observation, Mapping) else None
+    return tick / 60.0 if type(tick) in (int, float) else None
 
 
 @dataclass(frozen=True)
@@ -268,6 +290,8 @@ class IncidentTracker:
         self.open: dict[str, Incident] = {}
         self.consulted: dict[str, float] = {}
         self.blocked_since: dict[str, float] = {}
+        self.waits: dict[str, tuple[str, float]] = {}  # job key -> (wait state, game seconds since)
+        self.stalled_waits: dict[str, dict] = {}
         self.idle_since: float | None = None
         self.successes: int | None = None
         self.last_success_at = started_at
@@ -291,6 +315,16 @@ class IncidentTracker:
                 del self.blocked_since[key]
         for key in blocked:
             self.blocked_since.setdefault(key, now)
+        game = _game_seconds(inputs.observation)
+        waiting = {j["key"]: j for j in jobs if j.get("status") == "waiting"} if game is not None else {}
+        self.waits = {k: v for k, v in self.waits.items() if k in waiting}
+        self.stalled_waits = {}
+        for key, job in waiting.items():
+            state = _wait_state(job)
+            if key not in self.waits or self.waits[key][0] != state:
+                self.waits[key] = (state, game)
+            elif game - self.waits[key][1] >= self.config.wait_stall_minutes * 60:
+                self.stalled_waits[key] = dict(job, waited_game_minutes=round((game - self.waits[key][1]) / 60, 1))
         active = [j for j in jobs if j.get("status") in ACTIVE]
         queued = [q for q in inputs.nodes if q.get("status") in QUEUED]
         roadmap = None
@@ -324,6 +358,9 @@ class IncidentTracker:
             return "resolved"
         if incident.kind == "empty_queue" and (active or queued):
             return "resolved"
+        if incident.kind == "no_progress" and incident.subject != "queue":
+            # A per-job wait: resolved once that job's state changed or it stopped waiting.
+            return "resolved" if incident.subject not in self.stalled_waits else None
         if incident.kind in ("no_progress", "planner_review") and progressed:
             return "resolved"
         if now - incident.opened_at >= self.config.outcome_minutes * 60:
@@ -378,7 +415,8 @@ class IncidentTracker:
                 continue
             node = nodes_by_key.get(key)
             reason = str(job.get("reason", ""))
-            eligible = not unknown_outcome(job) and "rollback" not in reason and "deadline" not in reason
+            # A deadline is retried on the backoff like any block (supervisor._backoff_retry).
+            eligible = not unknown_outcome(job) and "rollback" not in reason
             dependents = [
                 q["id"]
                 for q in inputs.nodes
@@ -447,6 +485,27 @@ class IncidentTracker:
                         [*pause_remedies(active), addable, wait],
                     )
                 )
+        for key, job in self.stalled_waits.items():
+            # A job that only waits with nothing changing (DEBUGGING_A_STALL.md "pure wait").
+            facts = dict(
+                pattern="wait",
+                capability=job.get("capability"),
+                reason=self.text(job.get("reason")),
+                evidence=self.summarize(job),
+                waited_game_minutes=job.get("waited_game_minutes"),
+                actions=job.get("actions"),
+            )
+            found.append(
+                Incident(
+                    incident_id("no_progress", key),
+                    "no_progress",
+                    key,
+                    now - (job.get("waited_game_minutes") or 0) * 60,
+                    facts,
+                    [*pause_remedies([job]), addable, wait],
+                    capability=job.get("capability"),
+                )
+            )
         review = config.review_minutes
         if review and now - self.last_review_at >= review * 60:
             self.last_review_at = now

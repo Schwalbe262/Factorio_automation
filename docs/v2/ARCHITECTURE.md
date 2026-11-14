@@ -14,7 +14,7 @@ Supervisor.run (supervisor.py) loops _cycle():
   1 _snapshot        observe + status + capabilities + actor-status; world/rollback guard
   2 _resume_known    resume jobs the last safe stop paused
   3 _autopilot       queue < 2 pending/ready -> progression.autopilot_nodes (<= 3 "auto_" nodes)
-  4 _auto_retry      retry blocked jobs once another job succeeded (<= 3 per job)
+  4 _auto_retry      remedy ladder; quick retries (<= 3); then game-time backoff, no final strike
   5 _poll_decision   accept a finished model decision (planner luna only)
   6 _check_incidents incidents.IncidentTracker opens/closes episodes; luna: maybe start one model call
   7 _dispatch        submit ready nodes by priority while < 4 jobs active   (jobs.submit)
@@ -123,7 +123,7 @@ All other top-level modules are capability controllers constructed in
 | Supply cell planner | `supply_cell.supply_cell_nodes` (from `autopilot_nodes`) | add one `supply_cell` build node (-52) and later one retire node (-1000) | propose twice per map; retire while demand remains and no `produce` row took over |
 | Research planners | `research_capacity` (observe receipt, `industry.py` startup cell), `research_policy.choose_research` (`StarterExecutors.idle_action`) | size science rate/labs; start lab research when no job acts | start research while a job owns research or any job has an unresolved world effect |
 | Remedy ladder | `Supervisor._remedy_ladder`, `remedy.py`, `plan_needs.py` | a planning failure with `needs`: read-only what-if per rung, `retry --remedy` when it fits (section below) | retry without a fitting what-if, touch unknown outcomes, put options in job parameters |
-| Auto-retry | `Supervisor._auto_retry` | `retry` a blocked job after a new success, <= 3 times | retry unknown outcomes, rollbacks, deadlines |
+| Auto-retry | `Supervisor._auto_retry`, `_backoff_retry`, `blocked_category` | `retry` a blocked job: <= 3 quick retries (new success, quiet interval), then on the game-time backoff (section below) | retry unknown outcomes, rollbacks, `permanent_block` reasons; more than one backoff retry per cycle |
 | Incidents | `incidents.IncidentTracker` | open `empty_queue`, `blocked_job`, `no_progress`, `planner_review` | act; planner none only logs |
 | Model (luna) | `luna_client` + `Supervisor._poll_decision` | one menu remedy: retry/pause a task, add <= 3 nodes, wait | send coordinates, Lua or entities (`supervisor.FORBIDDEN`); gate dispatch; retry unknown outcomes |
 
@@ -146,7 +146,7 @@ not leave its job blocked for a human fix. Three parts (`plan_needs.py`,
    every capability: `plan_needs.from_executor_failure` records the failing
    action, position and reason (`preflight` with that blocker, `plan` without a
    position); capabilities with a dry run go up the ladder, the others are
-   re-planned on new facts or every period (`supervisor._replannable`).
+   re-planned on the auto-retry backoff, sooner on new facts (`blocked_category` `executor`).
 2. **Ladder.** One rule walks the rungs in a fixed order, `remedy.LADDER`:
    `replan` (same request, facts changed), `layout` (another candidate of the
    block), `site` (another site / a longer connection), `relax` (declared soft
@@ -178,8 +178,8 @@ applied rung); events `remedy_checked` / `remedy_applied` in
 `job-events.jsonl`, `remedy_check` in `logs/controller-events.jsonl`.
 `tools/waste_report.py` prints blocked seconds per `needs` kind and per rung
 checked / fitted / applied / resolved, so a fleet shows which planners still
-dead-end. A capability without a pure `prepare` keeps the older auto-retry
-rules (`_auto_retry`, `_replan_retry`).
+dead-end. A capability without a pure `prepare` keeps the auto-retry rules
+(`_auto_retry`, `_backoff_retry`, next section).
 
 On the ladder today (pure `prepare` + declared rungs): `mining_outpost` (shrink
 drills), `dedicated_materials` (trunk-tap failure named in `change`),
@@ -208,6 +208,39 @@ of ours on a bus feed's forced end tile (lane-head approach, feed escape) is a `
 poles that keep power without it, the owner plans are republished first, the chain is built and
 verified, then the pole is mined guarded; machines only the pole covers refuse the relocation.
 Trees and rocks are already cleared by every plan (`site/nature.py`).
+
+## Auto-retry: no blocked job is a silent dead end
+
+Every blocked job is, at any time, exactly one of: owned by the remedy ladder (above); scheduled
+on the auto-retry (its queue node's `retry_plan`: `rule`, `category`, `attempts`,
+`identical_failures`, `next_retry_at_tick`); or final, which is only an unknown outcome or
+rollback (`reconcile`, never `retry`) or a `permanent_block` reason (`_retired`, `superseded`,
+`unknown_technology`). A final job stays a `blocked_job` incident.
+
+- `blocked_category(reason, evidence, needs)` (`supervisor.py`): one of `site route material
+  power research threat executor unknown_outcome other`; the old name rules (`_replannable`,
+  `SUPPLY_RETRY_REASONS`) first, then `needs["kind"]`, evidence keys, words. An unrecognised
+  reason is `other` and retried like any other, never terminal.
+- Quick retries (<= `AUTO_RETRY_LIMIT`): after a new success (`RETRY_CLEARED_BY` narrows which),
+  or after `AUTO_RETRY_STALL_SECONDS` quiet for stalls, supply and re-planning blockers.
+- Backoff (`_backoff_retry`, game time from the block): retries after `BACKOFF_MINUTES` = 2, 5,
+  10, 20 game minutes, then every 20; new published facts (`_site_facts`) cut the wait of a
+  site/route/executor block to `BACKOFF_FACTS_MINUTES`; a block whose reason, needs and
+  evidence equal the one before the retry (identical failure) doubles the wait, up to
+  `BACKOFF_MAX_MINUTES`; one backoff retry per cycle, longest-waiting first; a retry deferred
+  for a slot is no attempt. `objective_progress_stalled` and `job_deadline_exceeded` (three game
+  hours; game time only) are retried this way; both blocks drop stale `needs`.
+- A job that only waits with the same reason, evidence and action count for
+  `IncidentConfig.wait_stall_minutes` (20) game minutes opens a `no_progress` incident with the
+  job key as subject.
+
+A retry re-runs the controller's step. Most controllers without a pure `prepare` keep a saved
+plan once `prepare` succeeded, so a placement or preflight failure after the save repeats the
+same plan on every retry (electric_coal, power except `POWER_REPLAN_REASONS`, power_coal_feed past
+its replans, smelting_capacity, automation_science, steel_coal_supply, main_bus_factory,
+nest_sweep, starter_capacity, defense_* while the intent key holds, and the save-then-reuse
+controllers). For them the identical-failure doubling caps the cost; a fresh plan needs their own
+planner work (a pure `prepare` puts them on the ladder).
 
 Inside a job, `StarterExecutors.step` first runs shared upkeep before the
 capability's own controller: `pending_repair` and `_approved_initial_defense`

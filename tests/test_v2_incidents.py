@@ -200,6 +200,39 @@ class NoProgressTests(unittest.TestCase):
         self.assertEqual(incident.facts["actions_in_window"], 0)
 
 
+class WaitStallTests(unittest.TestCase):
+    """A job that only waits, unchanged for wait_stall_minutes game minutes, is a no_progress incident."""
+
+    def setUp(self):
+        self.h = Harness(IncidentConfig(quiet_actions=0))
+        self.h.jobs = [dict(job("w", "smelting", actions=4), reason="waiting for coal"), job("s", status="succeeded")]
+        self.h.nodes = [node("n_w", "w", "smelting", "running")]
+
+    def at_game(self, minutes, now=None):
+        self.h.observation = {"technologies": [], "tick": int(minutes * 3600)}
+        return self.h.at(minutes * 60 if now is None else now)
+
+    def test_opens_after_the_threshold_of_game_minutes_and_resolves_on_a_state_change(self):
+        minutes = IncidentConfig().wait_stall_minutes
+        self.at_game(0)
+        self.assertEqual(self.at_game(minutes - 1).opened, [])
+        opened = self.at_game(minutes).opened
+        self.assertEqual([(q.kind, q.subject, q.capability) for q in opened], [("no_progress", "w", "smelting")])
+        self.assertEqual(opened[0].facts["pattern"], "wait")
+        self.assertEqual([r.kind for r in opened[0].remedies], ["pause", "add_nodes", "wait"])
+        self.h.jobs[0]["actions"] = 5  # it acted: no pure wait any more
+        closed = self.at_game(minutes + 1).closed
+        self.assertEqual([(q.subject, outcome) for q, outcome, _ in closed], [("w", "resolved")])
+
+    def test_wall_time_alone_or_a_changing_wait_opens_nothing(self):
+        self.h.observation = {"technologies": []}  # no tick
+        self.h.at(0)
+        self.assertEqual(self.h.at(7200).opened, [])
+        for minute in range(0, 60, 5):
+            self.h.jobs[0]["evidence"] = {"have": minute, "tick": minute}
+            self.assertEqual(self.at_game(minute).opened, [])
+
+
 class ReviewAndSeverityTests(unittest.TestCase):
     def test_planner_review_is_off_by_default_and_periodic_when_enabled(self):
         h = Harness(IncidentConfig(quiet_actions=0))

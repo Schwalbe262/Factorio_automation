@@ -380,6 +380,27 @@ class JobBoundaryTests(unittest.TestCase):
         again = run_slice(self.root, self.game, waiting, "test", seconds=0.001)
         self.assertEqual((again["status"], again["reason"]), ("waiting", "waiting for coal"))
 
+    def test_a_stall_is_stamped_like_any_block_and_drops_stale_needs_and_wall_time_sets_no_deadline(self):
+        # long-1114-0612: a stalled brick job kept the needs of an older planning failure, so the
+        # ladder owned it; seed 2398990848: five jobs blocked by the wall-clock deadline.
+        submit(self.root, self.game, self.request())
+        waiting = Executor({"status": "waiting", "reason": "waiting for coal"})
+        run_slice(self.root, self.game, waiting, "test", seconds=0.001)
+        ledger = Ledger(self.root)
+        ledger.data["jobs"]["test"].update(
+            needs={"kind": "site", "reason": "old"}, created_at=0
+        )  # 50+ years of wall time
+        ledger.save()
+        self.game.observation["tick"] += 600
+        again = run_slice(self.root, self.game, waiting, "test", seconds=0.001)
+        self.assertEqual(again["status"], "waiting")
+        self.game.observation["tick"] += 18001
+        stalled = run_slice(self.root, self.game, waiting, "test", seconds=0.001)
+        self.assertEqual(stalled["reason"], "objective_progress_stalled")
+        job = Ledger(self.root).data["jobs"]["test"]
+        self.assertEqual(job["blocked_at_tick"], self.game.observation["tick"])
+        self.assertNotIn("needs", job)
+
     def test_uncertain_storage_deposit_keeps_intent_and_forbids_retry(self):
         submit(self.root, self.game, self.request())
         self.game.act = lambda _: {"ok": False, "reason": "storage_transfer_outcome_unknown", "confirmed_moved": 10}

@@ -911,7 +911,7 @@ class MultiJobTests(Fixture):
         self.cli.jobs["bus"].update(status="blocked", reason=reason, blocked_at_time=self.clock())
         self.clock.advance(121)
         self.assertFalse(self.s._auto_retry(self.s._snapshot()))
-        # An unrelated blocker past the limit is not retried even when idle.
+        # An unrelated blocker past the limit gets no idle-run retry: only its game-time backoff, later.
         del self.cli.jobs["other"]
         self.cli.jobs["coal"] = job("coal", "c2", status="blocked", reason="coal_bank_required")
         self.s.__dict__["_auto_retries"]["coal"] = {"successes": 0, "count": AUTO_RETRY_LIMIT, "first_seen": 0}
@@ -954,48 +954,40 @@ class MultiJobTests(Fixture):
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
         self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "row"]])
 
-    def test_a_row_without_an_input_source_is_replanned_on_new_facts_or_the_slow_period(self):
+    def game(self, minutes):
+        """Advance game time (the backoff runs on ticks, not the wall clock)."""
+        self.cli.tick += int(minutes * 3600)
+
+    def test_a_row_without_an_input_source_is_replanned_on_the_game_time_backoff(self):
         # eval-1575138435: the engine belt row blocked at 360 min on a missing steel source; the
         # route rule that finds the source landed later, no produce/bus success came, and the row
         # stayed blocked 140+ min although its plan fitted.
-        from factorio_agent.supervisor import SITE_RETRY_CHANGE_SECONDS, SITE_RETRY_PERIOD_SECONDS
+        from factorio_agent.supervisor import BACKOFF_MINUTES
 
         self.s.max_seconds = None
         reason = "production_row_input_source_missing"
         self.cli.jobs["research"] = job("research", "c5")  # another job runs
-        self.cli.jobs["row"] = job("row", "produce", status="blocked", reason=reason, blocked_at_time=self.clock())
+        self.cli.jobs["row"] = job("row", "produce", status="blocked", reason=reason, blocked_at_tick=self.cli.tick)
 
         def retries():
             return [c for c in self.cli.calls if c[0] == "retry"]
 
         self.assertFalse(self.s._auto_retry(self.s._snapshot()))
-        self.clock.advance(SITE_RETRY_PERIOD_SECONDS - 10)
+        self.game(BACKOFF_MINUTES[0] - 0.1)
         self.assertFalse(self.s._auto_retry(self.s._snapshot()))
-        self.clock.advance(11)
-        self.assertTrue(self.s._auto_retry(self.s._snapshot()))  # the slow period, no success
+        self.game(0.2)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))  # no success needed
         self.assertEqual(retries(), [["retry", "--key", "row"]])
-        # A newly published board: retried once the change interval passed.
-        self.cli.jobs["row"].update(status="blocked", reason=reason, blocked_at_time=self.clock())
-        (self.root / "pcb-board.json").write_text("{}", encoding="utf-8")
-        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
-        self.clock.advance(SITE_RETRY_CHANGE_SECONDS + 1)
-        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
-        self.assertEqual(len(retries()), 2)
         # A row blocked long before this supervisor started is re-planned at once.
-        self.cli.jobs["old"] = job(
-            "old",
-            "produce",
-            status="blocked",
-            reason=reason,
-            blocked_at_time=self.clock() - 2 * SITE_RETRY_PERIOD_SECONDS,
-        )
+        self.cli.jobs["old"] = job("old", "produce", status="blocked", reason=reason, blocked_at_tick=0)
+        self.game(1)
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
         self.assertIn(["retry", "--key", "old"], retries())
 
-    def test_site_connection_blocker_is_retried_on_new_facts_and_periodically_without_limit(self):
+    def test_site_connection_blocker_is_retried_on_the_backoff_sooner_on_new_facts_without_limit(self):
         # eval-4177156614: brick_production blocked no_brick_furnace_block_with_complete_connections,
         # retried once after a success, then nothing for 20+ minutes.
-        from factorio_agent.supervisor import SITE_RETRY_CHANGE_SECONDS, SITE_RETRY_PERIOD_SECONDS
+        from factorio_agent.supervisor import BACKOFF_FACTS_MINUTES, BACKOFF_MINUTES
 
         reason = "no_brick_furnace_block_with_complete_connections"
         self.s.max_seconds = None  # the test clock runs for hours
@@ -1009,36 +1001,111 @@ class MultiJobTests(Fixture):
         def retries():
             return [c for c in self.cli.calls if c[0] == "retry"]
 
-        # A re-planning blocker: the counted retries come on quiet intervals.
+        def block(attempt):
+            # A different failure each time (a new candidate met something else): no doubling.
+            self.cli.jobs["brick"].update(
+                status="blocked", reason=reason, blocked_at_tick=self.cli.tick, evidence={"attempt": attempt}
+            )
+
+        # A re-planning blocker: the quick retries come on quiet intervals.
         for _ in range(AUTO_RETRY_LIMIT):
             self.clock.advance(121)
             self.assertTrue(self.s._auto_retry(self.s._snapshot()))
             self.cli.jobs["brick"].update(status="blocked", reason=reason, blocked_at_time=self.clock())
         self.assertEqual(len(retries()), AUTO_RETRY_LIMIT)
-        # Past the limit: nothing until new facts or the slow period; the node says so.
+        # Past the limit: the game-time backoff; the node says when.
         self.assertFalse(self.s._auto_retry(self.s._snapshot()))
         plan = self.s.work.node_for_job("brick")["retry_plan"]
-        self.assertEqual(plan["rule"], "replan_retry")
-        self.assertFalse(plan["facts_changed"])
-        self.assertAlmostEqual(plan["next_retry_at_time"], self.clock() + SITE_RETRY_PERIOD_SECONDS, places=0)
-        self.cli.jobs["done"] = job("done", "c2", status="succeeded")
-        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
-        # A newly published material source: retried once the change interval passed.
-        (self.root / "material-sources.json").write_text("{}", encoding="utf-8")
-        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
-        self.assertTrue(self.s.work.node_for_job("brick")["retry_plan"]["facts_changed"])
-        self.clock.advance(SITE_RETRY_CHANGE_SECONDS + 1)
-        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
-        self.assertEqual(len(retries()), AUTO_RETRY_LIMIT + 1)
-        # Nothing changes any more: a slow periodic retry, with no attempt limit.
-        for _ in range(AUTO_RETRY_LIMIT + 2):
-            self.cli.jobs["brick"].update(status="blocked", reason=reason)
-            self.clock.advance(SITE_RETRY_PERIOD_SECONDS - 10)
-            self.assertFalse(self.s._auto_retry(self.s._snapshot()))
-            self.clock.advance(11)
+        self.assertEqual((plan["rule"], plan["category"], plan["attempts"]), ("backoff_retry", "site", 0))
+        self.assertAlmostEqual(plan["next_retry_at_tick"], self.cli.tick + BACKOFF_MINUTES[0] * 3600, delta=5)
+        for attempt, minutes in enumerate(BACKOFF_MINUTES[:2]):
+            self.game(minutes + 0.1)
             self.assertTrue(self.s._auto_retry(self.s._snapshot()))
-        self.assertEqual(len(retries()), 2 * AUTO_RETRY_LIMIT + 3)
-        self.assertEqual(self.s.work.node_for_job("brick")["retry_plan"]["attempts"], AUTO_RETRY_LIMIT + 3)
+            block(attempt)
+        self.assertEqual(len(retries()), AUTO_RETRY_LIMIT + 2)
+        # The third backoff waits BACKOFF_MINUTES[2]; a newly published material source cuts it.
+        (self.root / "material-sources.json").write_text("{}", encoding="utf-8")
+        self.game(BACKOFF_FACTS_MINUTES + 0.1)
+        self.assertLess(BACKOFF_FACTS_MINUTES, BACKOFF_MINUTES[2])
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(len(retries()), AUTO_RETRY_LIMIT + 3)
+        # Nothing changes any more: every BACKOFF_MINUTES[-1], with no attempt limit.
+        for attempt in range(3, 7):
+            block(attempt)
+            self.game(BACKOFF_MINUTES[-1] - 0.5)
+            self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+            self.game(1)
+            self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(len(retries()), AUTO_RETRY_LIMIT + 7)
+        self.assertEqual(self.s.work.node_for_job("brick")["retry_plan"]["attempts"], 7)
+
+    def test_an_identical_failure_doubles_the_backoff(self):
+        from factorio_agent.supervisor import BACKOFF_MINUTES
+
+        self.s.max_seconds = None
+        self.cli.jobs["busy"] = job("busy", "c5")
+        evidence = {"item": "coal", "need": 50, "have": 0}
+        self.cli.jobs["coal"] = job(
+            "coal",
+            "c0",
+            status="blocked",
+            reason="coal_bank_required",
+            evidence=evidence,
+            blocked_at_tick=self.cli.tick,
+        )
+        self.s.work.data["nodes"].append(
+            dict(node("auto_coal", "c0"), job_key="coal", status="blocked", submitted=True, created_at=0)
+        )
+        self.game(BACKOFF_MINUTES[0] + 0.1)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        # The same plan meets the same failure: the next wait doubles.
+        self.cli.jobs["coal"].update(status="blocked", reason="coal_bank_required", blocked_at_tick=self.cli.tick)
+        self.game(BACKOFF_MINUTES[1] + 0.1)
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        plan = self.s.work.node_for_job("coal")["retry_plan"]
+        self.assertEqual((plan["identical_failures"], plan["category"]), (1, "material"))
+        self.game(BACKOFF_MINUTES[1])
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.cli.jobs["coal"].update(status="blocked", reason="coal_bank_required", blocked_at_tick=self.cli.tick)
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        plan = self.s.work.node_for_job("coal")["retry_plan"]
+        self.assertEqual(plan["identical_failures"], 2)
+        self.assertAlmostEqual(plan["next_retry_at_tick"], self.cli.tick + BACKOFF_MINUTES[2] * 4 * 3600, delta=5)
+
+    def test_one_backoff_retry_per_cycle(self):
+        self.s.max_seconds = None
+        for key in ("a", "b"):
+            self.cli.jobs[key] = job(key, "c0" if key == "a" else "c1", status="blocked", reason="x", blocked_at_tick=0)
+        self.game(30)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(len([c for c in self.cli.calls if c[0] == "retry"]), 1)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(len([c for c in self.cli.calls if c[0] == "retry"]), 2)
+
+    def test_stalls_and_deadlines_keep_being_retried_but_unknown_outcomes_and_retired_blocks_never(self):
+        self.s.max_seconds = None
+        self.cli.jobs["busy"] = job("busy", "c5")
+        rows = {
+            "stall": "objective_progress_stalled",
+            "late": "job_deadline_exceeded",
+            "lost": "action_outcome_unknown_reconcile_required",
+            "back": "world_rollback_requires_reconciliation",
+            "cell": "supply_cell_retired",
+        }
+        for index, (key, reason) in enumerate(rows.items()):
+            self.cli.jobs[key] = job(key, "c" + str(index), status="blocked", reason=reason, blocked_at_tick=0)
+            self.s.__dict__.setdefault("_auto_retries", {})[key] = {"successes": 0, "count": AUTO_RETRY_LIMIT}
+        for cycle in range(8):
+            self.game(30)
+            self.s._auto_retry(self.s._snapshot())
+            for key in ("stall", "late"):  # blocked again, each time on another state (no doubling)
+                self.cli.jobs[key].update(
+                    status="blocked", reason=rows[key], blocked_at_tick=self.cli.tick, evidence={"cycle": cycle}
+                )
+        keys = [c[2] for c in self.cli.calls if c[0] == "retry"]
+        self.assertGreaterEqual(keys.count("stall"), 3)  # past the 3 quick retries
+        self.assertGreaterEqual(keys.count("late"), 2)
+        self.assertEqual(set(keys), {"stall", "late"})
 
     def test_ready_nodes_behind_a_busy_lane_do_not_keep_the_autopilot_off(self):
         # eval-4177156614: research nodes for automation-2 and engine stayed ready behind
