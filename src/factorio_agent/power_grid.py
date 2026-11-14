@@ -144,25 +144,31 @@ def _plan_corridors(game, world_id, goal):
     return [[[x0, y0], [x1, y1]] for x0, y0, x1, y1 in rects if not (x0 <= goal[0] <= x1 and y0 <= goal[1] <= y1)]
 
 
-def plan_connection(game, builder, obs, destination, reserved=(), *, keep_out=()):
+def plan_connection(game, builder, obs, destination, reserved=(), *, keep_out=(), sources=None):
     """Pole hops from the supplied network to ``destination``; no new pole on ore, in a mining
     reservation, on another block or its planned hardware, on ``reserved`` tiles, or touching a
     ``keep_out`` area (``[[x0, y0], [x1, y1]]``, e.g. belt corridors a caller must keep free).
+    ``sources`` (``(x, y)`` positions) limits the supplied poles a chain may start from (a pole
+    relocation starts only from the poles that keep power without the moved pole).
 
     The site plan's belt corridors (:func:`_plan_corridors`) are kept out too; only when no hop
     route exists that way is the search repeated with them open."""
     corridors = _plan_corridors(game, obs.get("world_id"), (destination["x"], destination["y"]))
     if corridors:
-        result = _plan_connection(game, builder, obs, destination, reserved, list(keep_out) + corridors)
+        result = _plan_connection(game, builder, obs, destination, reserved, list(keep_out) + corridors, sources)
         if result.get("reason") != "no_bounded_pole_hop_connection":
             return result
-    return _plan_connection(game, builder, obs, destination, reserved, keep_out)
+    return _plan_connection(game, builder, obs, destination, reserved, keep_out, sources)
 
 
-def _plan_connection(game, builder, obs, destination, reserved, keep_out):
+def _plan_connection(game, builder, obs, destination, reserved, keep_out, allowed=None):
     networks = supplied_networks(obs)
     sources = [
-        e for e in obs["entities"] if e["name"] == "small-electric-pole" and e.get("electric_network_id") in networks
+        e
+        for e in obs["entities"]
+        if e["name"] == "small-electric-pole"
+        and e.get("electric_network_id") in networks
+        and (allowed is None or (e["position"]["x"], e["position"]["y"]) in allowed)
     ]
     if not sources:
         return {"ok": False, "reason": "no_supplied_pole_network"}

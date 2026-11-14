@@ -242,11 +242,13 @@ def unbuilt_external_keepouts(builder, obs, blocks, *, released_block=None, cros
     actual = built_keys(obs)
     hard = set()
     for name, block in blocks.items():
-        area = block.get("reserved_area")
+        # A block published beside the board blocks (the planned bus, ``bus_keepout_block``) names
+        # several reserved areas, or none: its hardware outside them is reserved all the same.
+        areas = list(block["reserved_areas"]) if "reserved_areas" in block else [block.get("reserved_area")]
         mining = block.get("resource") in RESOURCES | {"crude-oil"} and any(
             e["name"] in ("burner-mining-drill", "electric-mining-drill", "pumpjack") for e in block.get("entities", [])
         )
-        if not area or mining or name == released_block:
+        if not all(areas) or mining or name == released_block:
             continue
         missing = [e for e in block.get("entities", []) if (e["name"], *xy(e)) not in actual]
         if crossable_belts is not None:
@@ -254,8 +256,9 @@ def unbuilt_external_keepouts(builder, obs, blocks, *, released_block=None, cros
                 e
                 for e in missing
                 if e["name"] == "transport-belt"
-                and not (
+                and not any(
                     area[0][0] <= e["position"]["x"] <= area[1][0] and area[0][1] <= e["position"]["y"] <= area[1][1]
+                    for area in areas
                 )
             ]
             crossable_belts += outside
@@ -284,9 +287,62 @@ def unbuilt_external_keepouts(builder, obs, blocks, *, released_block=None, cros
         hard.update(
             (x, y)
             for x, y in cells
-            if not (x + 0.49 > area[0][0] and x - 0.49 < area[1][0] and y + 0.49 > area[0][1] and y - 0.49 < area[1][1])
+            if not any(
+                x + 0.49 > area[0][0] and x - 0.49 < area[1][0] and y + 0.49 > area[0][1] and y - 0.49 < area[1][1]
+                for area in areas
+            )
         )
     return hard
+
+
+BUS_STATE_FILE = "planned-main-bus.json"  # planned_bus.STATE_FILE (the bus imports this module)
+
+
+def tap_owner(port) -> str | None:
+    """The consumer of a planned-bus tap port (its name is ``owner:item``, ``planned_tap.tap_name``)."""
+    name = port.get("name") if isinstance(port, dict) else None
+    if not isinstance(name, str) or ":" not in name:
+        return None
+    return name.rpartition(":")[0] or None
+
+
+def bus_keepout_block(root, board, obs, *, owners=(), reserved=()):
+    """The published planned bus as one keepout block for :func:`unbuilt_external_keepouts`, or None.
+
+    The bus publishes beside ``board["blocks"]`` (``board["shared_main_bus"]``): its lane bands
+    were reserved, but its feed routes and the consumers' tap hardware outside them were invisible
+    to every other route (aud-1114-0703 seed 317419567: the inserter row's underground landed on
+    the bus feed belt (31.5,-102.5), the bus built its belt first and the row blocked for good).
+    Its planned surface belts are crossed underground like built ones, never an endpoint. A
+    consumer is not kept off its own tap hardware: entities of taps owned by ``owners`` and those
+    the caller's own plan holds (``reserved``) are left out.
+    """
+    bus = board.get("shared_main_bus") if isinstance(board, dict) else None
+    if not isinstance(bus, dict) or not bus.get("entities"):
+        return None
+    own = {(e["name"], *xy(e)) for e in reserved if isinstance(e, dict) and isinstance(e.get("position"), dict)}
+    owners = {o for o in owners if o}
+    if owners and root is not None:
+        path = Path(root) / BUS_STATE_FILE
+        try:
+            state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, ValueError):
+            state = {}
+        if state.get("world_id") == obs.get("world_id"):
+            for tap in state.get("taps", []):
+                if isinstance(tap, dict) and tap.get("owner") in owners:
+                    own.update((e["name"], *xy(e)) for e in tap.get("entities", []) if isinstance(e, dict))
+    entities = [e for e in bus["entities"] if (e["name"], *xy(e)) not in own]
+    mouths = {k[1:] for k in own if k[0] == "underground-belt"}
+    pairs = [
+        p
+        for p in bus.get("underground_pairs", [])
+        if isinstance(p, dict)
+        and tuple(p.get("input", p.get("first")) or ()) not in mouths
+        and tuple(p.get("output", p.get("last")) or ()) not in mouths
+    ]
+    areas = [r["area"] for r in bus.get("reservations", []) if isinstance(r, dict) and r.get("area")]
+    return {"reserved_areas": areas, "entities": entities, "underground_pairs": pairs}
 
 
 def _sealed_escape(source, destination, hard) -> dict | None:
@@ -302,8 +358,14 @@ def _sealed_escape(source, destination, hard) -> dict | None:
     return None
 
 
-def _production_keepouts(game, builder, obs, source, destination, reserved, bounds, *, released_unbuilt_receiver=None):
-    """Whole producer reservations, with only their exact bounded port aprons."""
+def _production_keepouts(
+    game, builder, obs, source, destination, reserved, bounds, *, released_unbuilt_receiver=None, bus_route=False
+):
+    """Whole producer reservations, with only their exact bounded port aprons.
+
+    Every other owner's planned-but-unbuilt hardware is kept out: the board blocks and, unless
+    this is the bus's own route (``bus_route``), the published bus (:func:`bus_keepout_block`).
+    """
     empty = {"ok": True, "hard": set(), "source_prefix": [], "destination_suffix": [], "aprons": []}
     root = getattr(getattr(game, "cfg", None), "runtime_dir", None)
     if root is None:
@@ -462,12 +524,22 @@ def _production_keepouts(game, builder, obs, source, destination, reserved, boun
             ):
                 return {"ok": False, "reason": "transport_unbuilt_receiver_release_identity_changed"}
             released = destination_owner
-        hard = unbuilt_external_keepouts(builder, obs, board.get("blocks", {}), released_block=released)
+        external = dict(board.get("blocks", {}))
+        bus_block = (
+            None
+            if bus_route
+            else bus_keepout_block(
+                root, board, obs, owners=(tap_owner(source), tap_owner(destination)), reserved=reserved
+            )
+        )
+        if bus_block is not None:
+            external["shared_main_bus"] = bus_block
+        hard = unbuilt_external_keepouts(builder, obs, external, released_block=released)
         # Cells hard only because of other blocks' planned surface belts: a route may tunnel
         # under such a belt (``planned_belts``), its surface belts stay off the neighbours.
         planned_belts = []
         planned_soft = hard - unbuilt_external_keepouts(
-            builder, obs, board.get("blocks", {}), released_block=released, crossable_belts=planned_belts
+            builder, obs, external, released_block=released, crossable_belts=planned_belts
         )
         if xy(source) in hard or xy(destination) in hard:
             return {"ok": False, "reason": "transport_endpoint_conflicts_with_unbuilt_external_plan"}
@@ -772,7 +844,15 @@ def _plan_connection(
     if not prospective.get("ok"):
         return prospective
     production = _production_keepouts(
-        game, builder, obs, source, destination, reserved, bounds, released_unbuilt_receiver=released_unbuilt_receiver
+        game,
+        builder,
+        obs,
+        source,
+        destination,
+        reserved,
+        bounds,
+        released_unbuilt_receiver=released_unbuilt_receiver,
+        bus_route=bus_route,
     )
     if not production.get("ok"):
         return production

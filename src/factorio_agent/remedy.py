@@ -178,7 +178,8 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
         ),
     ),
     "smelting_district": (ROUTE_RELAX_1,),
-    "planned_main_bus": (ROUTE_RELAX_1,),
+    # A built pole on a feed's forced end tile is relocated (pole_relocation) by the clear rung.
+    "planned_main_bus": (ROUTE_RELAX_1, CLEAR_REBUILD),
     "brick_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "steel_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     # The long coal and plate routes of a remote smelting block (remote_smelting.py).
@@ -392,15 +393,33 @@ def what_if(
     started = time.perf_counter()
     if planner is None:
         return {"fits": None, "reason": "no_pure_planner", "seconds": 0.0}
+    if (options or {}).get("repair_built_block"):  # built_block_repair.OPTION
+        # A repair acts (plan, build, guarded mine): no read-only plan can show it, the retry applies it.
+        return {"fits": None, "reason": "repair_applied_by_retry", "seconds": 0.0}
+    spec = postmortem.DRY_RUN[capability]
     factory = executors_factory or postmortem._default_executors
     sandbox = Path(tempfile.mkdtemp(prefix="whatif-"))
     try:
         postmortem.make_sandbox(Path(root), sandbox)
         game = postmortem.ReadOnlyGame(live, sandbox)
+        parameters = dict(job.get("parameters") or {})
         try:
             obs = game.observe()
             with postmortem._planning_budget(budget_seconds), applied(options):
-                result = planner(factory(game, catalog), obs, dict(job.get("parameters") or {}))
+                executors = factory(game, catalog)
+                if spec.step is not None and spec.saved is not None:
+                    try:
+                        saved = spec.saved(executors, obs, parameters)
+                    except (AttributeError, KeyError, TypeError):
+                        saved = None
+                    if postmortem.resumable(saved, obs):
+                        # A retry continues the saved build (a retry never discards it): its
+                        # next step is the answer, not a from-scratch plan that finds its own
+                        # half-built block in the way (aud-1114-0614 seed 375147794: the bus
+                        # re-planned to planned_bus_trunk_blocked 25 min while its saved plan
+                        # would have continued).
+                        return _resume_answer(capability, spec.step(executors, obs, parameters), started)
+                result = planner(executors, obs, parameters)
         except postmortem.ReadOnlyViolation as exc:
             return {"fits": None, "reason": f"read_only_violation: {exc}"[:200], "seconds": _since(started)}
         answer = fits(result)
@@ -411,6 +430,25 @@ def what_if(
         return out
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+CONTINUES = ("succeeded", "waiting", "running", "progress")
+
+
+def _resume_answer(capability: str, result, started) -> dict:
+    """The read-only step of a saved build: an action or a live status continues (fits), a block does not."""
+    if isinstance(result, Mapping) and result.get("type"):
+        return {"fits": True, "reason": f"saved_state_continues:{result.get('type')}"[:200], "seconds": _since(started)}
+    status = result.get("status") if isinstance(result, Mapping) else None
+    if status in CONTINUES:
+        reason = f"saved_state_{status}: {result.get('reason') or ''}"
+        return {"fits": True, "reason": reason[:200], "seconds": _since(started)}
+    if status in ("blocked", "failed"):
+        out = {"fits": False, "reason": str(result.get("reason") or status)[:200], "resumed": True}
+        out["needs"] = plan_needs.from_result(capability, dict(result, status="blocked"))
+        out["seconds"] = _since(started)
+        return out
+    return {"fits": None, "reason": "saved_state_step_without_answer", "seconds": _since(started)}
 
 
 def _since(started) -> float:

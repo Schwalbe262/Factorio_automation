@@ -674,6 +674,71 @@ class WhatIfTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), before)
         self.assertEqual(self.live.writes, [])
 
+    def saved_bus(self, step):
+        """aud-1114-0614 seed 375147794: the bus blocked in its build phase; a fresh prepare finds
+        its own half-built trunk in the way, the saved plan continues on retry."""
+        from types import SimpleNamespace
+
+        state = {"world_id": "w1", "phase": "build", "ok": True, "plan": {"entities": []}}
+        calls = []
+
+        def prepare(obs):
+            calls.append("prepare")
+            return {"ok": False, "reason": "planned_bus_trunk_blocked", "item": "iron-plate"}
+
+        def stepper(obs, parameters=None):
+            calls.append("step")
+            return step(obs)
+
+        bus = SimpleNamespace(prepare=prepare, step=stepper, state=state)
+        job = dict(capability="planned_main_bus", parameters={}, status="blocked", reason="x")
+        factory = lambda game, catalog: SimpleNamespace(planned_bus=bus)  # noqa: E731
+        return remedy.what_if(self.root, self.live, None, job, {}, executors_factory=factory), calls, state
+
+    def test_a_saved_build_answers_with_its_next_step_not_a_fresh_prepare(self):
+        build = {"type": "build", "name": "transport-belt", "position": {"x": -82.5, "y": 56.5}}
+        out, calls, _ = self.saved_bus(lambda obs: build)
+        self.assertIs(out["fits"], True)
+        self.assertEqual(out["reason"], "saved_state_continues:build")
+        self.assertEqual(calls, ["step"])
+        self.assertEqual(self.live.writes, [])
+
+    def test_a_saved_build_whose_next_step_is_blocked_does_not_fit(self):
+        blocked = {
+            "status": "blocked",
+            "reason": "reserved block placement is obstructed",
+            "evidence": {"entity": {"name": "transport-belt", "position": {"x": -82.5, "y": 52.5}}},
+        }
+        out, calls, _ = self.saved_bus(lambda obs: blocked)
+        self.assertIs(out["fits"], False)
+        self.assertEqual(out["reason"], "reserved block placement is obstructed")
+        self.assertIn("needs", out)
+        self.assertEqual(calls, ["step"])
+
+    def test_a_finished_or_foreign_saved_state_plans_afresh(self):
+        for phase, world in (("verified", "w1"), ("build", "other-world")):
+            from types import SimpleNamespace
+
+            calls = []
+            bus = SimpleNamespace(
+                prepare=lambda obs: calls.append("prepare") or {"ok": True},
+                step=lambda obs, p=None: calls.append("step") or {"type": "build"},
+                state={"world_id": world, "phase": phase},
+            )
+            job = dict(capability="planned_main_bus", parameters={}, status="blocked", reason="x")
+            out = remedy.what_if(
+                self.root, self.live, None, job, {}, executors_factory=lambda g, c: SimpleNamespace(planned_bus=bus)
+            )
+            self.assertIs(out["fits"], True)
+            self.assertEqual(calls, ["prepare"])
+
+    def test_every_controller_with_a_saved_state_reader_has_a_step(self):
+        from factorio_agent import postmortem
+
+        for capability, spec in postmortem.DRY_RUN.items():
+            if spec.saved is not None:
+                self.assertIsNotNone(spec.step, capability)
+
     def test_a_planner_that_would_act_has_no_answer(self):
         def prepare(obs):
             return remedy_game[0].act({"type": "build"})

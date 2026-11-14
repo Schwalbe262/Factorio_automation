@@ -69,6 +69,7 @@ from .core.deterministic_builder import FactoryBuilder, _plan
 from .core.deterministic_state import _atomic_json
 from .planning import preflight
 from .plate_supply import district_ports
+from .pole_relocation import PoleRelocation, pole_faults, tile_keep_out
 from .routing import VECTORS
 from .site.busframe import Bus
 from .site.transform import Transform, apply as apply_transform
@@ -709,7 +710,7 @@ class PlannedBus:
                 metrics.append({"item": feed["item"], **(result.get("route_metrics") or {})})
             if good:
                 return {"ok": True, "entities": es, "pairs": pairs, "metrics": metrics}
-        return {
+        failed = {
             "ok": False,
             "reason": "planned_bus_feed_route_failed",
             "failures": failures[-4:],
@@ -717,8 +718,37 @@ class PlannedBus:
             # feed-route blocks with evidence {}, cause unknowable after the run).
             "route_failures": "; ".join(f"{f['item']}: {f.get('reason')}" for f in failures[-4:])[:400],
         }
+        # A built pole on a feed's forced first or last tile (aud-1114-0526 seed 2446866888: the iron
+        # bank's bridge pole in front of the iron lane head) seals the route for good: a ``built``
+        # fault, which the clear rung repairs by relocating the pole (pole_relocation).
+        ends = list(approach.values())
+        for feed in feeds:
+            source = feed["source"]
+            if source.get("facing") in VECTORS:
+                dx, dy = VECTORS[source["facing"]]
+                ends.append((source["position"]["x"] + dx, source["position"]["y"] + dy))
+        faults = pole_faults(obs, ends)
+        if faults:
+            from .built_block_repair import needs as built_needs
+
+            failed["pole_faults"] = faults
+            failed["plan_needs"] = built_needs(OWNER, faults)
+        return failed
 
     # ----- execution ---------------------------------------------------------------
+    def _relocate_pole(self, obs, fault) -> dict | None:
+        """A pole relocation in progress continues; a new one starts only under the clear rung
+        (``built_block_repair.OPTION``). None: nothing to relocate (or the relocation finished)."""
+        from . import remedy
+        from .built_block_repair import OPTION
+
+        relocation = PoleRelocation(self.game, self.builder, self.catalog)
+        if fault is None:
+            return relocation.step(obs, None) if relocation.active(obs) else None
+        if not remedy.option(OPTION):
+            return None
+        return relocation.step(obs, fault, keep_out=tile_keep_out(fault["position"]))
+
     def _save(self):
         _atomic_json(self.path, self.state)
 
@@ -808,7 +838,14 @@ class PlannedBus:
 
     def step(self, obs, parameters=None) -> dict:
         if not self.state:
+            moved = self._relocate_pole(obs, None)
+            if moved is not None:
+                return moved
             prepared = self.prepare(obs)
+            if not prepared.get("ok") and prepared.get("pole_faults"):
+                moved = self._relocate_pole(obs, prepared["pole_faults"][0])
+                if moved is not None:
+                    return moved
             if not prepared.get("ok"):
                 return {"status": "blocked", **prepared}
             self.state = prepared

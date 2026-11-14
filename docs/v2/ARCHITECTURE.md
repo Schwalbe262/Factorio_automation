@@ -199,10 +199,13 @@ repairs a built block whose proof keeps failing although every planned entity st
 planner needed) after one game minute fuelled at water 0 / steam 0 is diagnosed (water pipe on a
 steam port, steam in a water pipe, water that never reaches the boiler), the water route is
 planned again with the old pipes' tiles free, republished in the builder state, the replaced
-pipes are mined (guarded) and the new ones built; at most `REPAIRS_MAX` per world. The belt
-case (a pole of ours on a planned lane head) is diagnosed (`belt_tile_faults`) but not repaired
-yet: the pole's consumers need a replacement link before its guarded mine. Trees and rocks are
-already cleared by every plan (`site/nature.py`).
+pipes are mined (guarded) and the new ones built; at most `REPAIRS_MAX` per world. A built pole
+of ours on a bus feed's forced end tile (lane-head approach, feed escape) is a `built` fault of
+`planned_main_bus`; its clear rung (what-if answered by the retry) relocates the pole
+(`pole_relocation`): what the pole feeds is read live, a replacement pole chain starts only from
+poles that keep power without it, the owner plans are republished first, the chain is built and
+verified, then the pole is mined guarded; machines only the pole covers refuse the relocation.
+Trees and rocks are already cleared by every plan (`site/nature.py`).
 
 Inside a job, `StarterExecutors.step` first runs shared upkeep before the
 capability's own controller: `pending_repair` and `_approved_initial_defense`

@@ -21,8 +21,11 @@ Faults:
   network); water in the pipes but none in the boiler (the network does not reach it).
 - belts (``belt_tile_faults``): a plan belt tile occupied by a different entity of ours
   (aud-1114-0526-2446866888: a power pole at (23.5,10.5) on the iron lane head). Diagnosis
-  only so far: the pole carries the bank's power, so its repair must first build a
-  replacement link (never cut a consumer off) before the guarded mine; not wired yet.
+  only so far.
+- route ends (``pole_relocation.pole_faults``): a built pole on a route's forced first or last
+  tile (the same seed: the bus feed found no corridor). The bus's clear rung relocates it
+  (``pole_relocation``): replacement link for what the pole feeds first, verified, then the
+  guarded mine; the owner's plan is republished before anything is built.
 """
 
 from __future__ import annotations

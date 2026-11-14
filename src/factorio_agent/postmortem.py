@@ -39,7 +39,7 @@ import re
 import shutil
 import time
 import traceback
-from typing import Callable
+from typing import Callable, Mapping
 
 from . import evidence_capture
 
@@ -206,11 +206,66 @@ def _planning_budget(seconds):
 @dataclass(frozen=True)
 class DryRun:
     """``prepare(ex, obs, parameters)``: the planner's pure plan; ``step``: its controller step without
-    starter upkeep; ``reset``: sandbox files removed first (resumable search cursors: a full sweep)."""
+    starter upkeep; ``reset``: sandbox files removed first (resumable search cursors: a full sweep);
+    ``saved(ex, obs, parameters)``: the job's saved in-progress state (``resumable``), which a retry
+    continues instead of planning afresh (``remedy.what_if`` then answers with the read-only step)."""
 
     prepare: Callable
     step: Callable | None = None
     reset: tuple = ()
+    saved: Callable | None = None
+
+
+# Phases after which a controller's saved state is no build in progress.
+DONE_PHASES = frozenset({"verified", "succeeded", "done", "complete", "completed", "retired"})
+
+
+def resumable(state, obs) -> bool:
+    """True for a saved state of this world with a build phase in progress (a retry continues it)."""
+    if not isinstance(state, Mapping) or not state:
+        return False
+    if state.get("world_id") != (obs or {}).get("world_id"):
+        return False
+    phase = state.get("phase")
+    return isinstance(phase, str) and bool(phase) and phase not in DONE_PHASES
+
+
+def _state_of(controller, *args):
+    """``controller.state`` (an attribute or a reader method); None when the controller has none."""
+    state = getattr(controller, "state", None)
+    if callable(state):
+        try:
+            state = state(*args)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+    return state
+
+
+def _row_saved(ex, obs, parameters):
+    from .production_rows import row_key
+
+    try:
+        key = row_key(parameters)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return _state_of(ex.production_rows, key)
+
+
+def _outpost_saved(ex, obs, parameters):
+    """A not-ready bank of the job's resource: the step continues its build (a pseudo build state)."""
+    state = _state_of(getattr(ex, "outposts", None))
+    if not isinstance(state, Mapping) or state.get("world_id") != (obs or {}).get("world_id"):
+        return None
+    resource = (parameters or {}).get("resource")
+    pending = [
+        b
+        for b in state.get("banks", [])
+        if isinstance(b, Mapping)
+        and (b.get("plan") or {}).get("resource") == resource
+        and not b.get("material_supply_id")
+        and not b.get("ready")
+    ]
+    return {"world_id": state.get("world_id"), "phase": "build"} if pending else None
 
 
 MINING_RATE_LUA = (
@@ -257,9 +312,11 @@ def _supply_prepare(ex, obs, parameters):
 
 
 DRY_RUN = {
-    "mining_outpost": DryRun(_outpost_prepare, lambda ex, obs, p: ex.outposts.step(obs, p)),
+    "mining_outpost": DryRun(_outpost_prepare, lambda ex, obs, p: ex.outposts.step(obs, p), saved=_outpost_saved),
     "planned_main_bus": DryRun(
-        lambda ex, obs, p: ex.planned_bus.prepare(obs), lambda ex, obs, p: ex.planned_bus.step(obs, p)
+        lambda ex, obs, p: ex.planned_bus.prepare(obs),
+        lambda ex, obs, p: ex.planned_bus.step(obs, p),
+        saved=lambda ex, obs, p: _state_of(ex.planned_bus),
     ),
     "smelting_district": DryRun(
         lambda ex, obs, p: ex.smelting.prepare(obs),
@@ -267,9 +324,15 @@ DRY_RUN = {
         reset=("smelting-district-search.json",),
     ),
     "produce": DryRun(
-        lambda ex, obs, p: ex.production_rows.prepare(obs, p), lambda ex, obs, p: ex.production_rows.step(obs, p)
+        lambda ex, obs, p: ex.production_rows.prepare(obs, p),
+        lambda ex, obs, p: ex.production_rows.step(obs, p),
+        saved=_row_saved,
     ),
-    "supply_cell": DryRun(_supply_prepare, lambda ex, obs, p: ex.supply_cell.step(obs, p)),
+    "supply_cell": DryRun(
+        _supply_prepare,
+        lambda ex, obs, p: ex.supply_cell.step(obs, p),
+        saved=lambda ex, obs, p: None if p.get("retire") or "retire_product" in p else _state_of(ex.supply_cell),
+    ),
     "dedicated_materials": DryRun(
         lambda ex, obs, p: ex.material_supply.prepare(obs, p), lambda ex, obs, p: ex.material_supply.step(obs, p)
     ),
@@ -289,12 +352,21 @@ DRY_RUN = {
     "engine_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "ENGINE_ROW")),
     "ammo_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "AMMO_ROW")),
     "steam_expansion": DryRun(lambda ex, obs, p: ex._steam_stage(p).prepare(obs)),
-    "power_coal_tap": DryRun(lambda ex, obs, p: ex.power_coal_tap.prepare(obs)),
+    "power_coal_tap": DryRun(
+        lambda ex, obs, p: ex.power_coal_tap.prepare(obs),
+        lambda ex, obs, p: ex.power_coal_tap.step(obs),
+        saved=lambda ex, obs, p: _state_of(ex.power_coal_tap),
+    ),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
-    "remote_smelting": DryRun(lambda ex, obs, p: ex.remote_smelting(p["resource"]).prepare(obs, p)),
+    "remote_smelting": DryRun(
+        lambda ex, obs, p: ex.remote_smelting(p["resource"]).prepare(obs, p),
+        lambda ex, obs, p: ex.remote_smelting(p["resource"]).step(obs, p),
+        saved=lambda ex, obs, p: _state_of(ex.remote_smelting(p["resource"])),
+    ),
     "oil_gathering": DryRun(
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).prepare(obs),
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).step(obs),
+        saved=lambda ex, obs, p: _state_of(ex._oil_source(p.get("source_key"))),
     ),
     # The rocket tail (rocket_stages / rocket_feed): the silo site and the stage-ii belt feed.
     "rocket_silo": DryRun(
