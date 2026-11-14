@@ -2134,7 +2134,7 @@ class Supervisor:
                 # feeds on the 4th attempt).
                 idle_run = not any(other["status"] in ACTIVE for other in jobs)
                 if not (idle_run and _replannable(reason) and quiet and seen.get("idle", 0) < IDLE_RETRY_LIMIT):
-                    if _replannable(reason):
+                    if _replannable(reason) or cleared_by is not None:
                         # Never blocked forever: new facts or the slow period re-plan it.
                         since = float(seen.get("first_seen", self.clock()))
                         retried = self._replan_retry(job, reason, context, since) or retried
@@ -2170,6 +2170,14 @@ class Supervisor:
                 >= AUTO_RETRY_STALL_SECONDS
             )
             if succeeded <= seen["successes"] and not stalled_long_enough:
+                if cleared_by is not None:
+                    # A clearing success is only the fast path: a new rule (a restart on new code)
+                    # or a newly published port clears it too, so new facts or the slow period
+                    # re-plan it (eval-1575138435: the engine belt row blocked at 360 min on a
+                    # missing steel source stayed blocked 140+ min after its route rule landed;
+                    # no produce/bus success came).
+                    since = float(job.get("blocked_at_time") or seen.get("first_seen", self.clock()))
+                    retried = self._replan_retry(job, reason, context, since) or retried
                 continue
             if self._control_command("retry", key):
                 seen.update(successes=succeeded, count=seen["count"] + 1, first_seen=self.clock())

@@ -348,6 +348,28 @@ class MaterialSupplyOnTrunk(unittest.TestCase):
         ledger = json.loads((self.root / mine_trunk.STATE_FILE).read_text())
         self.assertEqual(len(ledger["trunks"][first["trunk"]]["taps"]), 2)
 
+    def test_a_hub_whose_outputs_face_a_foreign_belt_is_not_chosen(self):
+        # eval-1575138435 (417 min): the chemistry hub's outputs faced the district coal line one
+        # tile ahead; every plastic site failed production_source_apron_not_empty for 40+ min.
+        first = self.controller("chemistry")
+        planned = first._prepare_trunk(
+            self.obs, "coal", "s", self.bank, json.loads((self.root / "pcb-board.json").read_text())
+        )
+        access = planned["hub"]["output_access"]
+        foreign = {(access[0]["x"], access[0]["y"])}
+
+        def check(game, builder, obs, entities, **kwargs):
+            hit = any(xy(e) in foreign for e in entities)
+            return {"ok": not hit, "reason": "entity_collision" if hit else None}
+
+        with patch("factorio_agent.material_supply.preflight", side_effect=check):
+            again = first._prepare_trunk(
+                self.obs, "coal", "s", self.bank, json.loads((self.root / "pcb-board.json").read_text())
+            )
+        self.assertTrue(again.get("ok"), again)
+        self.assertNotEqual(again["tap"]["along"], planned["tap"]["along"])
+        self.assertFalse(any((p["x"], p["y"]) in foreign for p in again["hub"]["output_access"]))
+
     def test_without_a_tap_site_the_second_group_is_a_recorded_exception(self):
         self.obs["entities"] = [e for e in self.obs["entities"] if e["name"] != "transport-belt"]
         self.new_bank.return_value = {"ok": False, "reason": "no_site"}

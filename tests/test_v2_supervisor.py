@@ -954,6 +954,44 @@ class MultiJobTests(Fixture):
         self.assertTrue(self.s._auto_retry(self.s._snapshot()))
         self.assertEqual([c for c in self.cli.calls if c[0] == "retry"], [["retry", "--key", "row"]])
 
+    def test_a_row_without_an_input_source_is_replanned_on_new_facts_or_the_slow_period(self):
+        # eval-1575138435: the engine belt row blocked at 360 min on a missing steel source; the
+        # route rule that finds the source landed later, no produce/bus success came, and the row
+        # stayed blocked 140+ min although its plan fitted.
+        from factorio_agent.supervisor import SITE_RETRY_CHANGE_SECONDS, SITE_RETRY_PERIOD_SECONDS
+
+        self.s.max_seconds = None
+        reason = "production_row_input_source_missing"
+        self.cli.jobs["research"] = job("research", "c5")  # another job runs
+        self.cli.jobs["row"] = job("row", "produce", status="blocked", reason=reason, blocked_at_time=self.clock())
+
+        def retries():
+            return [c for c in self.cli.calls if c[0] == "retry"]
+
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(SITE_RETRY_PERIOD_SECONDS - 10)
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(11)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))  # the slow period, no success
+        self.assertEqual(retries(), [["retry", "--key", "row"]])
+        # A newly published board: retried once the change interval passed.
+        self.cli.jobs["row"].update(status="blocked", reason=reason, blocked_at_time=self.clock())
+        (self.root / "pcb-board.json").write_text("{}", encoding="utf-8")
+        self.assertFalse(self.s._auto_retry(self.s._snapshot()))
+        self.clock.advance(SITE_RETRY_CHANGE_SECONDS + 1)
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertEqual(len(retries()), 2)
+        # A row blocked long before this supervisor started is re-planned at once.
+        self.cli.jobs["old"] = job(
+            "old",
+            "produce",
+            status="blocked",
+            reason=reason,
+            blocked_at_time=self.clock() - 2 * SITE_RETRY_PERIOD_SECONDS,
+        )
+        self.assertTrue(self.s._auto_retry(self.s._snapshot()))
+        self.assertIn(["retry", "--key", "old"], retries())
+
     def test_site_connection_blocker_is_retried_on_new_facts_and_periodically_without_limit(self):
         # eval-4177156614: brick_production blocked no_brick_furnace_block_with_complete_connections,
         # retried once after a success, then nothing for 20+ minutes.
