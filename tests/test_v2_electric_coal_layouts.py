@@ -24,6 +24,15 @@ from factorio_agent.power_layout import V2FactoryBuilder, compact_coal_cell
 # Vanilla electric-mining-drill vector_to_place_result (north-facing).
 ELECTRIC_DROP_VECTOR = (0, -1.85)
 DRILL = {"x": 66, "y": -29}
+# The plant's generating engine (power_grid.generating) on network 1.
+ENGINE = {
+    "name": "steam-engine",
+    "position": {"x": 0.5, "y": 0.5},
+    "unit_number": 900,
+    "energy": 0,
+    "status_name": "working",
+    "electric_network_id": 1,
+}
 
 
 def boundary_plan(position=DRILL):
@@ -95,7 +104,12 @@ class FakeBuilder:
         self.saves += 1
 
     def ensure_plan(self, obs, plan):
+        """Succeeds as if every plan pole stood: they appear in ``obs`` on the generating network 1."""
         self.ensured.append(plan)
+        have = {(e["name"], e["position"]["x"], e["position"]["y"]) for e in obs["entities"]}
+        for e in plan.get("entities", []):
+            if (e["name"], e["position"]["x"], e["position"]["y"]) not in have:
+                obs["entities"].append(dict(deepcopy(e), unit_number=500 + len(obs["entities"]), electric_network_id=1))
         return {"status": "succeeded"}
 
     def power_evidence(self, power, coal):
@@ -133,6 +147,7 @@ def world(plan):
         if e["name"] == "burner-inserter":
             row["unit_number"] = 2
         rows.append(row)
+    rows.append(dict(ENGINE))
     return {
         "world_id": "w",
         "tick": 1000,
@@ -342,8 +357,21 @@ class LegacyCutoverTests(unittest.TestCase):
             connection = FakeConnection(refused=[(67.5, -31.5)])
             h = Harness(directory, plan, connection)
             result = h.step(world(plan))
-            self.assertEqual(result, {"status": "blocked", "reason": "power_target_footprint_obstructed"})
+            self.assertEqual((result["status"], result["reason"]), ("blocked", "power_target_footprint_obstructed"))
+            self.assertEqual(result["plan_needs"]["kind"], "power")
             self.assertEqual(connection.goals, [(67.5, -31.5)])
+
+    def test_site_rung_gives_the_legacy_cell_the_whole_goal_ring(self):
+        from factorio_agent import remedy
+
+        with tempfile.TemporaryDirectory() as directory:
+            plan = legacy_plan()
+            connection = FakeConnection(refused=[(67.5, -31.5)])
+            h = Harness(directory, plan, connection)
+            with remedy.applied({electric_mining.POWER_RING_OPTION: True}):
+                action = h.step(world(plan))
+            self.assertGreater(len(connection.goals), 1)
+            self.assertEqual((action["type"], action["expected_entity_unit"]), ("mine", 1))
 
 
 class PowerJobCutoverWaitTests(unittest.TestCase):

@@ -64,6 +64,17 @@ def feed_keepouts(builder, obs) -> set:
     return keepout_tiles(starter_keepouts(Path(path).parent, obs, exclude=(FEED_BLOCK,)))
 
 
+def upgrade_tiles(builder, cell) -> set:
+    """Tile centres of the electric replacement's footprint outside the cell's burner drill.
+
+    (``electric_mining.replacement_for``: the 3x3 drill half a tile up-left of the 2x2 one.)
+    """
+    from .electric_mining import replacement_for
+
+    drill = cell["drill"]
+    return builder._occupied_by_plan([replacement_for(drill["position"])]) - builder._occupied_by_plan([drill])
+
+
 def keepout_entities(tiles) -> list:
     """One-tile placeholder rows for ``tiles`` so a route search treats them as occupied.
 
@@ -239,10 +250,17 @@ class V2FactoryBuilder(FactoryBuilder):
         # 2212603376, 1590659659: the feed drill was planned on a starter cell
         # whose drill was built later). Its own block is the old reservation.
         keep = feed_keepouts(self, obs)
+        # The electric drill that later replaces the cell's burner drill (electric_coal) needs a
+        # 3x3 footprint, one row and column wider: nothing built may stand there either (fleet
+        # aud-1114-0930 seed 3990724461: a starter cell's burner drill at (5,-69), placed before the
+        # feed was planned, stood in the footprint of the feed drill at (7,-69)).
+        built = self._occupied_by_plan(
+            [e for e in obs.get("entities", []) if e.get("type") != "resource" and isinstance(e.get("position"), dict)]
+        )
         cells = [
             cell
             for cell in fringe_coal_cells(self._coal_plan, self.coal_sites_richest_first())
-            if not self._occupied_by_plan(cell["entities"]) & keep
+            if not self._occupied_by_plan(cell["entities"]) & keep and not upgrade_tiles(self, cell) & (keep | built)
         ][:STARTER_COAL_CANDIDATES]
         if expired():
             return failure("starter_coal_planning_budget_exhausted")

@@ -120,6 +120,26 @@ REPAIRABLE = frozenset({"power"})
 # Declared per planner (ADDING_A_CAPABILITY.md: every new planner declares its relaxations).
 RELAXATIONS: dict[str, tuple[Rung, ...]] = {
     "power": (CLEAR_REBUILD,),
+    # electric_mining.ElectricCoal.plan; a dead plant after the cutover is a resumed step (replan):
+    # its answer is the dead_plant_restart fill. The footprint is fixed (same drop belt), so the
+    # site rung widens only the pole goal; the clear rung moves a pole of ours out of the footprint.
+    "electric_coal": (
+        Rung(
+            "site:electric_coal_power_ring",
+            "site",
+            {"electric_coal_power_ring": True},  # electric_mining.POWER_RING_OPTION
+            kinds=("power",),
+            note="the legacy coal cell tries every pole goal around the electric footprint, not one",
+        ),
+        Rung(
+            "clear:relocate_footprint_pole",
+            "clear",
+            {"electric_coal_relocate_pole": True},  # electric_mining.RELOCATE_POLE_OPTION
+            kinds=("preflight",),
+            cost_seconds=60.0,  # a short replacement pole chain, verified, then one guarded mine
+            note="a pole of ours in the electric coal footprint relocated (pole_relocation) before the cutover",
+        ),
+    ),
     "logistic_science": (
         Rung("layout:next_form", "layout", {"layout_rotate": 1}, note="the other green form (cluster/split) first"),
         ROUTE_RELAX_1,
