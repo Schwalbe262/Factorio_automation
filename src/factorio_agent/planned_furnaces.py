@@ -75,15 +75,17 @@ from __future__ import annotations
 import copy
 import json
 import math
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from factorio_agent.core.deterministic_builder import FactoryBuilder, _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 
-from . import planned_tap
+from . import plan_needs, planned_tap
 from .bandwidth_audit import SHORTFALL as BANDWIDTH_SHORTFALL
 from .bandwidth_audit import furnace_bank, rated_per_furnace
+from .bus_lane import OFF_BUS
 from .feed_head import rank_heads, split_feed_head, with_head  # noqa: F401 - split_feed_head re-exported
 from .board import blocks_without_bus, hardware_conflicts, planned_unbuilt_hardware
 from .planning import overlap, preflight
@@ -112,6 +114,11 @@ LAYOUT_POLICY = "planned-furnace-block-v1"
 ORIENTED = ("transport-belt", "underground-belt", "splitter", "inserter", "fast-inserter")
 # Growth evidence: items on one belt tile (both lanes) that count as backed up.
 BELT_BACKUP = 6
+BUS_TAP = "planned_bus_tap"  # an input taken from a built lane of the planned bus
+# Longest private belt from a material outlet to the block while the bus still has a lane for
+# the item (``lane_open``); longer, the material comes on the bus (``bus_lane_needs``).
+PRIVATE_ROUTE_TILES = 64
+PRIVATE_ROUTE_TOO_LONG = "private_material_route_longer_than_a_bus_lane"
 
 
 @dataclass(frozen=True)
@@ -380,11 +387,15 @@ class PlannedFurnaces:
         return {"ok": False, "reason": reason, "kind": self.kind.name, **extra}
 
     # ----- planning ---------------------------------------------------------
-    def _sources(self, board: dict, obs) -> dict:
-        """Registered material sources this block needs (raw for bricks, coal for both)."""
-        found = {}
+    def _sources(self, board: dict, obs, bus: dict) -> dict:
+        """Registered material sources this block routes privately (raw for bricks, coal for both).
+
+        An input the published bus carries is a bus tap instead (no registered source needed):
+        ``bus_inputs`` names those roles."""
+        found, on_bus = {}, []
         for role, key, item in (("coal", self.kind.coal_key, "coal"), ("raw", self.kind.raw_key, self.kind.raw)):
-            if key is None:
+            if key is None or planned_tap.carries(bus, item):
+                on_bus.append(role)
                 continue
             source, reason = registered_source(self.root, obs["world_id"], self.catalog.fingerprint, key, item)
             if source is None:
@@ -392,23 +403,24 @@ class PlannedFurnaces:
             if _taken(board, source["position"], self.kind.owner):
                 return self._fail(f"dedicated_material_{key}_output_taken", source=key)
             found[role] = source
-        return {"ok": True, **found}
+        return {"ok": True, "bus_inputs": on_bus, **found}
 
     def _wants(self, block, raw_source, coal_source):
         tap = block.tap_rect.centre()
 
-        def point(source):
+        def want(port, source):
+            if source is None:  # a bus tap: the port faces the tap band
+                return (port, tap, "in", block.input_side)
             p = source["position"]
-            return (p["x"], p["y"])
+            return (port, (p["x"], p["y"]), "in")
 
         def wants(plan):
             raw_port, coal_port, out_port = plan["ports"]
-            rows = [
-                (raw_port, tap, "in", block.input_side) if raw_source is None else (raw_port, point(raw_source), "in"),
-                (coal_port, point(coal_source), "in"),
+            return [
+                want(raw_port, raw_source),
+                want(coal_port, coal_source),
                 (out_port, block.output_point, "out", block.output_side),
             ]
-            return rows
 
         return wants
 
@@ -423,13 +435,13 @@ class PlannedFurnaces:
         bus = planned_tap.published(board, obs["world_id"])
         if bus is None:
             return self._fail("planned_furnaces_require_planned_bus")
-        sources = self._sources(board, obs)
+        sources = self._sources(board, obs, bus)
         if not sources["ok"]:
             return sources
         span = None
-        if kind.raw_key is None:
-            if not planned_tap.carries(bus, kind.raw):
-                return self._fail("planned_bus_has_no_trunk_for_raw_item", item=kind.raw)
+        if kind.raw_key is None and not planned_tap.carries(bus, kind.raw):
+            return self._fail("planned_bus_has_no_trunk_for_raw_item", item=kind.raw)
+        if sources["bus_inputs"]:
             span = planned_tap.max_span(self.game)
             if span is None:
                 return self._fail("planned_bus_underground_span_unknown")
@@ -461,7 +473,7 @@ class PlannedFurnaces:
 
         failures = []
         for block in blocks:
-            wants = self._wants(block, sources.get("raw"), sources["coal"])
+            wants = self._wants(block, sources.get("raw"), sources.get("coal"))
             for placement in orientations(build, (LENGTH, BANK_DEPTH), block.rect, wants)[:ORIENTATIONS]:
                 bank = dict(placement.plan, site_transform=placement.transform.to_dict())
                 result = self._connect(obs, board, bus, block, bank, sources, span, rates, others, unbuilt)
@@ -498,6 +510,7 @@ class PlannedFurnaces:
         # One row per allocation and reason (both turns usually fail alike), so the
         # job ledger shows which connection fails on every candidate.
         distinct = [r for i, r in enumerate(rows) if r not in rows[:i]][:8]
+        needs = bus_lane_needs(kind, bus, failures, blocks)
         return self._fail(
             f"no_{kind.name}_furnace_block_with_complete_connections",
             candidates=len(blocks),
@@ -513,7 +526,9 @@ class PlannedFurnaces:
                 },
                 # Facts whose change can turn a failure into a plan (supervisor retry rule).
                 "retry_when": ["material source published or moved", "neighbour plan built", "free site"],
+                "bus_inputs": sources["bus_inputs"],
             },
+            **({"plan_needs": needs} if needs is not None else {}),
         )
 
     def _connect(self, obs, board, bus, block, bank, sources, span, rates, others, unbuilt) -> dict:
@@ -532,8 +547,14 @@ class PlannedFurnaces:
         reserved_growth = {xy(e) for e in keepouts}
         raw_port, coal_port, out_port = bank["ports"]
         entities = list(bank["entities"])
-        routes, taps, ignored, connections, used = [], [], [], [], {}
-        if sources.get("raw") is None:
+        taps, ignored, connections, used = [], [], [], {}
+        inputs = (("raw", raw_port, kind.raw, kind.raw_key), ("coal", coal_port, "coal", kind.coal_key))
+        demand = {kind.raw: rates["raw_per_minute"], "coal": rates.get("coal_per_minute_at_max_catalog_usage", 0)}
+        by_role = {}
+        tapped_roles = [row for row in inputs if row[0] in sources["bus_inputs"]]
+        if tapped_roles:
+            # Shared materials on the bus: every bus-carried input is a tap at the block's slot,
+            # planned together (planned_tap.connect_inputs re-orders when one walls off another).
             tapped = planned_tap.connect_inputs(
                 self.game,
                 self.builder,
@@ -541,38 +562,50 @@ class PlannedFurnaces:
                 bus,
                 owner=kind.owner,
                 allocation=block,
-                inputs=[raw_port],
+                inputs=[port for _role, port, _item, _key in tapped_roles],
                 entities=entities + keepouts,
-                demand={kind.raw: rates["raw_per_minute"]},
+                demand={item: demand[item] for _role, _port, item, _key in tapped_roles},
                 span=span,
                 route=self.route,
             )
             if not tapped["ok"]:
                 return {k: tapped.get(k) for k in ("ok", "reason", "item", "failures")}
             entities = [e for e in tapped["entities"] if e["name"] != RESERVED_TILE]
-            raw_route = tapped["routes"][-1]
             taps, ignored = tapped["taps"], list(tapped["ignored_units"])
-            raw_from = tapped["sources"][kind.raw]
-            used["raw"] = {"item": kind.raw, "kind": "planned_bus_tap", "name": raw_from.get("name")}
-        else:
-            raw_from = sources["raw"]
-            raw_route = self.route(self.game, self.builder, obs, raw_from, raw_port, entities + keepouts)
-            if not raw_route.get("ok"):
-                return _route_failure(raw_route, kind.raw)
-            entities = merge_entities(entities, raw_route["entities"])
-            used["raw"] = _source_record(kind.raw_key, raw_from)
-        routes.append(raw_route)
-        connections.append(_connection(kind.raw, raw_from, raw_port, kind.owner))
-        coal_from = sources["coal"]
-        coal_route = self.route(
-            self.game, self.builder, obs, coal_from, coal_port, entities + keepouts, ignored_units=tuple(ignored)
-        )
-        if not coal_route.get("ok"):
-            return _route_failure(coal_route, "coal")
-        routes.append(coal_route)
-        entities = merge_entities(entities, coal_route["entities"])
-        connections.append(_connection("coal", coal_from, coal_port, kind.owner))
-        used["coal"] = _source_record(kind.coal_key, coal_from)
+            order = tapped.get("route_order") or [item for _role, _port, item, _key in tapped_roles]
+            routed = dict(zip(order, tapped["routes"]))
+            for role, _port, item, _key in tapped_roles:
+                source = tapped["sources"][item]
+                by_role[role] = (source, routed[item])
+                used[role] = {"item": item, "kind": BUS_TAP, "name": source.get("name")}
+        for role, port, item, key in inputs:
+            if role in by_role:
+                continue
+            source = sources[role]
+            found = self.route(
+                self.game, self.builder, obs, source, port, entities + keepouts, ignored_units=tuple(ignored)
+            )
+            if not found.get("ok"):
+                return _route_failure(found, item)
+            length = (found.get("route_metrics") or {}).get("length")
+            if isinstance(length, (int, float)) and length > PRIVATE_ROUTE_TILES and lane_open(bus, item):
+                # A long private belt crosses the base for one block (fleet long-1114-0612: 190-250
+                # tile stone/coal routes, 355-482 belts per brick block, stalled on belt supply);
+                # the bus has a lane for the item: the shared material comes on the bus instead.
+                return {
+                    "ok": False,
+                    "reason": PRIVATE_ROUTE_TOO_LONG,
+                    "item": item,
+                    "detail": f"longer than {PRIVATE_ROUTE_TILES} tiles",  # one evidence row per candidate
+                    "length": int(length),
+                }
+            entities = merge_entities(entities, found["entities"])
+            by_role[role] = (source, found)
+            used[role] = _source_record(key, source)
+        routes = [by_role[role][1] for role, *_ in inputs]
+        raw_route = by_role["raw"][1]
+        for role, port, item, _key in inputs:
+            connections.append(_connection(item, by_role[role][0], port, kind.owner))
         pole = next(e for e in bank["entities"] if e["name"] == "small-electric-pole")
         power = self.power(
             self.game,
@@ -900,6 +933,8 @@ class PlannedFurnaces:
         if not self._current(obs) or self.state.get("phase") != "verified":
             return None
         record = self.state["sources"]["coal"]
+        if record.get("kind") == BUS_TAP:
+            return self._bus_coal_proof(obs, record)
         source, reason = registered_source(
             self.root, obs["world_id"], self.catalog.fingerprint, self.kind.coal_key, "coal"
         )
@@ -923,6 +958,72 @@ class PlannedFurnaces:
             "coal_on_port_belt": items["coal"],
             "scope": "registered coal outlet feeds the furnace block's coal port; no sustained rate",
         }
+
+    def _bus_coal_proof(self, obs, record) -> dict | None:
+        """Coal from the block's own tap on the bus coal lane: the tap is built, pure coal on the port."""
+        tap = next((t for t in self.state.get("taps", []) if t.get("name") == record.get("name")), None)
+        if tap is None or not (tap.get("built") or planned_tap._present(obs, [tap])):
+            self.last_proof_failure = {"reason": "planned_coal_tap_not_built"}
+            return None
+        port = self.state["bank"]["ports"][1]
+        items = self._belt_items(self._live(obs), port["position"])
+        if set(items) - {"coal"} or items.get("coal", 0) <= 0:
+            self.last_proof_failure = {"reason": "coal_port_without_pure_coal", "items": items}
+            return None
+        return {
+            "tick": obs["tick"],
+            "coal_source": {"kind": BUS_TAP, "tap": tap["name"], **tap["port"]["position"]},
+            "coal_port": port["position"],
+            "coal_on_port_belt": items["coal"],
+            "scope": "the block's bus coal-lane tap feeds its coal port; no sustained rate",
+        }
+
+
+def lane_open(bus: dict | None, item: str) -> bool:
+    """The published bus does not carry ``item`` yet but has room for its lane: a reserved lane of
+    the item or a spare lane (the condition ``bus_lane.bus_lane_nodes`` proposes a lane on)."""
+    if not bus or item in ("iron-plate", "copper-plate") or planned_tap.carries(bus, item):
+        return False
+    lanes = [row for row in bus.get("lanes") or [] if isinstance(row, dict)]
+    return any(r.get("status") == "reserved" and r.get("material") == item for r in lanes) or any(
+        r.get("status") == "spare" for r in lanes
+    )
+
+
+def bus_lane_needs(kind: Kind, bus: dict | None, failures: list, blocks) -> dict | None:
+    """Needs of a block whose private material route failed on the candidates: a bus lane of it.
+
+    Shared raw materials travel on the main bus (owner rule): stone and coal reach the block
+    through taps at its slot once the bus carries them. ``bus_lane`` (provider job, proposed by
+    ``bus_lane.bus_lane_nodes`` on this needs reason) feeds the lane from the item's patch trunk.
+    The item failing on most candidates first (the recipe input before coal on a tie); None when
+    no private-route item failed or the bus has no room for its lane."""
+    private = [item for item in ((kind.raw if kind.raw_key else None), "coal") if item]
+    counts = Counter(f.get("item") for f in failures if f.get("item") in private)
+    ranked = sorted(
+        (item for item in private if counts[item] and lane_open(bus, item)),
+        key=lambda item: (-counts[item], private.index(item)),
+    )
+    if not ranked:
+        return None
+    item = ranked[0]
+    # The side of a candidate that failed on this item: its bus taps (planned first) fit, so the new
+    # lane must be tappable from there (a lane only one side can tap would strand the other inputs).
+    sides = {getattr(b, "name", None): getattr(b, "side", None) for b in blocks}
+    side = next(
+        (sides.get(f.get("allocation")) for f in failures if f.get("item") == item and sides.get(f.get("allocation"))),
+        next((s for s in sides.values() if s), None),
+    )
+    return plan_needs.make(
+        "route",
+        OFF_BUS,
+        block=kind.owner,
+        item=item,
+        side=side,
+        tried=counts[item],
+        rejected_by=Counter(f.get("reason") for f in failures if f.get("item") == item),
+        change=f"a built bus lane of {item} (bus_lane) the {kind.name} block taps at its slot",
+    )
 
 
 def _route_failure(route: dict, item: str) -> dict:

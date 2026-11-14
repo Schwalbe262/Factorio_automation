@@ -1,6 +1,7 @@
 """Site-planned steel and brick furnace blocks (planned_furnaces.py) on fresh maps in every orientation."""
 
 import json
+import math
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,10 +9,13 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from test_v2_green_site import KINDS as WORLD_KINDS
-from test_v2_green_site import WORLD, World
+from test_v2_green_site import WORLD, World, feed_route
 from test_v2_smelting_paired_district import bfs_route
 
+from factorio_agent import bus_lane
+from factorio_agent import plan_needs
 from factorio_agent import planned_bus as pb
+from factorio_agent import planned_furnaces as pf
 from factorio_agent import planned_tap as pt
 from factorio_agent import progression as pg
 from factorio_agent.core.deterministic_builder import FactoryBuilder
@@ -81,8 +85,11 @@ def inside(area, rect):
     return rect.x0 <= x0 and rect.y0 <= y0 and x1 <= rect.x1 and y1 <= rect.y1
 
 
-def material_sources(world):
-    """Coal and stone outlets of the dedicated banks, one on each side of the bus, away from it."""
+def material_sources(world, far=None):
+    """Coal and stone outlets of the dedicated banks beside the bus's left edge, near the first
+    district blocks (short private belts, planned_furnaces.PRIVATE_ROUTE_TILES).
+
+    ``far``: ``{key: (along, lateral)}`` moves outlets (a patch across the base)."""
     view = pt.BusView(world.board()["shared_main_bus"])
     half = view.bus.half
 
@@ -99,10 +106,11 @@ def material_sources(world):
             "material_supply_id": f"dedicated-material:{WORLD}:{item}",
         }
 
+    where = {"coal": (24, -(half + 22)), "brick-coal": (26, -(half + 22)), "stone": (40, -(half + 22))}
+    where.update(far or {})
     sources = {
-        "coal": source("coal", 6, -(half + 30), "coal"),
-        "brick-coal": source("coal", 8, -(half + 30), "brick-coal"),
-        "stone": source("stone", 40, half + 30, "stone"),
+        key: source("stone" if key == "stone" else "coal", along, lateral, key)
+        for key, (along, lateral) in where.items()
     }
     data = {"world_id": WORLD, "catalog_fingerprint": "cat", "sources": sources}
     (world.root / "material-sources.json").write_text(json.dumps(data), encoding="utf-8")
@@ -288,12 +296,19 @@ class SitePlanTests(unittest.TestCase):
             evidence = result["evidence"]
             self.assertEqual(evidence["candidates"], result["candidates"])
             self.assertTrue(evidence["failures"])
+            sealed = [f for f in evidence["failures"] if f["item"] == "coal"]
+            self.assertTrue(sealed)
             self.assertEqual(
-                {(f["item"], f["reason"], f["port"]) for f in evidence["failures"]},
-                {("coal", "route_port_escape_reserved_by_unbuilt_plan", "source")},
+                {(f["reason"], f["port"]) for f in sealed}, {("route_port_escape_reserved_by_unbuilt_plan", "source")}
             )
-            # One row per candidate, not one per orientation.
-            self.assertEqual(len(evidence["failures"]), len({f["allocation"] for f in evidence["failures"]}))
+            # Candidates across the bus from the stone outlet fail on its long private belt instead.
+            self.assertLessEqual(
+                {f["reason"] for f in evidence["failures"] if f["item"] != "coal"}, {pf.PRIVATE_ROUTE_TOO_LONG}
+            )
+            # One row per candidate and reason, not one per orientation.
+            self.assertEqual(
+                len(evidence["failures"]), len({(f["allocation"], f["item"]) for f in evidence["failures"]})
+            )
             self.assertEqual(evidence["sources"]["coal"]["key"], "brick-coal")
             self.assertEqual(evidence["sources"]["raw"]["x"], sources["stone"]["position"]["x"])
 
@@ -302,6 +317,168 @@ class SitePlanTests(unittest.TestCase):
         board = world.board()
         board["connections"] = connections
         (world.root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+
+
+CORRIDOR_TILES = 100  # longest corridor the stand-in router finds through a built base
+
+
+def base_route(world):
+    """The router as on the fleet seeds: the bus band is closed to every route that is not the
+    bus's own (``transport.bus_band``), and a corridor longer than ``CORRIDOR_TILES`` through the
+    built base finds no clean trunk corridor (fleet long-1114-0612: every 100-250 tile coal/stone
+    route of the failing candidates, ``no_clean_trunk_corridor``)."""
+    band = world.bus_rect
+
+    def plan(game, builder, obs, source, destination, reserved=(), **kwargs):
+        ay, by = xy(source)[1], xy(destination)[1]
+        lo, hi = math.floor(min(ay, by)) - 49, math.ceil(max(ay, by)) + 49  # the stand-in's search box
+        walls = [
+            {"name": "stone-wall", "position": {"x": x + 0.5, "y": y + 0.5}}
+            for x in range(band.x0, band.x1)
+            for y in range(max(band.y0, lo), min(band.y1, hi))
+        ]
+        found = route(
+            game, builder, obs, source, destination, list(reserved) + ([] if kwargs.get("bus_route") else walls)
+        )
+        if not found.get("ok") or found["route_metrics"]["length"] > CORRIDOR_TILES:
+            return {"ok": False, "reason": "no_clean_trunk_corridor"}
+        return found
+
+    return plan
+
+
+class SharedMaterialsOnTheBusTests(unittest.TestCase):
+    """Fleet long-1114-0612 (4 seeds, 240 game minutes): no seed got past steel/brick. Each block
+    routed a private belt from its patch's outlet across the base (coal 90+ tiles west of the bus
+    on 649402784 and 3371980627; stone 190-250 tiles away on 2121061131): every candidate failed
+    ``no_clean_trunk_corridor`` / a sealed outlet, and the plans that fitted needed 355-482 belts
+    and stalled on belt supply. Shared raw materials travel on the main bus instead."""
+
+    FAR = {"coal": (-40, -110), "brick-coal": (-38, -110), "stone": (-40, 110)}
+
+    def world(self, directory):
+        world = World(Path(directory), None)
+        sources = material_sources(world, far=self.FAR)
+        # The dedicated banks publish their outlets as board output ports (bus_lane feed sources).
+        board = world.board()
+        for key in ("coal", "stone"):
+            port = {k: sources[key][k] for k in ("item", "direction", "facing", "kind", "position")}
+            board["blocks"][f"{key}_mining"] = {"reserved_area": None, "entities": [], "ports": [port]}
+        world.write_board(board["blocks"], bus=board["shared_main_bus"])
+        return world, sources
+
+    def planner(self, world, kind):
+        planner = controller(world, kind)
+        planner.route = base_route(world)
+        return planner
+
+    def provide(self, world, result):
+        """The provider job the block's needs propose (``bus_lane_nodes``), run to success."""
+        needs = plan_needs.from_result(KINDS[result["kind"]].owner, result)
+        job = {"capability": KINDS[result["kind"]].owner, "status": "blocked", "needs": needs}
+        lanes = bus_lane.receipt(world.root, world.obs)
+        nodes = bus_lane.bus_lane_nodes([job], [], {"bus_lanes": lanes}, {bus_lane.CAPABILITY: {}})
+        self.assertEqual(len(nodes), 1, (needs, lanes))
+        self.build_lane(world, nodes[0]["parameters"])
+        return nodes[0]["parameters"]
+
+    def build_lane(self, world, parameters):
+        """bus_lane for ``parameters`` planned, built (stand-in feed route) and joined to the bus."""
+        item = parameters["item"]
+
+        def feed(game, builder, obs, source, destination, reserved=(), **kwargs):
+            return feed_route(game, builder, obs, source, destination, reserved)
+
+        builder = Mock(_occupied_by_plan=GEOMETRY._occupied_by_plan)
+        builder.ensure_plan.return_value = {"status": "succeeded"}
+        lane = bus_lane.BusLane(
+            world.game,
+            builder,
+            SimpleNamespace(fingerprint="cat"),
+            outposts=SimpleNamespace(state={"world_id": WORLD, "banks": []}),
+            item=item,
+            route=feed,
+            check=lambda *a, **k: OK,
+        )
+        self.assertEqual(lane.step(world.obs, parameters)["status"], "waiting")
+        tail = lane.state["trunk"]["tail"]
+        built = [e for e in world.obs["entities"]]
+        for e in lane.state["plan"]["entities"]:
+            built.append(dict(e, belt_inventory={item: 3} if e["position"] == tail else {}))
+        world.obs["entities"] = world.built(built)
+        result = lane.step(world.obs, parameters)
+        self.assertEqual(result["status"], "succeeded", (result, lane.last_proof_failure))
+        self.assertTrue(pt.carries(world.board()["shared_main_bus"], item))
+
+    def test_far_coal_is_no_dead_end_but_a_bus_lane_need(self):
+        with TemporaryDirectory() as directory:
+            world, _sources = self.world(directory)
+            result = self.planner(world, "steel").prepare(world.obs)
+            # The fleet's failure, reproduced: every candidate's coal belt finds no corridor.
+            self.assertEqual(result["reason"], "no_steel_furnace_block_with_complete_connections")
+            self.assertEqual(
+                {(f["item"], f["reason"]) for f in result["failures"]}, {("coal", "no_clean_trunk_corridor")}
+            )
+            # The missing connection is a need with a provider job: a coal lane on the bus.
+            needs = plan_needs.from_result("steel_supply", result)
+            self.assertEqual((needs["kind"], needs["reason"], needs["item"]), ("route", bus_lane.OFF_BUS, "coal"))
+            self.assertEqual(self.provide(world, result)["item"], "coal")
+
+    def test_a_long_private_belt_waits_for_the_bus_lane_instead(self):
+        # The plans that fitted on the fleet ran 190-250 tile belts (355-482 belts per brick
+        # block) and stalled on belt supply: with a lane free on the bus, they are refused.
+        with TemporaryDirectory() as directory:
+            world, _sources = self.world(directory)
+            steel = self.planner(world, "steel")
+            steel.route = route  # every corridor found, however long
+            result = steel.prepare(world.obs)
+            self.assertEqual({f["reason"] for f in result["failures"]}, {pf.PRIVATE_ROUTE_TOO_LONG})
+            self.assertEqual(result["plan_needs"]["item"], "coal")
+
+    def test_steel_then_brick_take_stone_and_coal_from_bus_taps_at_their_slot(self):
+        with TemporaryDirectory() as directory:
+            world, sources = self.world(directory)
+            for kind, items, provided in (
+                ("steel", ["iron-plate", "coal"], ["coal"]),
+                ("brick", ["stone", "coal"], ["stone"]),  # brick: stone first (both failed; raw first)
+            ):
+                with self.subTest(kind=kind):
+                    state = self.planner(world, kind).prepare(world.obs)
+                    lanes = []
+                    while not state["ok"] and len(lanes) < 3:
+                        lanes.append(self.provide(world, state)["item"])
+                        state = self.planner(world, kind).prepare(world.obs)
+                    self.assertEqual(lanes, provided)
+                    self.assertTrue(state["ok"], (state.get("reason"), state.get("failures")))
+                    owner = KINDS[kind].owner
+                    self.assertEqual(sorted(t["item"] for t in state["taps"]), sorted(items))
+                    self.assertTrue(all(t["owner"] == owner for t in state["taps"]))
+                    self.assertEqual({s["kind"] for s in state["sources"].values()}, {pf.BUS_TAP})
+                    # No belt from a patch outlet: every connection starts at one of the block's taps.
+                    far = {(s["position"]["x"], s["position"]["y"]) for s in sources.values()}
+                    self.assertFalse({(c["source"]["x"], c["source"]["y"]) for c in state["connections"]} & far)
+                    self.assertTrue(all(length <= 40 for length in _lengths(state)), _lengths(state))
+                    self.assertEqual(state["taps"][0]["side"], world.site.allocation(state["allocation"], WORLD).side)
+
+    def test_a_built_coal_tap_proves_the_coal_supply(self):
+        with TemporaryDirectory() as directory:
+            world, _sources = self.world(directory)
+            self.build_lane(world, {"item": "coal", "side": "left"})
+            steel = self.planner(world, "steel")
+            steel.state = dict(steel.prepare(world.obs), phase="verified")
+            port = steel.state["bank"]["ports"][1]
+            obs = dict(world.obs, entities=[{"name": "transport-belt", "position": port["position"]}])
+            self.assertIsNone(steel.coal_proof(obs))
+            self.assertEqual(steel.last_proof_failure["reason"], "planned_coal_tap_not_built")
+            for tap in steel.state["taps"]:
+                tap["built"] = True
+            obs["entities"][0]["belt_inventory"] = {"coal": 2}
+            evidence = steel.coal_proof(obs)
+            self.assertEqual(evidence["coal_source"]["kind"], pf.BUS_TAP)
+
+
+def _lengths(state):
+    return [m.get("length", 0) for m in state["route_metrics"] if m]
 
 
 class StepTests(unittest.TestCase):

@@ -12,8 +12,18 @@ with 6 reserved slots per row (30 x 12 tiles), 1 built per row (2 furnaces,
 block (`returns_to_bus=True`), turned by `site.fit.orientations` so iron faces
 the tap band, coal faces the dedicated `coal` outlet and steel leaves on the
 bus-edge side. Iron: a planned-bus tap planned with the block
-(`planned_tap.connect_inputs`); coal: a route from `material-sources.json`
-`coal` (bricks: `stone` and `brick-coal`), recorded in board `connections`.
+(`planned_tap.connect_inputs`); coal (bricks: stone and coal): a tap too once the
+bus carries it (taps of all bus inputs planned together), else a private route
+from `material-sources.json` `coal` (bricks: `stone` and `brick-coal`), recorded
+in board `connections`. Shared raw materials travel on the bus: a private route
+longer than `PRIVATE_ROUTE_TILES` (64) is refused while the bus has a lane for the
+item (`lane_open`), and when every candidate fails on a private route the failure
+carries `plan_needs` reason `shared_material_not_on_bus` (item, side of a candidate
+whose taps fit), so `bus_lane.bus_lane_nodes` proposes `bus_lane` for that item
+(fleet long-1114-0612: coal/stone routes of 100-250 tiles failed
+`no_clean_trunk_corridor` on every candidate, or fitted with 355-482 belts and
+stalled on belt supply). With a coal tap, `steel_coal_supply`'s proof is the built
+tap and pure coal on the coal port.
 Growth tiles are hard for every route and the power bridge. The whole plan is
 published on board block `steel_production` (`brick_production`) and the tap in
 the bus state before anything is built.
