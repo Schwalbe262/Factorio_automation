@@ -1,6 +1,7 @@
 """Run N independent hidden-window maps in parallel and read them in one report.
 
 Usage: python -B tools/fleet.py start --count N [--seeds a,b,c | random] [--minutes M] [--name PREFIX]
+       python -B tools/fleet.py start --from FLEET:SEED[,FLEET:SEED...] --minutes M [--name PREFIX]
        python -B tools/fleet.py status [--name NAME] [--json]
        python -B tools/fleet.py report [--name NAME] [--window 0-30] [--json]
        python -B tools/fleet.py stop [--name NAME]
@@ -106,6 +107,18 @@ RELEASE_SETTLE_SECONDS = 2.0
 STALL_FLOOR_MINUTES = 10.0
 STALL_PACE_FACTOR = 5.0
 STALL_MIN_GAME_MINUTES = 2.0
+
+# Branch copies (``start --from``): top-level entries of a source run that are not copied. Process
+# records, the controller start snapshot and the client folder belong to the source's processes;
+# run.json is rewritten for the new folder; post-mortems describe the source.
+BRANCH_SKIP_TOP = {
+    "run.json",
+    "server.json",
+    "supervisor-process.json",
+    "controller-config.json",
+    "agent-client",
+    "postmortem",
+}
 
 
 # ---------------------------------------------------------------- pure parts
@@ -292,6 +305,8 @@ def stall_limit_minutes(fleet, ticks, now):
     paces = []
     for run in fleet.get("runs", []):
         tick, started = ticks.get(run.get("seed")), run.get("started_at")
+        if type(tick) is int:
+            tick -= run.get("checkpoint_tick") or 0  # a branch plays from its checkpoint, not from tick 0
         if (
             type(tick) is int
             and isinstance(started, (int, float))
@@ -320,6 +335,112 @@ def stalled_runs(fleet, ticks, memory, now):
         elif now - seen[1] >= 60 * limit:
             due.append(run)
     return due, limit
+
+
+def parse_sources(text):
+    """``fleet:seed[,fleet:seed...]`` -> [(fleet, seed text)] for ``start --from``."""
+    sources = []
+    for part in (text or "").split(","):
+        fleet, _, seed = part.strip().rpartition(":")
+        if not fleet or not seed.strip():
+            raise ValueError(f"--from wants fleet:seed[,fleet:seed...], got {part.strip()!r}")
+        sources.append((fleet.strip(), seed.strip()))
+    if not sources:
+        raise ValueError("--from wants at least one fleet:seed")
+    return sources
+
+
+def _checkpoint_ignore(source):
+    """copytree ignore of a branch copy: the source's own process records, locks, controller start
+    snapshot, post-mortems, client folder and the server's write-data (all recreated by the start)."""
+    source = Path(source).resolve()
+
+    def ignore(directory, names):
+        here = Path(directory).resolve()
+        skip = {n for n in names if n.endswith(".lock")}
+        if here == source:
+            skip |= set(names) & BRANCH_SKIP_TOP
+        if here == source / "vanilla":
+            skip |= set(names) & {"server-data"}
+        return skip
+
+    return ignore
+
+
+def copy_checkpoint(source, target, *, server_port, rcon_port, branched_from):
+    """Copy a safe-stopped run (save + state files) into the new folder ``target``; the source is only read.
+
+    ``run.json`` is rewritten for the new folder (root, ports, a new RCON password) and records
+    ``branched_from``; world identity (``world-settings.json`` and ``storage`` in the save) is kept as is:
+    the branch is the same world at the same tick, so every world-bound query stays bound."""
+    import secrets
+
+    source, target = Path(source).resolve(), Path(target).resolve()
+    shutil.copytree(source, target, ignore=_checkpoint_ignore(source))  # refuses an existing target
+    run = _read(source / "run.json", {}) or {}
+    run.update(
+        root=str(target),
+        server_port=server_port,
+        rcon_port=rcon_port,
+        rcon_password=secrets.token_urlsafe(24),
+        branched_from=branched_from,
+    )
+    _atomic_json(target / "run.json", run)
+    return target
+
+
+def checkpoint_facts(root):
+    """What a branch needs from a stopped run, or ValueError: why its save cannot be continued.
+
+    The world must have been paused by the lifecycle safe stop (``lifecycle-pause.json`` phase
+    ``paused`` for the run's world) and the save written after that pause; otherwise the state files
+    may be newer than the save and the branch would start in a tick rollback."""
+    from factorio_agent.core.factorio import NO_MOD_SAVE_NAME
+
+    root = Path(root)
+    world = (_read(root / "world-settings.json", {}) or {}).get("world_id")
+    marker = _read(root / "lifecycle-pause.json", {}) or {}
+    save = root / "vanilla" / "saves" / NO_MOD_SAVE_NAME
+    if not (root / "run.json").exists() or not world:
+        raise ValueError(f"{root} is not a started v2 runtime (run.json / world-settings.json)")
+    if marker.get("kind") != "lifecycle-operator-pause-v1" or marker.get("phase") != "paused":
+        raise ValueError(f"{root.name}: no safe-stop pause marker; the save may be older than the state")
+    if marker.get("world_id") != world:
+        raise ValueError(f"{root.name}: pause marker is for another world")
+    if not save.exists() or save.stat().st_mtime_ns < (root / "lifecycle-pause.json").stat().st_mtime_ns:
+        raise ValueError(f"{root.name}: no save written after the safe-stop pause")
+    if actor_client.mode(root) != actor_client.NONE:
+        raise ValueError(f"{root.name}: only client-free (--client none) runs can be branched")
+    if death_stopped(root):
+        # Its controller state says "stopped after an actor death": the watcher would end the branch at once.
+        raise ValueError(f"{root.name}: the supervisor stopped after an unrecovered actor death")
+    jobs = (_read(root / "jobs.json", {}) or {}).get("jobs", {})
+    tick = marker.get("paused_tick") if type(marker.get("paused_tick")) is int else run_tick(root)
+    return dict(
+        world_id=world,
+        tick=tick,
+        # Unknown outcomes stay in jobs.json untouched: the branch's supervisor reconciles them, never retries.
+        pending_actions=sorted(
+            k
+            for k, j in jobs.items()
+            if j.get("pending_action") is not None or "outcome_unknown" in str(j.get("reason", ""))
+        ),
+        blocked=sorted(
+            f"{j.get('capability')}: {normalize_reason(j.get('reason'))}"
+            for j in jobs.values()
+            if j.get("status") == "blocked"
+        ),
+    )
+
+
+def branch_note(runs):
+    """One header note naming the checkpoints of branched runs ('' when none is branched)."""
+    rows = [r.get("branched_from") for r in runs if r.get("branched_from")]
+    if not rows:
+        return ""
+    head = ", ".join(f"{b.get('fleet')}:{b.get('seed')}@{b.get('minute')}" for b in rows[:4])
+    more = f" +{len(rows) - 4}" if len(rows) > 4 else ""
+    return f" | BRANCHED from checkpoints {head}{more} (TEST runs, never proof; milestones in absolute game min)"
 
 
 def death_stopped(root):
@@ -486,9 +607,10 @@ def format_report(fleet, runs, agg, *, window_text, top=8):
     heads = [h for h, _ in COLUMNS]
     lines = [
         f"fleet {fleet.get('name')} commit {fleet.get('commit') or '?'}: {len(runs)} runs,"
-        f" target {fleet.get('target_minutes') or '-'} game min,"
+        f" target {'+' if fleet.get('branch') else ''}{fleet.get('target_minutes') or '-'} game min,"
         f" critical-path window {window_text} min; milestone cells = game minute the step succeeded"
     ]
+    lines[0] += branch_note(fleet.get("runs") or [])
     tests = [r for r in runs if r.get("test_mode")]
     if tests:
         lines[0] += f" | TEST MODE client_free in {len(tests)} runs (script-credited hand-craft triggers; not a proof)"
@@ -960,6 +1082,135 @@ class Fleet:
             self.spawn_watcher(name)
         return self.load(name)
 
+    def branch_source(self, fleet_name, seed):
+        """The checkpoint of one stopped fleet run for ``start --from`` (ValueError/RuntimeError: why not)."""
+        fleet, run = self.find_run(fleet_name, seed)
+        root = Path(run["runtime"])
+        live = [k for k, v in run_records(root).items() if alive(v)]
+        if live:
+            raise RuntimeError(f"{fleet['name']}:{run['seed']} is not stopped (live {', '.join(live)})")
+        facts = checkpoint_facts(root)
+        return dict(
+            fleet=fleet["name"],
+            seed=run["seed"],
+            runtime=str(root),
+            tick=facts["tick"],
+            minute=round(facts["tick"] / TICKS_PER_MINUTE, 1) if type(facts["tick"]) is int else None,
+            commit=fleet.get("commit"),
+            world_id=facts["world_id"],
+            pending_actions=facts["pending_actions"],
+            blocked=facts["blocked"],
+        )
+
+    def branch(self, sources, minutes, name, *, force=False, parallel=4, stagger=10.0, out=print):
+        """New runs that continue stopped runs' saves with THIS code (``start --from``; docs/v2/README.md).
+
+        Each source is copied into ``runtime/v2/<name>-<seed>`` (``copy_checkpoint``; the source is only
+        read), gets fresh ports and is started by the ordinary lifecycle start (server from the copied save,
+        same world identity, ``--planner none`` supervisor resuming jobs.json). ``minutes`` counts game
+        minutes from the checkpoint tick (per run ``target_tick``). Branch runs are TEST runs (never proof)."""
+        if not minutes:
+            raise ValueError("start --from needs --minutes (game minutes after the checkpoint)")
+        found = [self.branch_source(f, s) for f, s in parse_sources(sources)]
+        seeds = [b["seed"] for b in found]
+        if len(set(seeds)) != len(seeds):
+            raise ValueError("two checkpoints share a seed; branch them into separate fleets (--name)")
+        name = name or time.strftime("branch-%Y%m%d-%H%M%S")
+        path = self.manifest_path(name)
+        if path.exists():
+            raise FileExistsError("fleet manifest exists: " + str(path))
+        cost = self.cost()
+        fits, _why, _host = self.release_for_capacity(len(found), cost, out=out)
+        if len(found) > fits and not force:
+            raise RuntimeError(f"{len(found)} runs exceed the {fits} this machine can hold now; use fewer or --force")
+        roots = [self.base / "v2" / f"{name}-{seed}" for seed in seeds]
+        taken = [str(r) for r in roots if r.exists()]
+        if taken:
+            raise FileExistsError("runtime folder already exists: " + ", ".join(taken))
+        pairs = allocate_ports(len(found), registered_ports(self.base))
+        self.dir.mkdir(parents=True, exist_ok=True)
+        runs = []
+        for source, root, (udp, tcp) in zip(found, roots, pairs):
+            origin = {k: source[k] for k in ("fleet", "seed", "runtime", "tick", "minute", "commit", "world_id")}
+            runs.append(
+                dict(
+                    seed=source["seed"],
+                    runtime=str(root),
+                    server_port=udp,
+                    rcon_port=tcp,
+                    status="planned",
+                    branched_from=origin,
+                    checkpoint_tick=source["tick"] or 0,
+                    target_tick=int((source["tick"] or 0) + minutes * TICKS_PER_MINUTE),
+                    pending_actions_at_branch=source["pending_actions"],
+                    blocked_at_branch=source["blocked"],
+                )
+            )
+        manifest = dict(
+            kind="factorio-fleet-v1",
+            name=name,
+            base=str(self.base),
+            code=str(self.code),
+            commit=git_commit(self.code),
+            created_at=time.time(),
+            target_minutes=minutes,
+            branch=True,
+            branched_from=[r["branched_from"] for r in runs],
+            planner=self.planner,
+            client=actor_client.NONE,
+            explore=False,
+            postmortem=self.postmortem,
+            keep_problem=self.keep_problem,
+            keep_timeout_minutes=self.keep_timeout,
+            stall_minutes=getattr(self, "stall_minutes", None),
+            respawn=False,
+            runs=runs,
+        )
+        with RunLock(self.dir / (name + ".lock")):
+            _atomic_json(path, manifest)
+        options = self.options()
+
+        def launch(index, run):
+            time.sleep(index * stagger if index < parallel else 0)
+            root, origin = Path(run["runtime"]), run["branched_from"]
+            try:
+                self._set_run(name, run["seed"], status="creating")
+                copy_checkpoint(
+                    origin["runtime"],
+                    root,
+                    server_port=run["server_port"],
+                    rcon_port=run["rcon_port"],
+                    branched_from=dict(origin, branch_fleet=name),
+                )
+                self._set_run(name, run["seed"], status="starting")
+                result = self.lifecycle()._start(root, visible=False, automation_config=options, select=False)
+                records = run_records(root)
+                self._set_run(
+                    name,
+                    run["seed"],
+                    status="running",
+                    started_at=time.time(),
+                    world_id=(_read(root / "world-settings.json", {}) or {}).get("world_id"),
+                    processes={k: {f: v.get(f) for f in ("pid", "creation_time")} for k, v in records.items() if v},
+                    supervisor_pid=result.get("supervisor_pid"),
+                )
+                note = f", {len(run['pending_actions_at_branch'])} unknown outcomes to reconcile" * bool(
+                    run["pending_actions_at_branch"]
+                )
+                out(
+                    f"  {run['seed']}: branched from {origin['fleet']} at {origin['minute']} game min, running on"
+                    f" udp {run['server_port']} / rcon {run['rcon_port']}; {len(run['blocked_at_branch'])} jobs"
+                    f" blocked at the checkpoint{note}"
+                )
+            except Exception as exc:  # recorded, the other runs continue
+                self._set_run(name, run["seed"], status="launch_failed", launch_error=str(exc)[:300])
+                out(f"  {run['seed']}: branch failed: {str(exc)[:200]}")
+
+        with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
+            list(pool.map(lambda pair: launch(*pair), enumerate(manifest["runs"])))
+        self.spawn_watcher(name)
+        return self.load(name)
+
     def spawn_watcher(self, name):
         from factorio_agent.core.process_launch import independent_process_options
 
@@ -996,6 +1247,8 @@ class Fleet:
             records = run_records(root)
             up = {k: alive(v) for k, v in records.items()}
             row = dict(seed=run["seed"], runtime=run["runtime"], status=run["status"], processes=up)
+            if run.get("branched_from"):
+                row["branched_from"] = run["branched_from"]
             row["client"] = client_column(root, records)
             if root.exists():
                 row.update(quick_summary(root))
@@ -1028,7 +1281,11 @@ class Fleet:
                 ),
             )
         return dict(
-            name=fleet["name"], target_minutes=fleet.get("target_minutes"), explore=fleet.get("explore"), runs=rows
+            name=fleet["name"],
+            target_minutes=fleet.get("target_minutes"),
+            explore=fleet.get("explore"),
+            branch=fleet.get("branch"),
+            runs=rows,
         )
 
     def enforce(self, name, out=print, *, postmortem=False):
@@ -1042,9 +1299,11 @@ class Fleet:
         due = []
         for run in fleet["runs"]:
             tick = run_tick(run["runtime"]) if run["status"] == "running" else None
-            if tick is not None and tick >= target * TICKS_PER_MINUTE:
+            # A branched run stops M game minutes after its checkpoint (``target_tick``).
+            limit = run.get("target_tick") if type(run.get("target_tick")) is int else target * TICKS_PER_MINUTE
+            if tick is not None and tick >= limit:
                 due.append(run)
-        reason = f"reached {target} game min"
+        reason = f"reached {'+' if fleet.get('branch') else ''}{target} game min"
         if postmortem and (fleet.get("postmortem", True) or fleet.get("keep_problem")):
             return self.finish_runs(name, due, reason=reason, out=out)
         return [self.stop_run(name, run, reason=reason, out=out) for run in due]
@@ -1483,6 +1742,7 @@ class Fleet:
             alive=run_alive(root, records),
             client=client_column(root, records),
             launch_error=run.get("launch_error"),
+            branched_from=run.get("branched_from"),
             milestones={},
             furthest=None,
             blocked_reasons=[],
@@ -1555,7 +1815,8 @@ class Fleet:
 def _status_lines(value):
     lines = [
         f"fleet {value['name']} commit {value.get('commit') or '?'}"
-        f" (target {value.get('target_minutes') or '-'} game min)"
+        f" (target {'+' if value.get('branch') else ''}{value.get('target_minutes') or '-'} game min)"
+        + branch_note(value["runs"])
     ]
     if any(r.get("test_mode") for r in value["runs"]):
         lines[0] += " TEST MODE client_free (C: n = no client by design, d = detached)"
@@ -1585,7 +1846,18 @@ def main(argv=None):
     start = sub.add_parser("start")
     start.add_argument("--count", type=int)
     start.add_argument("--seeds", default="random")
-    start.add_argument("--minutes", type=float, help="stop each run after this many game minutes")
+    start.add_argument(
+        "--minutes",
+        type=float,
+        help="stop each run after this many game minutes (with --from: game minutes after the checkpoint)",
+    )
+    start.add_argument(
+        "--from",
+        dest="branch_from",
+        metavar="FLEET:SEED[,FLEET:SEED...]",
+        help="branch: continue stopped runs from their saves with the current code (new folders, fresh ports;"
+        " TEST runs, never proof; --count/--seeds/--client/--explore/--respawn do not apply)",
+    )
     start.add_argument("--name")
     start.add_argument("--parallel", type=int, default=4, help="runs starting at once (map generation is serial)")
     start.add_argument("--stagger", type=float, default=10.0, help="seconds between the first launches")
@@ -1656,6 +1928,28 @@ def main(argv=None):
         fleet.postmortem = not args.no_postmortem
         fleet.stall_minutes = args.stall_minutes
         fleet.respawn = args.respawn
+        if args.branch_from:
+            if (
+                args.count is not None
+                or args.seeds != "random"
+                or args.client != actor_client.NONE
+                or args.keep_client
+                or args.explore
+                or args.respawn
+            ):
+                parser.error("--from keeps each source's seed and settings: drop --count/--seeds/--client/--explore")
+            value = fleet.branch(
+                args.branch_from,
+                args.minutes,
+                args.name,
+                force=args.force,
+                parallel=args.parallel,
+                stagger=args.stagger,
+            )
+            print(f"fleet {value['name']} (branch): manifest {fleet.manifest_path(value['name'])}")
+            for run in value["runs"]:
+                print(f"  {run['seed']}  {run['status']}  {run['runtime']}")
+            return 0 if all(r["status"] == "running" for r in value["runs"]) else 1
         value = fleet.start(
             args.count,
             args.seeds,

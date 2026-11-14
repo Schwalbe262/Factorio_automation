@@ -72,6 +72,27 @@ dashboard can still look at one fleet run with `--runtime runtime/v2/<run> --por
 passes M minutes; `status`/`report` do the same check when the watcher is gone.
 Stopped runs keep their folders; nothing is deleted.
 
+Checkpoint branches (mid-game probes in tens of minutes):
+`python -B tools/fleet.py start --from FLEET:SEED[,FLEET:SEED...] --minutes M [--name NAME]`
+continues stopped client-free runs with the current code. Each source must
+have no live server/supervisor/client, a safe-stop pause marker
+(`lifecycle-pause.json` phase `paused`) and a save written after it, and must
+not have stopped on an actor death (otherwise refused: the state could be newer
+than the save, a tick rollback). Its folder is copied to
+`runtime/v2/<name>-<seed>` without process records, locks, `controller-config.json`,
+`agent-client/`, `postmortem/` and `vanilla/server-data`; `run.json` gets the
+new root, fresh ports, a new RCON password and `branched_from` (fleet, seed,
+tick, minute, source commit, world id). The source is only read. The world
+identity is unchanged (`storage` in the save and `world-settings.json` agree), so
+every query stays world-bound; the ordinary `lifecycle` start resumes the
+paused world and the `--planner none` supervisor resumes `jobs.json` as is:
+unknown outcomes stay `pending_action` and go through `reconcile`; blocked jobs
+are re-admitted only by the supervisor's own auto-retry/replan (its retry
+counters are in memory, so a new supervisor starts them afresh). `--minutes M`
+counts game minutes after the checkpoint tick (per-run `target_tick`); milestone
+minutes stay absolute game time. Branch runs are TEST runs, never proof;
+`status`/`report` headers say `BRANCHED from checkpoints fleet:seed@minute`.
+
 `start --client none|always|until_lab_trigger` (default `none`;
 `--keep-client` = `always`) picks the actor client mode of every run
 (`actor-client.json`, `factorio_agent.actor_client`, [HEADLESS.md](HEADLESS.md)):
