@@ -372,6 +372,23 @@ class UseTests(UseFixture):
             self.cell.rows_stock = lambda obs, item: {"status": "producing"}
             self.assertIsNone(self.cell.upkeep(self.obs(live, inventory={"iron-plate": 500})))
 
+    def test_a_tiny_feed_carries_the_hands_surplus(self):
+        # aud-1114-0930: 1-plate and 1-wood feeds, one per demand increment, 91 in a row.
+        live = self.live(self.state)
+        tiny = [(1, "iron-plate", self.state["products"][0]["nodes"][0]["chest"])]
+        with patch.object(sc.SupplyCell, "feed_targets", return_value=tiny):
+            feed = self.cell.feed_action(self.obs(live, inventory={"iron-plate": 1}), reserve=0)
+            self.assertEqual(feed["count"], 1)  # nothing spare
+            feed = self.cell.feed_action(self.obs(live, inventory={"iron-plate": 40}), reserve=0)
+            self.assertEqual(feed["count"], 1)  # plates: the construction stock (FEED_RESERVE) stays in hand
+            feed = self.cell.feed_action(self.obs(live, inventory={"iron-plate": sc.FEED_RESERVE + 12}), reserve=0)
+            self.assertEqual(feed["count"], 12)  # plates beyond FEED_RESERVE go in with the tiny feed
+            feed = self.cell.feed_action(self.obs(live, inventory={"iron-plate": 500}), reserve=0)
+            self.assertEqual(feed["count"], sc.FEED_BATCH)  # at most one feed batch
+            with patch.object(sc.SupplyCell, "contested_plates", return_value={"iron-plate"}):
+                feed = self.cell.feed_action(self.obs(live, inventory={"iron-plate": 500}), reserve=0)
+                self.assertEqual(feed["count"], 1)  # a waiting job needs the plates: the bare deficit
+
 
 class PlannerTests(unittest.TestCase):
     def receipt(self, products=(BELT,), demand=None):

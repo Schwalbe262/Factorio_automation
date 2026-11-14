@@ -173,6 +173,13 @@ Expected on the aud-1114-0436 median (toy replay, `plan_capacity` itself, 1673 i
 done at 29.2 min (824 plates left at 20 min); demand 4 -> 6 at 11.3, -> 8 at 12.7, -> 10 at
 14.1 (the next pair saves 45 s < 60: growth stops by itself), bill done at 23.1 min (464 left at
 20). Coal cells follow (about 8 for 10 iron cells and the hand-fed boiler).
+
+Iron ceiling check, aud-1114-0930 (12 seeds): 6-11 iron cells (median 8) before the district job,
+never `MAX_STARTER_CELLS`; the 2nd and 3rd cell come at 4.0 and 7.4 min in nearly every run. One
+cell (burner drill + furnace, ~9 iron + 10 stone, 15 s build) repays its iron in ~40 s at 15
+plates/min, so rule b approves every early cell: the cap and the payback are not the limit, the
+build-up pace is (actor time and the competing bill). Policy unchanged; cheaper hauling frees the
+actor for those builds.
 | `default_cell_rate` | 15.0 | ore/min per burner cell when unmeasured |
 | `fuel_margin` | 1.2 | coal deficit threshold |
 | `fuel_per_cell_per_minute` / `fuel_per_drill_per_minute` | 3.6 / 2.25 | coal burned by a new smelting / drill-only cell |
@@ -353,6 +360,15 @@ aud-1114-0841: after minute 18 the courier took 8 coal per trip from the starter
 put 8 into one burner (8 is what had piled up), about a third of the actor time up to the bus;
 with a full fetch a burner gets `FUEL_FILL` per visit and the boiler a full fill. Pinned by
 `tests/test_v2_trunk_fuel.py`.
+
+Chest fuel (`V2Bootstrap.chest_fuel`): before a proven coal bank, a coal fetch takes one guarded
+`take_many` (coal from chest sources too, never a machine's slots) over every unreserved chest
+holding coal (the starter coal cells' chests, fullest first, <= 16 sources, <= 50 coal) whenever two
+or more chests hold coal and the ordinary single-chest take would carry less. Fleet aud-1114-0930
+(12 seeds, first 32 min): 1373 coal takes of ~11 coal from one chest and 1394 burner inserts of
+10.5 coal (one fetch per burner); the sweep makes the fetch the request (24..48, `haul_batch`) and
+each insert the burner fill (`FUEL_FILL`). Pinned by
+`test_v2_construction_supply.test_coal_fetch_sweeps_every_coal_chest_in_one_take`.
 
 ## Carried surplus (`carried_surplus.py`)
 
@@ -866,7 +882,8 @@ Pinned by `tests/test_v2_research_policy.py`.
 | `HAUL_MINUTES` | 0.5 | one hauling trip carries this much of the item's measured production (`construction_supply.haul_batch`): plates between `COLLECT_BATCH` 10 and `PLATE_BATCH` 50, coal fetch between 24 and `FUEL_FETCH` 48, burner fill between 8 and `FUEL_FILL` 20; no production counter -> the floor | `test_v2_construction_supply.test_plate_trips_grow_with_measured_production` |
 | `FUEL_BATCH` | 8 | fetch fuel only when 8 coal piled up at a running coal drill; fuel collection for any job below 8 waits | `test_v2_fuel_batching` |
 | `FUEL_SKIP_STOCK` | 50 | no fuel for a cell holding 50 finished items; such cells still count as productive in `StarterCapacity.proof` | `test_v2_fuel_batching` |
-| `COLLECT_BATCH` | 10 | `take_many` waits until 10 items are on hand (or less is needed, or a verified buffer chest) | `test_v2_construction_supply`, `test_v2_machine_stock` |
+| `COLLECT_BATCH` | 10 | `take_many` waits until 10 items are on hand (or less is needed, or a verified buffer chest); a plate trip takes what has piled up at its sources up to the plate batch (`haul_batch`), not only the shortfall | `test_v2_construction_supply`, `test_v2_machine_stock` |
+| `SMALL_TRANSFER` | 2 | a transfer of <= 2 items is tiny (`waste_report` action_loop): a plate take waits for 3 on hand (seconds at starter-cell rates); a supply-cell feed of <= 2 carries the hands' surplus too, up to `FEED_BATCH` and the chest's `FEED_CAP` (plates only beyond `FEED_RESERVE`, never contested plates); startup science of <= 2 packs waits while the lab holds packs and the craft queue runs. aud-1114-0930 (12 seeds, 32 min): 266/726 iron feeds, 286/305 wood feeds, 97/102 startup pack inserts were tiny | `test_v2_construction_supply.test_a_plate_trip_is_never_tiny`, `test_v2_supply_cell.test_a_tiny_feed_carries_the_hands_surplus`, `test_v2_research` |
 | `MAX_ITEMS` / `MAX_SOURCES` | 50 / 16 | one `take_many` envelope (`validate_take_many`) | `test_v2_construction_supply` |
 | `HANDCRAFT_LIMIT` | 10 | above it, with a producing `produce` row or supply cell, collect or wait instead of hand crafting | `test_v2_machine_stock`, `test_v2_supply_cell` |
 | `machine_stock.STALL_TICKS` | 3600 | a row without products for this long is `stalled` (hand crafting resumes) | `test_v2_machine_stock` |

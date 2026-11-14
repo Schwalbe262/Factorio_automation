@@ -56,6 +56,41 @@ class StartupResearchTests(unittest.TestCase):
             result = routine.step(obs, {"technology": "automation"})
             self.assertEqual((result["type"], result["count"]), ("insert", 10))
 
+    def test_tiny_pack_inserts_fold_while_the_lab_has_packs_and_the_queue_crafts(self):
+        # aud-1114-0930: 97 of 102 startup science inserts were 1-2 packs.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root))
+            catalog = SimpleNamespace(
+                technologies={
+                    "automation": {
+                        "prerequisites": ["automation-science-pack"],
+                        "unit_count": 10,
+                        "ingredients": [{"amount": 1, "name": "automation-science-pack", "type": "item"}],
+                    }
+                }
+            )
+            routine = StarterResearch(game, SimpleNamespace(), catalog)
+            lab = {"name": "lab", "position": {"x": 0, "y": 0}, "electric_network_connected": True}
+            obs = {
+                "world_id": "w",
+                "tick": 100,
+                "technologies": {"automation-science-pack": True},
+                "research": "automation",
+                "entities": [dict(lab, inventory={"automation-science-pack": 1})],
+                "crafting_queue": [{"recipe": "automation-science-pack", "count": 5}],
+                "inventory": {"automation-science-pack": 1},
+            }
+            self.assertEqual(routine.step(obs, {"technology": "automation"})["status"], "waiting")
+            obs["inventory"] = {"automation-science-pack": 3}
+            self.assertEqual(routine.step(obs, {"technology": "automation"})["count"], 3)
+            obs["inventory"] = {"automation-science-pack": 1}
+            obs["entities"] = [dict(lab, inventory={})]  # the lab is out: the one pack goes in
+            self.assertEqual(routine.step(obs, {"technology": "automation"})["count"], 1)
+            obs["entities"] = [dict(lab, inventory={"automation-science-pack": 1})]
+            obs["crafting_queue"] = []  # nothing more coming: insert what is held
+            self.assertEqual(routine.step(obs, {"technology": "automation"})["count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

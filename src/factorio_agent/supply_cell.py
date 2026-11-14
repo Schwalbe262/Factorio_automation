@@ -103,7 +103,8 @@ from .board import (
     pole_chain,
 )
 from .plan_needs import make as make_needs
-from .construction_supply import COLLECT_BATCH, HANDCRAFT_LIMIT
+from .construction_supply import COLLECT_BATCH, HANDCRAFT_LIMIT, SMALL_TRANSFER
+from .construction_supply import PLATES as PLATE_ITEMS
 from .core.deterministic_builder import FactoryBuilder, _plan
 from .core.deterministic_state import _atomic_json
 from .machine_stock import STALL_TICKS
@@ -1253,13 +1254,25 @@ class SupplyCell:
                 continue
             held = int((obs.get("inventory") or {}).get(item, 0)) - reserve
             if held >= min(deficit, FEED_BATCH):
+                count = min(deficit, held)
+                if count <= SMALL_TRANSFER and item not in contested:
+                    # A tiny feed carries the hands' surplus too (up to one feed batch), so the
+                    # next increments of demand need no visit (aud-1114-0930: 286 of 305 wood
+                    # feeds were 1-2 wood; 1-plate feeds ran 91 times in a row). Never plates a
+                    # waiting job needs (contested), and plates only beyond FEED_RESERVE in the
+                    # hands: the construction stock stays with the actor.
+                    spare = held
+                    if item in PLATE_ITEMS:
+                        spare = min(held, held + reserve - max(reserve, FEED_RESERVE))
+                    inside = int(((self._find(obs, chest, position) or {}).get("inventory") or {}).get(item, 0))
+                    count = max(count, min(spare, FEED_BATCH, FEED_CAP - inside))
                 return {
                     "type": "insert",
                     "name": chest,
                     "position": dict(position),
                     "inventory": "chest",
                     "item": item,
-                    "count": min(deficit, held),
+                    "count": count,
                     "reason": f"feed the supply cell {item}",
                 }
             if acquire:

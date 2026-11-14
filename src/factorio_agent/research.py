@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from factorio_agent.construction_supply import SMALL_TRANSFER
 from factorio_agent.core.deterministic_state import _atomic_json
 
 
@@ -135,6 +136,15 @@ return {ok=false,reason="no_powered_lab_site"}
             self.state["allowances"][name] = allowance
             _atomic_json(self.path, self.state)
         held = obs.get("inventory", {}).get(item, 0)
+        lab_packs = lab.get("inventory", {}).get(item, 0)
+        if held and held <= SMALL_TRANSFER and lab_packs and obs.get("crafting_queue"):
+            # Fold the packs the queue is still crafting into one insert: the lab holds packs to
+            # research on (aud-1114-0930: 97 of 102 startup science inserts were 1-2 packs).
+            return {
+                "status": "waiting",
+                "reason": "lab consumes normal startup science",
+                "evidence": {"technology": name, "packs_in_lab": lab_packs, "carried": held},
+            }
         if held:
             return {
                 "type": "insert",
@@ -145,7 +155,6 @@ return {ok=false,reason="no_powered_lab_site"}
                 "count": min(held, int(tech["unit_count"])),
                 "reason": "supply finite startup science",
             }
-        lab_packs = lab.get("inventory", {}).get(item, 0)
         if lab_packs or lab.get("status_name") == "working":
             return {
                 "status": "waiting",
