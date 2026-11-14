@@ -64,8 +64,12 @@ class StarterExecutors:
         # One map survey + master plan per runtime, shared by every site consumer.
         from .rocket_plan import site_config
 
-        # A new site plan reserves bus lanes for the rocket bill's shared items (rocket_plan.bus_lane_order).
-        self.site = SiteService(game, config=site_config(catalog))
+        # A new site plan reserves bus lanes for the rocket bill's shared items (rocket_plan.bus_lane_order)
+        # and plans the floor: one slot per known block by production chain (floor_blocks, site.floorplan).
+        from .floor_blocks import floor_blocks
+
+        config = site_config(catalog)
+        self.site = SiteService(game, config=config, floor_blocks=floor_blocks(catalog, config.lane_order))
         from .outposts import MiningOutposts
 
         self.outposts = MiningOutposts(game, self.bootstrap, self.builder, site=self.site)
@@ -1055,7 +1059,21 @@ class StarterExecutors:
             initial_defense = self._approved_initial_defense(obs, maintain_armed=capability == "bootstrap_research")
             if initial_defense:
                 return initial_defense
-        return handler_for(capability).step(self, obs, parameters)
+        try:
+            return handler_for(capability).step(self, obs, parameters)
+        finally:
+            self._release_unused_candidates()
+
+    def _release_unused_candidates(self) -> None:
+        """Candidate blocks no controller settled in this step go back to the bus (``SiteService.release_unsettled``)."""
+        site = getattr(self, "site", None)
+        release = getattr(site, "release_unsettled", None)
+        if not callable(release):
+            return
+        try:
+            release()
+        except Exception:  # noqa: BLE001 - releasing spare candidates must never fail a step
+            return
 
     def proof(self, capability: str, obs: dict, result: dict, parameters: dict | None = None) -> dict | None:
         handler = get_handler(capability)

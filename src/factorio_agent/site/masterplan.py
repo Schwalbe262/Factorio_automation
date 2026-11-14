@@ -36,6 +36,7 @@ import sys
 
 from . import allocator
 from .busframe import Bus
+from .floorplan import FloorSlot, assign_floor, floor_from_dict, floor_to_dict
 from .corridors import subtract_rects
 from .geometry import Rect
 from .patches import Shore
@@ -67,6 +68,8 @@ class MasterPlan:
     warnings: tuple[str, ...] = ()
     allocations: list[Allocation] = field(default_factory=list)
     rail_crossings: tuple[dict, ...] = ()
+    # Planned floor (site.floorplan): one slot per known block; None = never planned (old plan).
+    floor: tuple[FloorSlot, ...] | None = None
 
     # ----- lookups ---------------------------------------------------------
     def zone(self, name: str) -> Zone | None:
@@ -80,15 +83,33 @@ class MasterPlan:
 
     # ----- districts -------------------------------------------------------
     def allocate(
-        self, world: WorldMap, kind: str, along: int, depth: int, *, name: str, returns_to_bus: bool = True
+        self,
+        world: WorldMap,
+        kind: str,
+        along: int,
+        depth: int,
+        *,
+        name: str,
+        returns_to_bus: bool = True,
+        settled: bool | None = None,
     ) -> Allocation:
-        """Next free district block of ``along`` x ``depth`` tiles; see site.allocator.
+        """District block of ``along`` x ``depth`` tiles: its floor slot, else the best free one.
 
         ``returns_to_bus`` True: the product goes back onto the bus and leaves
         on the bus-adjacent edge; False: a terminal product leaving on the far
-        edge. Both leave at the downstream end.
+        edge. Both leave at the downstream end. See site.allocator / site.floorplan.
         """
-        return allocator.allocate(self, world, kind, along, depth, name, returns_to_bus)
+        return allocator.allocate(self, world, kind, along, depth, name, returns_to_bus, settled)
+
+    def settle(self, name: str) -> Allocation:
+        """Mark a candidate as the chosen block (``allocator.settle``)."""
+        return allocator.settle(self, name)
+
+    def plan_floor(self, world: WorldMap, blocks) -> list[str]:
+        """Assign floor slots for ``blocks`` (existing allocations stay fixed); returns warnings."""
+        slots, warnings = assign_floor(self, world, tuple(blocks))
+        self.floor = slots
+        return warnings
 
     def release(self, world: WorldMap, name: str) -> Allocation:
         """Free one allocation (its land returns to the district strip)."""
@@ -123,6 +144,7 @@ class MasterPlan:
             "warnings": list(self.warnings),
             "allocations": [a.to_dict() for a in self.allocations],
             "rail_crossings": list(self.rail_crossings),
+            "floor": floor_to_dict(self.floor),
         }
 
     def to_json(self) -> str:
@@ -146,6 +168,7 @@ class MasterPlan:
             warnings=tuple(data["warnings"]),
             allocations=[Allocation.from_dict(a) for a in data["allocations"]],
             rail_crossings=tuple(data.get("rail_crossings", ())),
+            floor=floor_from_dict(data.get("floor")),
         )
 
     @classmethod
@@ -174,12 +197,16 @@ def _zone_order(zones: dict[str, Zone]) -> tuple[Zone, ...]:
     return tuple(first + [z for z in zones.values() if z not in first])
 
 
-def plan_site(world: WorldMap, *, start: tuple[int, int] = (0, 0), config: SiteConfig = SiteConfig()) -> MasterPlan:
+def plan_site(
+    world: WorldMap, *, start: tuple[int, int] = (0, 0), config: SiteConfig = SiteConfig(), floor_blocks=None
+) -> MasterPlan:
     """Compute the master plan for ``world`` and reserve its zones on it.
 
     Deterministic for a given map, start and config. Raises SiteError only
     when even the minimum bus cannot be placed; softer shortfalls become
-    ``MasterPlan.warnings``.
+    ``MasterPlan.warnings``. ``floor_blocks`` (``site.floorplan.FloorBlock``s, e.g.
+    ``factorio_agent.floor_blocks.floor_blocks``) plans the floor: one slot per block along the
+    bus by production chain; None plans no floor (first-fit allocation).
     """
     occupancy = Occupancy(TileGrid(world))
     draft = Draft(world=world, config=config, start=tuple(start), occupancy=occupancy)
@@ -187,7 +214,7 @@ def plan_site(world: WorldMap, *, start: tuple[int, int] = (0, 0), config: SiteC
     zones = _zone_order(draft.zones)
     corridors = corridors_of(draft)
     _reserve_all(world, zones, draft.strips, corridors)
-    return MasterPlan(
+    plan = MasterPlan(
         start=tuple(start),
         config=config,
         bounds=occupancy.grid.bounds,
@@ -201,6 +228,9 @@ def plan_site(world: WorldMap, *, start: tuple[int, int] = (0, 0), config: SiteC
         warnings=tuple(draft.warnings),
         rail_crossings=tuple(draft.rail_crossings),
     )
+    if floor_blocks is not None:
+        plan.warnings = plan.warnings + tuple(plan.plan_floor(world, floor_blocks))
+    return plan
 
 
 # ----- text summary and command line --------------------------------------
@@ -253,6 +283,9 @@ def plan_summary(plan: MasterPlan) -> str:
         lines.append(
             f"block {a.name} {a.side} along {a.along0}-{a.along1} in {a.input_side} flow {a.flow} out {a.output_side}"
         )
+    for s in plan.floor or ():
+        tag = " fixed" if s.fixed else ""
+        lines.append(f"floor {s.name} {s.side} along {s.along0}-{s.along1} built {s.built}{tag}")
     for crossing in plan.rail_crossings:
         lines.append(f"rail:trunk crosses {crossing['corridor']} at {crossing['rect']}")
     for warning in plan.warnings:

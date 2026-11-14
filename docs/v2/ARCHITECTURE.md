@@ -63,7 +63,8 @@ jobs.run_jobs: per pass one observe and at most one drill-cell survey (bootstrap
 | Game | `core/deterministic_bootstrap.py`, `construction_supply.py` | starter cells; `V2Bootstrap`: fuel/stock batching, hand-craft cap |
 | Game | `starter_retirement.py` | starter cells of a resource with a permanent source: no fuel, no rebuild, collected and mined (`starter_retirement` capability); bus surplus tiles as the construction plate stock (PLANNERS.md) |
 | Game | `core/world_catalog.py` | live recipes/entities/technologies (`catalog.json`) |
-| Space | `site/service.py` | `SiteService`: one survey + master plan per runtime, allocation of district blocks |
+| Space | `site/service.py` | `SiteService`: one survey + master plan per runtime, allocation of district blocks; unsettled candidates released after every job step (`release_unsettled`, `StarterExecutors.step`) |
+| Space | `site/floorplan.py`, `floor_blocks.py`, `site/floorsim.py` | planned floor: one slot per known block (roadmap + rocket bill, real footprints, growth frame) by production chain at plan time; the allocator hands each block its slot, unknown blocks the best scored free land; `tools/floor_sweep.py` measures it against first-fit on fake worlds (LAYOUT_PRINCIPLES.md "Planned floor") |
 | Space | `site/worldmap.py`, `site/survey.py` | tile map; bulk read-only survey |
 | Space | `site/masterplan.py`, `site/planbuild.py`, `site/orientation.py`, `site/planrail.py` | bus, zones, feeder corridors, entry/exit sides, rail reservations |
 | Space | `site/allocator.py`, `site/placement.py`, `site/fit.py`, `site/transform.py` | blocks along the bus; orient a template into a block (rotate/mirror) |

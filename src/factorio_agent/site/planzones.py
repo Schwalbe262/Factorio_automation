@@ -173,6 +173,11 @@ class Allocation:
       (``returns_to_bus``) leaves on the bus-adjacent edge at the downstream
       end; a terminal product (science to labs, mall chests) leaves on the
       far edge, also at the downstream end. ``output_point`` is that spot.
+
+    ``growth`` tiles beyond ``along1`` are the block's held frame room: no other block is placed
+    there (``allocator._gap_clash``) and ``allocator.extend`` grows into it. ``settled`` is False
+    for a candidate not chosen yet, True for a chosen block, None for a plan written before the
+    flag existed (``SiteService.release_unsettled``).
     """
 
     name: str
@@ -189,6 +194,10 @@ class Allocation:
     output_side: str
     output_point: tuple[float, float]
     returns_to_bus: bool
+    growth: int = 0
+    settled: bool | None = None
+    # (allocation, frame end before) of neighbours whose growth room this block took; restored on release.
+    took: tuple[tuple[str, int], ...] = ()
 
     @property
     def owner(self) -> str:
@@ -199,6 +208,7 @@ class Allocation:
         data["rect"] = self.rect.to_list()
         data["tap_rect"] = self.tap_rect.to_list()
         data["output_point"] = list(self.output_point)
+        data["took"] = [list(t) for t in self.took]
         return data
 
     @classmethod
@@ -207,4 +217,5 @@ class Allocation:
         values["rect"] = _rect(data["rect"])
         values["tap_rect"] = _rect(data["tap_rect"])
         values["output_point"] = tuple(data["output_point"])
+        values["took"] = tuple((str(n), int(g)) for n, g in data.get("took") or ())
         return cls(**values)
