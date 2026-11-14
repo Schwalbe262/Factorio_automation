@@ -1033,7 +1033,7 @@ class LongFleetEndStateTests(LadderFixture):
         reasons = CoverageTests.LONG_FLEET_END_STATE
         for index, reason in enumerate(reasons):
             key = "j" + str(index)
-            self.blocked(key, "electric_coal", reason)
+            self.blocked(key, "smelting_capacity", reason)
             self.cli.jobs[key]["blocked_at_tick"] = 0
             self.s.__dict__.setdefault("_auto_retries", {})[key] = {"successes": 0, "count": AUTO_RETRY_LIMIT}
         for _ in range(len(reasons) + 1):
