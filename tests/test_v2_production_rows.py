@@ -234,6 +234,12 @@ class ProductionRowsTests(unittest.TestCase):
         self.rows.save(item, tight)
         blocked = self.rows.step(self.obs(), {"item": item, "rate_per_minute": 18})
         self.assertEqual(blocked["reason"], "production_row_extension_exceeds_reserved_slots")
+        # No dead block: the need names the change (a second row or a larger frame).
+        from factorio_agent import plan_needs
+
+        needs = plan_needs.from_result("produce", blocked, {"item": item})
+        self.assertEqual(needs["kind"], "site")
+        self.assertIn("second automation-science-pack row", needs["change"])
 
     def test_missing_plate_with_a_bus_drives_one_bus_tap(self):
         self.board(science=True, ports=(), bus={"ports": [], "stations": [], "entities": []})

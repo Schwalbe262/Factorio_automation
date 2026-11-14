@@ -24,6 +24,20 @@ whose taps fit), so `bus_lane.bus_lane_nodes` proposes `bus_lane` for that item
 `no_clean_trunk_corridor` on every candidate, or fitted with 355-482 belts and
 stalled on belt supply). With a coal tap, `steel_coal_supply`'s proof is the built
 tap and pure coal on the coal port.
+A saved plan not yet proven whose private belts are longer than `PRIVATE_ROUTE_TILES`
+for items the bus now carries is re-planned on bus taps once per such item set
+(`_replan_onto_bus`; br-steel-1114 seed 2121061131: the brick block planned before
+its lanes stalled on 105/212-tile belts); the old plan keeps building if no new
+plan fits. A prepare releases its own stale board block (`plan_connection(...,
+released_block=owner)`), else every route into a new port met it as an unrelated
+reservation. A tap failure carries the block's side into the tap need.
+`bus_lane` feeds a lane head behind the bus's plate feed rows through a fixed head
+approach (`bus_lane.head_approaches`): the feed route ends at a header waypoint beside
+the band, a straight run along a header row and up the lane column crosses the feed
+rows underground with the exit on the head tile (a route never ends on an exit mouth,
+and the head's apron met the foreign belt: seeds 649402784, 3371980627). One prepare
+stops after `PLANNING_SECONDS` (120 s; a 620 s prepare had the run stopped as stalled)
+and a failed feed is a `route` need naming a nearer source as the alternative.
 Growth tiles are hard for every route and the power bridge. The whole plan is
 published on board block `steel_production` (`brick_production`) and the tap in
 the bus state before anything is built.
