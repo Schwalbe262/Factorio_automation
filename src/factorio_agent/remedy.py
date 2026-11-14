@@ -178,7 +178,8 @@ RELAXATIONS: dict[str, tuple[Rung, ...]] = {
         ),
     ),
     "smelting_district": (ROUTE_RELAX_1,),
-    "planned_main_bus": (ROUTE_RELAX_1,),
+    # A built pole on a feed's forced end tile is relocated (pole_relocation) by the clear rung.
+    "planned_main_bus": (ROUTE_RELAX_1, CLEAR_REBUILD),
     "brick_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     "steel_production": (ROUTE_RELAX_1, ROUTE_RELAX_2, ROUTE_WAYPOINTS),
     # The long coal and plate routes of a remote smelting block (remote_smelting.py).
@@ -392,6 +393,9 @@ def what_if(
     started = time.perf_counter()
     if planner is None:
         return {"fits": None, "reason": "no_pure_planner", "seconds": 0.0}
+    if (options or {}).get("repair_built_block"):  # built_block_repair.OPTION
+        # A repair acts (plan, build, guarded mine): no read-only plan can show it, the retry applies it.
+        return {"fits": None, "reason": "repair_applied_by_retry", "seconds": 0.0}
     spec = postmortem.DRY_RUN[capability]
     factory = executors_factory or postmortem._default_executors
     sandbox = Path(tempfile.mkdtemp(prefix="whatif-"))
