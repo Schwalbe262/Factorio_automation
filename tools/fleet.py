@@ -61,7 +61,7 @@ from factorio_agent import actor_client  # noqa: E402
 from report_run import STALL_DRY_MINUTES  # noqa: E402
 
 # Fleet ports start above the interactive lifecycle range (34261+/27061+, 100 slots).
-UDP_BASE, TCP_BASE, PORT_SPAN = 34400, 27400, 400
+UDP_BASE, TCP_BASE, PORT_SPAN = 34400, 27400, 2000
 # Measured on this machine (2026-11-13, see docs/v2/README.md); replaced by
 # runtime/fleets/cost.json once `status` has measured live fleet processes.
 DEFAULT_RUN_MB = 1500
