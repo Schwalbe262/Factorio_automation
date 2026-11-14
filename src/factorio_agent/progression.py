@@ -253,7 +253,9 @@ ROADMAP: tuple[Step, ...] = (
     _research("steel-processing"),
     _research("fast-inserter"),
     Step("logistic_science", "logistic_science", {"rate_per_minute": 30}),
-    Step("steam_expansion", "steam_expansion", {}, after=("logistic_science",)),
+    # No ``after``: the first extra steam pair needs electric_coal (its capability ``requires``) and
+    # nothing of green science (steam_expansion.py); its index keeps it below the steps above.
+    Step("steam_expansion", "steam_expansion", {}),
     _research("gun-turret"),
     Step("defense_perimeter", "defense_perimeter", {}, after=("research_gun_turret", "steam_expansion")),
     _research("advanced-material-processing"),
@@ -296,15 +298,19 @@ ROADMAP: tuple[Step, ...] = (
     Step("basic_petroleum", "basic_petroleum", {}),
     Step("engine_production", "engine_production", {}, after=("research_engine",)),
     Step("chemical_coal_supply", "chemical_coal_supply", {}, after=("basic_petroleum",)),
+    # The shared gas header comes before its first consumer: it refuses an original gas outlet a
+    # chemical plan already owns (gas_distribution._registry "original_gas_already_owned_by_chemical_plan"),
+    # and the plastic cell then takes the published "plastic-gas" edge (chemical_production._sources).
+    # Plastic first left sulfur without gas on the GUI map (live deadlock).
+    Step("gas_distribution", "gas_distribution", {}),
     Step(
         "chemical_production_plastic",
         "chemical_production",
         {"product": "plastic-bar"},
-        after=("research_plastics", "chemical_coal_supply"),
+        after=("research_plastics", "chemical_coal_supply", "gas_distribution"),
     ),
     Step("water_gathering", "water_gathering", {}, after=("basic_petroleum",)),
     _research("sulfur-processing"),
-    Step("gas_distribution", "gas_distribution", {}, after=("chemical_production_plastic",)),
     _research("advanced-circuit"),
     _research("chemical-science-pack"),
     Step("advanced_circuit_production", "advanced_circuit_production", {}, after=("research_advanced_circuit",)),
@@ -632,7 +638,8 @@ def district_waits_for_slot(jobs, queue_nodes, capabilities) -> bool:
     """A queued smelting_district node waits only for a job slot (``jobs._admission_error``).
 
     Queued: a node of the capability is pending or ready (proposed, not yet a job; early start
-    included). Only a slot: every strict ``requires`` it lacks has an active job, so the early
+    included). Only a slot: every strict ``requires`` it lacks has an active job or waits only
+    for the research lane (``early_start.requirements_covered``), so the early
     start rule (``EARLY_FREE_SLOTS``) no longer refuses it. aud-1114-0841: the district was
     proposed early at ~11.9 min, but new iron/copper starter capacity nodes
     (``CAPACITY_PRIORITY``, above every roadmap step) took each job slot that freed up, so the
@@ -646,10 +653,13 @@ def district_waits_for_slot(jobs, queue_nodes, capabilities) -> bool:
         for node in queue_nodes
     ):
         return False
+    from .early_start import requirements_covered
+
     succeeded = {j.get("capability") for j in jobs if j.get("status") == "succeeded"}
     active = {j.get("capability") for j in jobs if j.get("status") not in TERMINAL_STATUSES | {"paused"}}
     missing = set((capabilities.get(DISTRICT_STEP_ID) or {}).get("requires", [])) - succeeded
-    return missing <= active
+    # bootstrap_logistics behind the drill research owns research: covered (early_start.requirements_covered).
+    return requirements_covered(missing, active, RESEARCH_CAPABILITIES)
 
 
 def _without_plate_capacity(nodes) -> list[dict]:

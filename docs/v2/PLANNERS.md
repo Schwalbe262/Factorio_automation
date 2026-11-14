@@ -6,9 +6,19 @@ tuning = change the dataclass default and the test that pins it.
 
 ## Roadmap autopilot (`progression.py`)
 
-- `Supervisor._autopilot`: when < `LOW_QUEUE = 2` nodes pending/ready, <= `AUTOPILOT_LIMIT = 3` nodes (`supervisor.py:47`).
-  Nodes whose admission lane an active job holds do not count (`WorkQueue.queued_count(busy_lanes)`):
-  research nodes behind a waiting research job never hold the roadmap (eval-4177156614 froze 20+ min).
+- `Supervisor._autopilot`: every cycle, <= `AUTOPILOT_LIMIT = 3` new nodes, whatever the queue holds; a row
+  whose capability and parameters an open or completed node already carries is dropped before the merge. A step is
+  queued the moment its prerequisites hold and dispatch picks the highest priority among all of them. Before it ran
+  only while < 2 nodes could dispatch: low-priority nodes waiting for a slot kept it off and took each freed slot
+  (aud-1114-0930: `ammo_production` proposed a median 260 s after the bus, `research_gun_turret` 300 s after red
+  science, then admitted behind `power_coal_feed`/`smelting_capacity`). A queued slack job yields the actor: each
+  `run_all` pass advances critical jobs first and ends at the first job that acts; a slack craft/take of a claimed
+  item is refused (`critical_path.slack_refusal`).
+- Roadmap `after` edges are prerequisites only (an input, a technology, a built block); order preferences are the
+  index (priority). `steam_expansion` has no `after` (it needs `electric_coal`, nothing of green science);
+  `gas_distribution` precedes `chemical_production_plastic` (the header refuses an outlet a chemical plan owns, the
+  plastic cell takes its `plastic-gas` edge). Kept: `automation_science` after `main_bus` (its plates come from bus
+  taps, `science.prepare`), steel before oil/engines (pumpjack and engine recipes), research before its block.
 - A research step whose technology needs a pack (other than red) whose producer
   (`normal_research.PACK_PRODUCERS`, e.g. `logistic_science`) has no succeeded job is not
   proposed (`progression._packs_unsupplied`); the producer is its own earlier step. A research
@@ -938,7 +948,11 @@ propose step S early (progression.autopilot_nodes -> early_start.early_ready) wh
   priority unchanged: TOP_PRIORITY - index, below every step it runs ahead of
 admit (jobs.submit, WorkQueue.refresh): early.requires instead of requires;
   an early job never takes the last free slot (EARLY_FREE_SLOTS = 1: at most 3 active when it is admitted)
-  while one of its missing strict requires has no active job; once every one is active the slot is its own
+  while one of its missing strict requires has no active job; once every one is active the slot is its own;
+  a missing require that owns research while another research job holds the lane counts as covered
+  (requirements_covered: that job frees its slot for it; aud-1114-0930: the district was proposed at 12-18 min and
+  admitted with bootstrap_logistics after the drill research, a median 2.9 min later); once the lane is free that
+  require gets the last free slot before other work (jobs._owed_research, "a job slot is kept for ...")
   (aud-1114-0436: supply cell + logistics + outposts held 3 slots, the district was refused from ~13.5 min to
   the logistics end at a median 18.6 and built its ~100-entity producer prefix only after it; the prefix ended
   1.3-7.2 min after logistics, "waits for underground-belt" being only the last entity built, every slice in
@@ -949,6 +963,10 @@ build (ensure_plan(defer=early_start.deferral(...))), per plan entity in order:
   acquisition only waits                         -> later (the next item is tried: furnaces from stone go on)
   mining drill / inserter behind a deferred entity -> later (plan order)
   everything else is crafted and placed; all done but deferred -> "waiting for deferred plan entities: ..."
+  parked with "precraft": true (district, bus): craft enabled ingredients of the research-locked items first
+  (precraft.research_deferred: circuits/belts of splitters and undergrounds; INTERMEDIATE_BATCH = 5 per action,
+  crafting queue empty, plates carried and not contested, no supply cell or produce row stocks the ingredient,
+  never past the plan's need); outposts are not declared (drill research keeps its plates, auto-1113-1618)
 succeed only on the unchanged native proof (district: plates on the output ports; bus: plates on lane tails);
   the bus splice into the district waits for smelting_district to succeed (planned_bus.step)
 clocks: while early (a strict requires missing) the job deadline does not run (early_ticks/early_seconds);

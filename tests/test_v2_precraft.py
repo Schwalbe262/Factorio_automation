@@ -3,7 +3,7 @@
 import unittest
 from types import SimpleNamespace
 
-from factorio_agent.precraft import PACK, PRECRAFT_BATCH, starter_science
+from factorio_agent.precraft import INTERMEDIATE_BATCH, PACK, PRECRAFT_BATCH, research_deferred, starter_science
 
 
 def catalog():
@@ -51,6 +51,54 @@ class StarterSciencePrecraftTests(unittest.TestCase):
         self.assertIsNone(starter_science(catalog(), observation(entities=[{"name": "lab"}])))
         self.assertIsNone(starter_science(catalog(), observation(technologies={"automation": True})))
         self.assertIsNone(starter_science(catalog(), observation(enabled_recipes={})))
+
+
+def splitter_catalog():
+    def row(name, ingredients, made=1):
+        return {
+            "name": name,
+            "ingredients": [{"type": "item", "name": n, "amount": a} for n, a in ingredients.items()],
+            "products": [{"type": "item", "name": name, "amount": made}],
+        }
+
+    recipes = {
+        "splitter": row("splitter", {"electronic-circuit": 5, "iron-plate": 5, "transport-belt": 4}),
+        "electronic-circuit": row("electronic-circuit", {"iron-plate": 1, "copper-cable": 3}),
+        "copper-cable": row("copper-cable", {"copper-plate": 1}, made=2),
+        "transport-belt": row("transport-belt", {"iron-plate": 1}, made=2),
+    }
+    return SimpleNamespace(recipes=recipes, recipe_for_product=lambda item: recipes.get(item))
+
+
+class ResearchDeferredPrecraftTests(unittest.TestCase):
+    def obs(self, **inventory):
+        return {
+            "enabled_recipes": {"electronic-circuit": True, "copper-cable": True, "transport-belt": True},
+            "crafting_queue": [],
+            "inventory": inventory,
+        }
+
+    def test_circuits_for_locked_splitters_in_small_batches_from_carried_plates(self):
+        obs = self.obs(**{"iron-plate": 50, "copper-plate": 50})
+        action = research_deferred(splitter_catalog(), obs, {"splitter": 5}, stocked={"transport-belt"})
+        self.assertEqual((action["recipe"], action["count"]), ("electronic-circuit", INTERMEDIATE_BATCH))
+
+    def test_carried_circuits_count_and_copper_rounds_up(self):
+        catalog = splitter_catalog()
+        obs = self.obs(**{"iron-plate": 50, "copper-plate": 7, "electronic-circuit": 22})
+        # 25 needed, 22 carried: 3 circuits = 9 cables = 4.5 copper crafts -> 5 copper; 7 is enough.
+        action = research_deferred(catalog, obs, {"splitter": 5}, stocked={"transport-belt"})
+        self.assertEqual((action["recipe"], action["count"]), ("electronic-circuit", 3))
+        obs["inventory"]["copper-plate"] = 4
+        self.assertIsNone(research_deferred(catalog, obs, {"splitter": 5}, stocked={"transport-belt"}))
+
+    def test_nothing_while_the_queue_runs_or_the_plates_are_contested(self):
+        catalog = splitter_catalog()
+        busy = dict(self.obs(**{"iron-plate": 50, "copper-plate": 50}), crafting_queue=[{"recipe": "pipe"}])
+        self.assertIsNone(research_deferred(catalog, busy, {"splitter": 5}))
+        obs = self.obs(**{"iron-plate": 50, "copper-plate": 50})
+        self.assertIsNone(research_deferred(catalog, obs, {"splitter": 5}, contested={"iron-plate"}))
+        self.assertIsNone(research_deferred(catalog, obs, {}))
 
 
 if __name__ == "__main__":

@@ -80,6 +80,7 @@ class Run:
             if isinstance(e.get("tick"), int) and isinstance(e.get("time"), (int, float)):
                 clock.append((e["time"], e["tick"]))
         clock.sort()
+        self.clock = clock
         for e in self.events:
             key, tick = e.get("key"), e.get("tick")
             if not isinstance(tick, int):

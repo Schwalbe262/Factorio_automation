@@ -279,6 +279,44 @@ class PartialBuildTests(unittest.TestCase):
         self.assertIn("research logistics", result["reason"])
         self.assertEqual(result["evidence"]["deferred"], ["splitter"])
 
+    def parked(self, inventory, **extra):
+        built = [dict(entity("stone-furnace", 3), unit_number=1), dict(entity("transport-belt", 6.5), unit_number=2)]
+        obs = dict(self.obs(inventory, built), **extra)
+        return obs
+
+    def precraft_defer(self, obs, **kw):
+        return es.Deferral(Catalog(), obs, coming={"logistics"}, precraft=True, **kw)
+
+    def test_a_parked_block_precrafts_the_ingredients_of_its_research_locked_items(self):
+        # aud-1114-0930: splitters and undergrounds were the district's last entities; their
+        # belts and circuits are crafted while logistics runs, only the final assembly is left.
+        obs = self.parked({"iron-plate": 20})
+        action = self.builder.ensure_plan(obs, self.plan, defer=self.precraft_defer(obs))
+        self.assertEqual((action["type"], action["recipe"], action["count"]), ("craft", "transport-belt", 4))
+        self.assertIn("pre-craft transport-belt for splitter", action["reason"])
+        self.assertNotIn("splitter", self.bootstrap.calls)
+
+    def test_precraft_stops_at_the_plan_need_and_without_spare_plates(self):
+        for inventory, kw, extra in (
+            ({"iron-plate": 20, "transport-belt": 4}, {}, {}),  # the splitter's belts are carried
+            ({"iron-plate": 20}, {"contested": {"iron-plate"}}, {}),  # another job waits for iron
+            ({"iron-plate": 20}, {"stocked": {"transport-belt"}}, {}),  # a machine row makes belts
+            ({"iron-plate": 5}, {}, {}),  # the plates of the batch are not carried
+            ({"iron-plate": 20}, {}, {"crafting_queue": [{"recipe": "pipe", "count": 1}]}),
+        ):
+            obs = self.parked(inventory, **extra)
+            result = self.builder.ensure_plan(obs, self.plan, defer=self.precraft_defer(obs, **kw))
+            self.assertEqual(result.get("status"), "waiting", (inventory, kw, extra))
+            self.assertTrue(result["evidence"]["research_only"])
+
+    def test_precraft_is_off_unless_declared(self):
+        obs = self.parked({"iron-plate": 20})
+        result = self.builder.ensure_plan(obs, self.plan, defer=self.defer(obs))
+        self.assertEqual(result["status"], "waiting")
+        self.assertTrue(es.spec(CAPABILITIES, "smelting_district").get("precraft"))
+        self.assertTrue(es.spec(CAPABILITIES, "planned_main_bus").get("precraft"))
+        self.assertFalse(es.spec(CAPABILITIES, "mining_outpost").get("precraft"))  # drill research keeps its plates
+
     def test_without_deferral_the_lock_still_blocks(self):
         result = self.builder.ensure_plan(self.obs({}), self.plan)
         self.assertEqual(result["status"], "blocked")

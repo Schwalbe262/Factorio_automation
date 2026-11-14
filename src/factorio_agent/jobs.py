@@ -20,6 +20,7 @@ from factorio_agent.early_start import (
     admission_requires,
     is_early,
     parked,
+    requirements_covered,
     runs_early,
     track_early_time,
 )
@@ -141,8 +142,14 @@ CAPABILITIES = {
         "requires": ["power", "bootstrap_logistics", "mining_outpost"],
         "native_recipes": ["underground-belt", "splitter"],
         # Early start (early_start.py): planned and partly built once every
-        # source bank has a saved, published port; splitters/undergrounds wait for logistics.
-        "early_start": {"requires": ["power"], "inputs": "mining_bank_ports", "locked_until": ["logistics"]},
+        # source bank has a saved, published port; splitters/undergrounds wait for logistics,
+        # their circuits and belts are pre-crafted meanwhile (early_start rule 10).
+        "early_start": {
+            "requires": ["power"],
+            "inputs": "mining_bank_ports",
+            "locked_until": ["logistics"],
+            "precraft": True,
+        },
         "effect": "reserve a PCB district, connect iron60/copper30 nominal banks and separate coal source with actual splitter/underground crossing, normally belt-feed furnaces",
     },
     "smelting_capacity": {
@@ -262,6 +269,7 @@ CAPABILITIES = {
             "running": ["smelting_district"],
             "inputs": "district_feed_anchors",
             "locked_until": ["logistics"],
+            "precraft": True,
         },
         "effect": "normally build the site plan's iron/copper bus trunks fed by a splitter branch beside each district plate port; prove plates on every built lane tail; other lanes stay reserved",
     },
@@ -706,13 +714,37 @@ def _admission_error(
     # every missing strict requirement has an active job, nothing is left to admit for it.
     # aud-1114-0436: the district was refused from ~13.5 min (supply cell, logistics, outposts active)
     # until logistics ended (median 18.6), and its producer prefix (~100 entities) was built only then.
+    # A missing requirement that owns research while another research job holds the lane is covered
+    # too: it cannot start before that job ends, which frees a slot for it (``requirements_covered``).
     succeeded = {job["capability"] for job in jobs.values() if job["status"] == "succeeded"}
     if is_early(CAPABILITIES, capability, succeeded) and slots >= MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS:
         missing = set(CAPABILITIES[capability].get("requires", [])) - succeeded
-        if not missing <= {job["capability"] for job in active}:
+        if not requirements_covered(missing, {job["capability"] for job in active}, RESEARCH_CAPABILITIES):
             limit = MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS
             return f"an early start keeps a job slot free: at most {limit} jobs may be active"
+    # The other side of that cover: once the research lane is free, the research-owning requirement an
+    # active early job runs ahead of gets the last free slot before any other work. Only for a new
+    # job (``submit``): a resume or retry of a job that held its slot is never refused for it.
+    new = exclude_key is None
+    if new and capability not in RESEARCH_CAPABILITIES and slots >= MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS:
+        owed = _owed_research(jobs, active, succeeded)
+        if owed:
+            limit = MAX_ACTIVE_JOBS - EARLY_FREE_SLOTS
+            return f"a job slot is kept for {owed[0]}, which an early job runs ahead of: at most {limit} jobs may be active"
     return None
+
+
+def _owed_research(jobs: dict, active: list, succeeded: set) -> list[str]:
+    """Research-owning strict requirements of active early jobs that may start now and have no job yet."""
+    capabilities = {job["capability"] for job in active}
+    if capabilities & RESEARCH_CAPABILITIES:
+        return []  # the lane is held: the requirement cannot start yet (requirements_covered)
+    stalled = {job["capability"] for job in jobs.values() if job["status"] in ("blocked", "failed")}
+    owed = set()
+    for capability in capabilities:
+        if is_early(CAPABILITIES, capability, succeeded):
+            owed |= set(CAPABILITIES[capability].get("requires", [])) & RESEARCH_CAPABILITIES
+    return sorted(owed - succeeded - capabilities - stalled)
 
 
 def submit(root: Path, game, request: Request, *, priority: int = 0) -> dict:

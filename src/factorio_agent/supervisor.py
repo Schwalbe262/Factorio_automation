@@ -235,7 +235,6 @@ INCIDENT_LOG = Path("logs/incidents.jsonl")
 INCIDENT_LOG_BYTES = 5_000_000
 # Bounded tail of job-events.jsonl read for the recent action sample.
 INTENT_TAIL_BYTES = 262_144
-LOW_QUEUE = 2
 AUTOPILOT_LIMIT = 3
 IDLE_WATCH_SECONDS = 60  # game seconds between idle_with_work events of one episode and gate
 GROWTH_LIMIT = 2  # bottleneck growth packages merged per cycle (Supervisor._growth)
@@ -445,6 +444,14 @@ def _unknown(job):
 
 def _node_identity(node):
     return _hash([node["capability"], node["parameters"]])
+
+
+def _carried(row, identities) -> bool:
+    """A proposed row's capability and parameters are already on an open or completed node."""
+    try:
+        return _node_identity(row) in identities
+    except (KeyError, TypeError, ValueError):
+        return False  # malformed: the merge validation rejects it
 
 
 def _validated_node(node, capabilities, seen):
@@ -1413,13 +1420,6 @@ class Supervisor:
                 seen.add(name)
                 self.technology_order.append(name)
 
-    def _queue_low(self, jobs=None):
-        """Fewer than ``LOW_QUEUE`` nodes could be dispatched now (``WorkQueue.queued_count``)."""
-        if jobs is None:
-            return self.work.queued_count() < LOW_QUEUE
-        busy = {admission_lane(j["capability"], j.get("parameters")) for j in jobs if j.get("status") in ACTIVE}
-        return self.work.queued_count(busy) < LOW_QUEUE
-
     def _load_roadmap(self):
         """The framework roadmap steps, or None while the progression module is unavailable."""
         try:
@@ -1733,30 +1733,40 @@ class Supervisor:
             return None
 
     def _autopilot(self, context):
-        """When fewer than two nodes could be dispatched now, merge framework default nodes.
+        """Merge framework default nodes every cycle, whatever the queue already holds.
 
-        Ready nodes waiting for a busy admission lane and pending nodes do not count
-        (``WorkQueue.queued_count``): a blocked or waiting step never holds back
-        steps that do not need it.
+        A roadmap step is queued the moment its prerequisites hold, so dispatch
+        (``_dispatch``: highest priority first) chooses among every eligible step.
+        Before, the autopilot ran only while fewer than two nodes could dispatch:
+        low-priority nodes waiting for a job slot kept it off and took each freed
+        slot while ready higher-priority steps were never proposed (aud-1114-0930:
+        ``ammo_production`` proposed 7.6 min after the bus and admitted 7.6 min
+        later, behind ``power_coal_feed`` and ``smelting_capacity``). Slot and lane
+        limits stay in admission (``jobs._admission_error``); a queued slack job
+        yields actor time in ``jobs.run_all`` (critical jobs act first each pass).
 
         Autopilot nodes use Luna's queue node format with ids starting ``auto_``
-        and pass the same merge validation. A rejected batch is logged and does
-        not enter error backoff, so Luna planning and dispatch continue.
+        and pass the same merge validation. A row whose capability and parameters
+        an open or completed node already carries is dropped before the merge (no
+        validation call per cycle). A rejected batch is logged and does not enter
+        error backoff, so Luna planning and dispatch continue.
         """
         observation, status, capabilities, _ = context
         jobs = list(status.get("jobs", {}).values())
-        if not self._queue_low(jobs):
-            return False
         planner = self._load_autopilot()
         if planner is None:
             return False
         known = {q["id"] for q in self.work.data["nodes"]}
+        carried = {_node_identity(q) for q in self.work.data["nodes"] if q["status"] in DEDUPE_STATUSES}
         try:
             rows = planner(jobs, deepcopy(self.work.data["nodes"]), observation, capabilities, limit=AUTOPILOT_LIMIT)
             rows = [
                 q
                 for q in (rows or [])[:AUTOPILOT_LIMIT]
-                if isinstance(q, dict) and str(q.get("id", "")).startswith("auto_") and q.get("id") not in known
+                if isinstance(q, dict)
+                and str(q.get("id", "")).startswith("auto_")
+                and q.get("id") not in known
+                and not _carried(q, carried)
             ]
             if not rows:
                 return False
@@ -2082,8 +2092,8 @@ class Supervisor:
 
         ``growth_providers.growth_nodes`` over the receipt's ranked ``bottlenecks``: one package per
         bottleneck, at most ``GROWTH_LIMIT`` per cycle, none while one of its lane is in flight or
-        settling. Before, growth nodes came only from the autopilot, which runs only while fewer
-        than ``LOW_QUEUE`` nodes could dispatch: a full roadmap queue starved every growth.
+        settling. Before, growth nodes came only from the autopilot, which then ran only while fewer
+        than two nodes could dispatch: a full roadmap queue starved every growth.
         """
         observation, status, capabilities, _ = context
         receipt = observation.get("bottlenecks")

@@ -24,7 +24,9 @@ Rule (``docs/v2/PLANNERS.md``, "Early start"):
    every step it runs ahead of.
 3. Admission (``jobs._admission_error``): an early job never takes the last
    free job slot (``EARLY_FREE_SLOTS``) while a strict ``requires`` it lacks
-   has no active job; once all of them are active the slot is its own.
+   has no active job; once all of them are active the slot is its own. A
+   lacking requirement that owns research while another research job holds the
+   lane counts as covered (``requirements_covered``).
 4. Build (``Deferral`` passed to ``FactoryBuilder.ensure_plan``): an entity
    whose recipe waits for a coming technology, or whose hand craft would use
    a plate another active job waits for (only while the job is early), or
@@ -50,6 +52,11 @@ Rule (``docs/v2/PLANNERS.md``, "Early start"):
    (``evidence.research_only``). It keeps its admission lane but holds no job
    slot (``jobs.holds_slot``), so the three early outposts, the district and
    the bus can wait for their research side by side.
+10. Pre-craft (``Deferral.precraft``, declaration ``"precraft": true``): while
+   such a block is parked, ``ensure_plan`` crafts enabled ingredients of the
+   research-deferred items (``precraft.research_deferred``: no machine row stocks
+   them, the plates are carried and no other job waits for them), so only the
+   final assembly is left once the research ends.
 """
 
 from __future__ import annotations
@@ -77,6 +84,20 @@ def admission_requires(capabilities: Mapping, capability: str) -> list[str]:
     if early is not None:
         return list(early.get("requires", []))
     return list(capabilities[capability].get("requires", []))
+
+
+def requirements_covered(missing: Iterable[str], active: Iterable[str], research_owners: Iterable[str]) -> bool:
+    """Every missing strict requirement has an active job or waits only for the research lane (rule 3).
+
+    One job owns research at a time (``jobs.RESEARCH_CAPABILITIES``): a missing requirement that owns
+    research cannot start while another research job is active, and that job holds a job slot it frees
+    when it ends. Keeping a further slot free for the requirement only keeps the early block out
+    (aud-1114-0930: the district was proposed at 12-18 min and admitted only with bootstrap_logistics,
+    after the drill research, a median 2.9 min later, while starter capacity took the slots).
+    """
+    active, owners = set(active), set(research_owners)
+    lane_held = bool(active & owners)
+    return all(name in active or (lane_held and name in owners) for name in missing)
 
 
 def succeeded_capabilities(jobs: Iterable[Mapping]) -> set[str]:
@@ -395,9 +416,16 @@ class Deferral:
         coming: Iterable[str] = (),
         held: Iterable[str] = (),
         machine_made: Iterable[str] = (),
+        precraft: bool = False,
+        contested: Iterable[str] = (),
+        stocked: Iterable[str] = (),
     ):
         self.catalog = catalog
         self.machine_made = set(machine_made)
+        # Rule 10: ingredients of research-deferred items while parked (precraft.research_deferred).
+        self.precraft_enabled = precraft
+        self.contested = set(contested)
+        self.stocked = set(stocked)
         self.enabled = (
             observation.get("enabled_recipes") if isinstance(observation.get("enabled_recipes"), Mapping) else None
         )
@@ -420,6 +448,14 @@ class Deferral:
         if not technologies:
             return None
         return f"waiting for research {','.join(technologies)} to unlock {name}"
+
+    def precraft(self, observation: Mapping, needs: Mapping[str, int]) -> dict | None:
+        """A craft of an ingredient of the research-deferred ``needs`` (rule 10), or None."""
+        if not self.precraft_enabled:
+            return None
+        from .precraft import research_deferred
+
+        return research_deferred(self.catalog, observation, needs, contested=self.contested, stocked=self.stocked)
 
     def after(self, item: str, result: Mapping) -> str | None:
         """A reason to leave ``item`` for later given its acquisition result, else None (use the result)."""
@@ -459,7 +495,28 @@ def deferral(root, observation: Mapping, catalog, capability: str, capabilities:
     made = machine_made_items(jobs, observation) if early else set()
     if not early and not coming:
         return None
-    return Deferral(catalog, observation, coming=coming, held=held, machine_made=made)
+    precraft = bool(spec(capabilities, capability).get("precraft")) and bool(coming)
+    return Deferral(
+        catalog,
+        observation,
+        coming=coming,
+        held=held,
+        machine_made=made,
+        precraft=precraft,
+        contested=contested_plates(jobs, exclude=(capability,)) if precraft else (),
+        stocked=machine_made_items(jobs, observation) | stocked_items(jobs) if precraft else (),
+    )
+
+
+def stocked_items(jobs: Iterable[Mapping]) -> set[str]:
+    """Items a ``produce`` row makes or is about to make (an active or succeeded job)."""
+    return {
+        (job.get("parameters") or {}).get("item")
+        for job in jobs
+        if job.get("capability") == "produce"
+        and job.get("status") in ACTIVE_STATUSES | {"succeeded"}
+        and isinstance((job.get("parameters") or {}).get("item"), str)
+    }
 
 
 def track_early_time(job: dict, tick: int, now: float, early: bool) -> None:

@@ -88,6 +88,26 @@ class WasteReportTests(unittest.TestCase):
         write_run(run, jobs, events, slices)
         return run
 
+    def test_dispatch_latency_names_late_proposal_admission_wait_and_research_lane(self):
+        class Run:
+            start = {"r": 0, "l": 400 * S}
+            end = {"r": (390 * S, "succeeded", "")}
+
+            @staticmethod
+            def capability(key):
+                return {"r": "bootstrap_research", "l": "bootstrap_logistics"}[key]
+
+        cause = tool._dispatch_cause(Run, 30 * S, 10 * S, 400 * S, "bootstrap_logistics")
+        self.assertIn("proposed +20s, admitted 370s after that", cause)
+        self.assertIn("research lane: bootstrap_research", cause)
+        self.assertIn("proposal time unknown", tool._dispatch_cause(Run, None, 0, 1, "ammo_production"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nodes = [{"job_key": "l", "created_at": 105.0}, {"job_key": "x"}]
+            (root / "work_queue.json").write_text(json.dumps({"nodes": nodes}), encoding="utf-8")
+            clock = type("R", (), {"clock": [(100.0, 6000), (110.0, 6600)]})
+            self.assertEqual(tool._proposal_ticks(clock, root), {"l": 6000})
+
     def test_waste_types_from_logs_and_fleet_aggregate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
