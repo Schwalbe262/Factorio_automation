@@ -715,6 +715,30 @@ class WhatIfTests(unittest.TestCase):
         self.assertIn("needs", out)
         self.assertEqual(calls, ["step"])
 
+    def test_a_half_built_steam_stage_continues_its_saved_plan(self):
+        # eval-1575138435 stage 3: one pipe tile was obstructed for a while; every ladder re-plan
+        # from scratch found no bank slot (its own half-built bank in the way) and never resumed.
+        from types import SimpleNamespace
+
+        calls = []
+        stage = SimpleNamespace(
+            state={"world_id": "w1", "ok": True, "plan": {"entities": []}},
+            prepare=lambda obs: (
+                calls.append("prepare") or {"ok": False, "reason": "steam_expansion_no_buildable_bank_slot"}
+            ),
+            step=lambda obs: calls.append("step") or {"type": "build", "name": "pipe"},
+            proof=lambda obs: None,
+        )
+        job = dict(capability="steam_expansion", parameters={"stage": 3}, status="blocked", reason="x")
+        factory = lambda game, catalog: SimpleNamespace(_steam_stage=lambda p: stage)  # noqa: E731
+        out = remedy.what_if(self.root, self.live, None, job, {}, executors_factory=factory)
+        self.assertIs(out["fits"], True)
+        self.assertEqual(calls, ["step"])
+        stage.proof = lambda obs: {"ok": True}  # a proven stage is no build in progress
+        calls.clear()
+        out = remedy.what_if(self.root, self.live, None, job, {}, executors_factory=factory)
+        self.assertEqual(calls, ["prepare"])
+
     def test_a_finished_or_foreign_saved_state_plans_afresh(self):
         for phase, world in (("verified", "w1"), ("build", "other-world")):
             from types import SimpleNamespace
