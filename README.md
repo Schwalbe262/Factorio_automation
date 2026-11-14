@@ -8,12 +8,13 @@ code; a model (GPT-6 Luna, `controller.planner: luna`) is consulted only for
 incidents, and `planner: none` runs without any model.
 The game uses the default map/enemy rules and the installed 2.1.20 expansion.
 
-Start from [HANDOFF_CURRENT.md](HANDOFF_CURRENT.md) and [goal.md](goal.md).
+Start from [AGENTS.md](AGENTS.md), [HANDOFF_CURRENT.md](HANDOFF_CURRENT.md),
+[HANDOFF_DETAIL.md](HANDOFF_DETAIL.md) and [goal.md](goal.md).
 V2 is under construction; an autonomous v2 rocket launch is **not verified**.
 
 Capabilities are listed in `CAPABILITIES` (`src/factorio_agent/jobs.py`) and
-ordered by `ROADMAP` (`src/factorio_agent/progression.py`). Stages up to power
-and early research are proven on fresh seeds; later stages are unfinished.
+ordered by `ROADMAP` (`src/factorio_agent/progression.py`). Fleets of fresh seeds reach the smelting district and the main bus; one map is
+proven through plastic (oil, engines, remote smelting); later stages are unproven.
 Maintainer documentation: [docs/v2/README.md](docs/v2/README.md).
 
 Public blueprint examples and the bounded structural importer are documented in

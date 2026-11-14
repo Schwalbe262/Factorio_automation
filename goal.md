@@ -6,7 +6,18 @@ a real Space Age rocket autonomously. Long-term: win at the solar system edge.
 Main-session high-capability models develop/debug; the evaluated Luna receives
 only the framework interface and its documented state, with no parent decisions.
 
-## Standalone assisted development (active)
+## Development mode (active since 2026-11-13)
+Claude owns development: a high-capability model orchestrates, workers implement in
+git worktrees, verified work is merged and the worktree deleted at once. Routine
+decisions are rules in code (roadmap, planners, remedy ladder, growth providers);
+Luna is off (`planner none`) and a stronger incident model is deferred by the owner.
+Mid-tier models maintain the code later: keep rules general, documented and tested.
+Progress is measured on client-free fleets of fresh random seeds (test mode, never
+proof runs) and on one GUI map; a single seed cannot certify all seeds.
+The 2026-11-12 text below ("Standalone assisted development", seed 3083327785,
+Luna-planned) is history.
+
+## Standalone assisted development (history, 2026-11-12)
 User selected a periodic GPT-6 Luna medium planner using authenticated Codex CLI.
 The framework owns a persistent dependency queue and executes typed functions;
 ready successors run while Luna plans. Sol monitors and fixes missing functions
@@ -104,17 +115,21 @@ planning, execution and model waits separately. Later freeze code for independen
 6. Silo, normally produced rocket parts and platform starter pack, real launch
    counter increase and natural platform arrival. Luna-only end-to-end runs.
 
-Current implementation focus: remove startup inactivity and costly resource or
-defense loops; use observed stocks, affordable capacity and approved next-job
-preparation during real native waits. Quiet early factories do not require new
-turrets; inspect proposed sites and strengthen defense as actual threats grow.
-Finish fresh-seed mining/smelting and native red/green sequencing before advanced oil, acid/lubricant,
-fluid-fed processing units/electric engines/rocket fuel/concrete and solid launch
-materials. Installed Space Age 2.1.20 rocket-silo research uses red/green/blue;
-purple/yellow science is not a first-rocket prerequisite. This leaves the other
-production, throughput, rail transport and native launch gates above intact.
+Current implementation focus (2026-11-14): see HANDOFF_CURRENT.md and
+HANDOFF_DETAIL.md. Early game: every fleet seed reaches the smelting district and
+the main bus, 6 to 12 game minutes over the 20-minute human benchmark. Mid and
+late game: one GUI map is proven through plastic (oil, engines, remote smelting,
+bus lane extension); sulfur, advanced circuits, chemical science and everything to
+the silo are unproven live. Installed Space Age 2.1.20 rocket-silo research uses
+red/green/blue; purple/yellow science is not a first-rocket prerequisite.
 
 ## Evaluation
+Current sprint (2026-11-14): self-recovery instead of per-reason fixes (needs
+contract, remedy ladder with a paid rebuild rung, bottleneck auditor and growth
+providers), fleets analysed every round for lost time, quantitative growth beside
+the tech roadmap, and the live map pushed stage by stage toward the rocket.
+Sprint history below (2026-11-12 and earlier) is kept for reference.
+
 Current sprint (2026-11-12): independent paired producers retain fixed ports
 (EXP-0009); permanent red and green production reaches all eight labs through
 ordinary belts (EXP-0010/0011). Loaded second steam pair, installed iron ore360

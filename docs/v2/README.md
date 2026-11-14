@@ -1,6 +1,8 @@
 # docs/v2 index
 
-## Maintainer guides (current, checked against the code on 2026-11-13)
+## Maintainer guides (current, checked against the code on 2026-11-14)
+
+State of the project and open work: `HANDOFF_CURRENT.md` and `HANDOFF_DETAIL.md` in the repository root.
 
 | Document | Use it for |
 |---|---|
@@ -19,12 +21,13 @@
 ## Dashboard (read-only run view)
 
 ```
-python -B tools/dashboard.py [--runtime runtime/v2/<name>] [--port 8765]
+python -B tools/dashboard.py [--runtime runtime/v2/<name>] [--port 8765] [--host 0.0.0.0]
 ```
 
-Opens a server on `http://127.0.0.1:8765/` (loopback only; Ctrl+C stops it).
-Default runtime: the `runtime` of `runtime/active-runtime.json`, the one
-`lifecycle status` shows. It only reads files in the runtime folder: no RCON,
+Opens a server on `http://127.0.0.1:8765/` (loopback by default; `--host 0.0.0.0`
+serves the local network; Ctrl+C stops it). Default runtime: the `runtime` of
+`runtime/active-runtime.json`, the one `lifecycle status` shows; without
+`--runtime` the page follows that file when a new map becomes active. It only reads files in the runtime folder: no RCON,
 no locks, no writes. The page polls `/api/state` every 5 s; JSONL logs are
 read incrementally and a missing or half-written JSON keeps its last good value.
 
@@ -57,7 +60,17 @@ python -B tools/fleet.py status [--name NAME]          # one line per run
 python -B tools/fleet.py report [--name NAME] [--window 0-30] [--json]
 python -B tools/fleet.py stop   [--name NAME]          # lifecycle safe stop + server /quit per run
 python -B tools/fleet.py cost                          # machine and per-run estimate
+python -B tools/fleet.py inspect|revive|postmortem --name NAME --seed SEED   # look into one stopped run
+python -B tools/waste_report.py NAME                   # ranked lost time, critical chain, plate bound
+python -B tools/rocket_plan.py runtime/v2/<run>        # bill to the rocket and each item's producer
 ```
+
+More `start` options: `--explore` (layout variants per run), `--keep-problem` / `--keep-timeout`
+(leave problem runs up for inspection), `--no-postmortem`, `--stall-minutes`, `--respawn` (client-free
+respawn emulation, OFF by default, not approved by the owner), `--base` (runtime base folder; fleets
+started from a snapshot worktree pass the main checkout's `runtime`). A stopped problem run gets a
+post-mortem under `<run>/postmortem`; `report` lists pace against the 20-minute target, idle with work,
+actor deaths and problem runs with their cause.
 
 `start` makes `runtime/v2/<name>-<seed>` per run (refuses existing folders),
 allocates free port pairs from 34400/27400 up (skipping every port in a
@@ -146,6 +159,10 @@ behaviour of those controllers, not a rule to copy.
   NEST_ASSAULT (retired capability), RADAR, RADAR_COVERAGE, AMMO,
   PIERCING_AMMO, INFRASTRUCTURE_REPAIR, REGISTERED_BELT_REPAIR.
 - Actor: ACTOR_RECOVERY, CORPSE_RECOVERY.
+- Described only in ARCHITECTURE.md so far (no module note): self-recovery (`plan_needs`, `remedy`,
+  `bottleneck_audit`, `growth_providers`), `remote_smelting` (second plate supply on the next patch),
+  `bus_lane` (a new lane on a built bus), `route_tap` sources, `built_block_repair` and
+  `pole_relocation` (the clear rung), `rocket_plan` / `rocket_stages` / `rocket_feed`.
 - External: REFERENCE_SOURCES (blueprint sources, no code claims).
 
 ## Historical (may be wrong)
