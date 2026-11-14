@@ -121,6 +121,52 @@ reasons across runs (numbers normalized; count, example seed) and controller
 errors (`tools/report_run.py`). 16 runs fit in about 35 lines; `--json` has
 the full rows.
 
+## Offline planner sweep (no game, many seeds)
+
+`python -B tools/plan_sweep.py --seeds 0-299` runs the pure planners on synthetic
+worlds (`site/fakeworld.make_world(seed, size=512)`) and prints one report: failure
+rate per stage, top reasons (count, example seed), master-plan warnings, tidiness
+medians per block and per seed, queries the offline game could not answer, and the
+stages that need the game. `--json` prints the summary and every row; `--upto GROUP`
+stops early (e.g. `--upto smelting_district`); `--seed S --render [--out DIR]` writes
+one seed's plan as SVG (`site/planrender`) plus its row and runtime files.
+
+Stages (`factorio_agent/plan_sweep.py`, in roadmap order): `masterplan`
+(`plan_site` + `validate`), `mine:<ore>` (`mine_layout.choose_bank` on the planned
+patch and exit edge), `smelting_district` (the real `SmeltingDistrict.prepare`
+including its ore and coal feed routes from the bank ports), `main_bus`
+(`PlannedBus.prepare`), `automation_science` / `logistic_science` (the real
+controllers on bus taps, as `tests/test_v2_green_site.World` drives them, with the
+real catalog `tests/fixtures/catalog_eval_1575138435.json.gz`), then `block:<core>`
+allocations (`SiteService.allocate_candidates`) of steel, brick, petroleum, plastic,
+advanced petroleum, advanced circuits, sulfur, blue science and the rocket silo,
+footprints probed from their real builders. `OfflineGame` answers only read-only
+native checks from the `WorldMap` (route corridor survey, `survey_slots`,
+`preflight`, `can_place`, underground span, site identity); power poles are stubbed
+ok. A later stage is `skipped: <stage> failed` when its input failed.
+
+Tidiness: belts per block's plan and how many lie outside its reserved area (district:
+also its feeder corridors and mining zones; bus: band and header corridor; science:
+the allocation), route length / turns / longest feed from `route_metrics`
+(`routing.metrics`), underground pairs, planned corridor crossings
+(`site.corridors.count_crossings`).
+
+Determinism and cost: same seeds, same rows. The router is the whole cost (hard
+seeds spend minutes of CPU in a failing district search), so each seed has a router
+work budget counted in `routing.clear_skeleton` calls (`--route-budget`, default
+1.5 M, about 45 s); past it the route fails `sweep_route_budget_exhausted` (a sweep
+limit, not a planner verdict). Workers default to `min(8, cpus // 4)` and are capped
+at 8: live fleets and the GUI run share the machine. Measured on the 32-cpu machine:
+300 seeds in 19 minutes with 8 workers (median seed 16 s, slowest 172 s); the rows
+are identical at any worker count. Gate: `tests/test_v2_plan_sweep.py`
+(one full seed, three early seeds, failure counts pinned as upper bounds; lower the
+bound when a fix removes a failure).
+
+Not offline-capable (listed in every report): the mining bank build
+(`mining_layout_policy.prepare_new_bank`, native patch survey and exit prefix), power
+poles, steam expansion (shore sites), planned steel/brick furnaces (need built banks'
+material ports), oil gathering, defense.
+
 ## Capability and subsystem reference
 
 Module-level notes. The modules they describe exist and match on spot checks;
