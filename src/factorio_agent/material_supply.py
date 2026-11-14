@@ -514,6 +514,12 @@ return select_mining_exit(args.source,args.zones,{},args.planned,args.exit_candi
         def accept(tap):
             extra = mine_trunk.hub(tap, keys) if keys else None
             entities = list(tap["entities"]) + (extra["entities"] if extra else [])
+            # A consumer's route leaves each published port straight ahead: the cell past a
+            # hub output must be as free as the hub itself (live, planned hardware, ore).
+            facing = tap["port"]["facing"]
+            entities += [
+                entity("transport-belt", p["x"], p["y"], facing) for p in (extra or {}).get("output_access", [])
+            ]
             clash = surface_conflict(self.builder, obs, blocks, entities)
             if clash is not None:
                 failures.append({"reason": "mine_trunk_tap_meets_planned_hardware", "along": tap["along"]})
