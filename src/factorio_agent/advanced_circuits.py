@@ -918,7 +918,12 @@ class AdvancedCircuitProduction:
                 return budget.failure(candidate_failures=failures[-6:])
             future = advanced_circuit_core(self.catalog, *xy({"position": core["anchor"]}), 4)
             ports = {p["item"]: p for p in core["ports"]}
-            reserved = merge_entities(core["entities"], future["entities"]) + _core_keepout(core)
+            # The output's access belts are the block's own: no input route or tap may take them
+            # (eval-1575138435: a route crossed them in another direction; the whole-plan merge raised
+            # "conflicting shared port configuration" and the job blocked as a planner fault).
+            reserved = (
+                merge_entities(core["entities"], future["entities"]) + _core_keepout(core) + list(core["output_access"])
+            )
             plastic_route = plan_connection(
                 budget.game, adapter, obs, plastic["source"], ports["plastic-bar"], reserved
             )
@@ -933,6 +938,13 @@ class AdvancedCircuitProduction:
                     )
                 )
                 continue
+            try:
+                around = merge_entities(reserved, plastic_route["entities"])
+            except ValueError:
+                failures.append(
+                    {"stage": "plastic_route", "anchor": core["anchor"], "reason": "advanced_plan_entities_conflict"}
+                )
+                continue
             tapped = block_sites.bus_taps(
                 budget.game,
                 self.builder,
@@ -941,7 +953,7 @@ class AdvancedCircuitProduction:
                 block,
                 owner=OWNER,
                 ports=[ports["copper-plate"], ports["iron-plate"]],
-                entities=merge_entities(reserved, plastic_route["entities"]),
+                entities=around,
                 demand={"iron-plate": rated["iron_per_minute"], "copper-plate": rated["copper_per_minute"]},
             )
             if not tapped.get("ok"):
@@ -950,8 +962,14 @@ class AdvancedCircuitProduction:
                 continue
             taps, ignored = tapped["taps"], tuple(tapped["ignored_units"])
             routes = [plastic_route] + list(tapped["routes"])
-            tap_entities = merge_entities(*(t["entities"] for t in taps)) if taps else []
-            es = block_sites.own_entities(merge_entities(core["entities"], *(r["entities"] for r in routes)), taps)
+            try:
+                tap_entities = merge_entities(*(t["entities"] for t in taps)) if taps else []
+                es = block_sites.own_entities(merge_entities(core["entities"], *(r["entities"] for r in routes)), taps)
+            except ValueError:
+                failures.append(
+                    {"stage": "whole_plan", "anchor": core["anchor"], "reason": "advanced_plan_entities_conflict"}
+                )
+                continue
             from .engine_production import _clear_planned_power_group
 
             target = _clear_planned_power_group(budget.game, core)
@@ -964,14 +982,16 @@ class AdvancedCircuitProduction:
             if not power.get("ok"):
                 failures.append(dict(_candidate_failure("power", power), reason=power.get("reason", "power_failed")))
                 continue
-            es = merge_entities(es, power["entities"])
-            whole = preflight(
-                budget.game,
-                self.builder,
-                obs,
-                merge_entities(es, tap_entities, core["output_access"]),
-                ignored_units=ignored,
-            )
+            try:
+                es = merge_entities(es, power["entities"])
+                combined = merge_entities(es, tap_entities, core["output_access"])
+                merge_entities(future["entities"], *(r["entities"] for r in routes), power["entities"], tap_entities)
+            except ValueError:
+                failures.append(
+                    {"stage": "whole_plan", "anchor": core["anchor"], "reason": "advanced_plan_entities_conflict"}
+                )
+                continue
+            whole = preflight(budget.game, self.builder, obs, combined, ignored_units=ignored)
             if not whole.get("ok"):
                 failures.append(dict(_candidate_failure("whole_preflight", whole), reason="advanced_preflight_failed"))
                 continue

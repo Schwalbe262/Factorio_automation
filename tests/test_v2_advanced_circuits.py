@@ -824,6 +824,33 @@ class PlannedWorldAdvancedTests(unittest.TestCase):
         self.assertFalse(tapped & {(e["name"], *xy(e)) for e in ready["plan"]["entities"]})
         self.assertFalse(self.c.path.exists())
 
+    def test_input_routes_keep_off_the_output_access_and_a_conflict_is_a_failure_row(self):
+        # eval-1575138435 (578 min): a route crossed the block's output access belts in another
+        # direction; the whole-plan merge raised and the job blocked as a planner fault.
+        seen = []
+
+        def route(game, builder, obs, source, destination, reserved, **kwargs):
+            seen.append(list(reserved))
+            return tap_route(game, builder, obs, source, destination, reserved, **kwargs)
+
+        with patch("factorio_agent.advanced_circuits.plan_connection", side_effect=route):
+            ready = self.c.prepare(self.obs)
+        self.assertTrue(ready["ok"], ready)
+        access = {xy(e) for e in ready["core"]["output_access"]}
+        self.assertTrue(access <= {xy(e) for e in seen[0]})  # the plastic route keeps off them
+
+        def crossing(game, builder, obs, source, destination, reserved, **kwargs):
+            out = tap_route(game, builder, obs, source, destination, reserved, **kwargs)
+            spot = ready["core"]["output_access"][0]
+            out["entities"] = out["entities"] + [dict(spot, direction=(spot.get("direction", 0) + 8) % 16)]
+            return out
+
+        with patch("factorio_agent.advanced_circuits.plan_connection", side_effect=crossing):
+            failed = self.c.prepare(self.obs)
+        self.assertFalse(failed["ok"])
+        reasons = {f.get("reason") for f in failed["evidence"]["failures"]}
+        self.assertIn("advanced_plan_entities_conflict", reasons)
+
     def test_step_cuts_the_taps_over_before_the_block_and_settles_the_site(self):
         cut = {"type": "mine", "name": "transport-belt"}
         with patch("factorio_agent.planned_tap.cutover", return_value=cut) as cutover:
