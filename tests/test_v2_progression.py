@@ -361,7 +361,9 @@ class CapacityAutopilotTests(unittest.TestCase):
         )
         six["retirement_demand"] = {"items": {"iron-plate": 1500}, "gate_seconds": 200}
         before = done_through("mining_outpost_coal")
-        self.assertEqual(len(self.capacity(six, before)), 1)
+        # The district is proposed in the same pass and waits only for a job slot: no plate cell
+        # beside it (district_waits_for_slot, tests/test_v2_district_slot_capacity.py).
+        self.assertEqual(self.capacity(six, before), [])
         for status in ("running", "waiting", "succeeded"):
             self.assertEqual(self.capacity(six, before + [job("smelting_district", status=status)]), [], status)
         # A blocked district (no site yet) does not stop the cells.

@@ -154,7 +154,10 @@ demand (default), iron and copper only:
                   "district"; a new cell's plates stop mattering once the district smelts)
   no new iron/copper cell once a smelting_district job is active or succeeded (district_started:
                   critical path first; aud-1114-0703 built cells 8 -> 12 from 19-22 to 25-28 min
-                  while the district job ran from 15-17 min)
+                  while the district job ran from 15-17 min), nor while a queued district node waits
+                  only for a job slot (district_waits_for_slot: every missing strict requires has an
+                  active job; aud-1114-0841 capacity jobs took each freed slot, district admitted
+                  17.6-20.9 min in 3 runs); a district proposed in the same autopilot pass drops them too
   expand k when T(0) - T(k) >= min_saving_seconds and payback (no max_ratio)
   coal          = fuel_cells_needed with the new cells <= max_cells, else the step shrinks   rule c
   no fixed count, no unlock closing (mining.closed_by_unlock is False), no "drill researching"
