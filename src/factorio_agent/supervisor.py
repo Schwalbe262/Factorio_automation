@@ -51,6 +51,9 @@ RETRY_CLEARED_BY = {
     "feed_head_bandwidth_below_next_slot_demand": frozenset({"feed_head_rework"}),
     # normal_research: no block makes one of the technology's packs yet.
     "research_pack_producer_missing": frozenset({"logistic_science", "chemical_science"}),
+    # defense_perimeter.ensure_coverage: the gun-turret research (pulled forward by
+    # progression.defense_urgency_nodes) clears it; until then the job keeps no slot.
+    "native_gun_turret_and_normal_magazine_recipes_required": frozenset({"research"}),
 }
 # Re-planning blockers (a route, a whole-plan preflight or a site search that found nothing):
 # the world, neighbours and the planning budget change the answer without any job success.
