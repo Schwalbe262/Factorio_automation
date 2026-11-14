@@ -7,7 +7,6 @@ and 3416914852: one boiler, ~20 electric drills, the plant in brownout; the coal
 the drill stood ``no_power`` and nothing restarted the plant.
 """
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
