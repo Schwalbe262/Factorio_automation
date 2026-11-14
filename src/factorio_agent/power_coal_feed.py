@@ -36,6 +36,9 @@ Rules (docs/v2/PLANNERS.md "Starter power in two phases"):
    ``boiler_fuel_action``); one slot of wood is held for it
    (``hand_fed_wood_reserve``). Belt-fed boilers get wood through
    ``wood_burner_feed``.
+8. ``dead_plant_restart``: a belt-fed boiler that ran dry (no fuel, nothing burning)
+   gets one hand fill, so an electric coal feed that needs the plant's own power
+   starts again (the coal -> boiler -> drill deadlock).
 """
 
 from __future__ import annotations
@@ -211,12 +214,57 @@ def _take_fuel(spec, item, count, reason) -> dict:
     }
 
 
+RESTART_REASON = "restart the belt-fed boiler that ran dry: its electric coal feed needs the power it makes"
+
+
+def dead_plant_restart(builder, bootstrap, catalog, obs) -> dict | None:
+    """One hand fill that restarts a belt-fed boiler that ran dry, or None (rule 8 of the module doc).
+
+    Rule 8: once the feed is belt-fed (not ``hand_fed``) and its drill is electric
+    (``electric_coal``), coal reaches the boiler only while the boiler makes power: a boiler that
+    runs dry stops its own feed drill, and nothing restarts it (fleets aud-1114-0752 889907428 and
+    aud-1114-0841 1606534421: boiler ``no_fuel``, fuel arm waiting for source items, engines
+    ``no_input_fluid``, electric_coal blocked ``replacement_electric_drill_has_no_power``). A boiler
+    with no fuel in its slot and nothing burning gets one fill: carried coal (up to the hand-fed
+    ``target``), else carried wood, else coal collected from a starter chest (``ensure_item``). A
+    plain wait returns None, so the job keeps working.
+    """
+    state = getattr(builder, "state", None) or {}
+    if state.get("world_id") != obs.get("world_id") or coal_feed_mode(state) == HAND_FED:
+        return None
+    spec = _boiler_spec(state)
+    boiler = _observed(obs, spec) if spec else None
+    if boiler is None:
+        return None
+    inventory = boiler.get("inventory") or {}
+    if any(int(inventory.get(fuel, 0) or 0) > 0 for fuel in ("coal", WOOD)):
+        return None
+    if float(boiler.get("remaining_burning_fuel", 0) or 0) > 0:
+        return None
+    sizing = boiler_sizing(catalog)
+    carried = obs.get("inventory") or {}
+    coal, wood = int(carried.get("coal", 0) or 0), int(carried.get(WOOD, 0) or 0)
+    if coal > 0 or wood > 0:
+        move = builder._move(obs, spec["position"])
+        if move:
+            return move
+        if coal > 0:
+            return _insert_fuel(spec, "coal", min(coal, sizing["target"]), RESTART_REASON)
+        return _insert_fuel(spec, WOOD, min(wood, wood_slot(catalog)), RESTART_REASON)
+    result = bootstrap.ensure_item(obs, "coal", min(sizing["target"], FUEL_BATCH))
+    return result if isinstance(result, dict) and result.get("type") else None
+
+
 def boiler_upkeep(ex, obs) -> dict | None:
-    """``boiler_fuel_action`` for a ``StarterExecutors``; None when it lacks a builder or bootstrap."""
+    """``boiler_fuel_action`` (hand-fed) or ``dead_plant_restart`` (belt-fed) for a ``StarterExecutors``.
+
+    None when it lacks a builder or bootstrap.
+    """
     builder, bootstrap = getattr(ex, "builder", None), getattr(ex, "bootstrap", None)
     if builder is None or bootstrap is None:
         return None
-    return boiler_fuel_action(builder, bootstrap, getattr(ex, "catalog", None), obs)
+    catalog = getattr(ex, "catalog", None)
+    return boiler_fuel_action(builder, bootstrap, catalog, obs) or dead_plant_restart(builder, bootstrap, catalog, obs)
 
 
 # ----- planner rules (pure: jobs + observe receipt) ---------------------------------

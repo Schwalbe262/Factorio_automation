@@ -70,7 +70,13 @@ MISSING_PRODUCER_RATE = 6  # items/min of a produce row proposed for a machine-o
 # by upkeep, idle furnaces holding the item): retried after a quiet interval like a stall
 # (eval-1575138435, 375 min: engine_production and oil_gathering blocked on steel while two idle
 # furnaces held 163 steel; every job terminal, nothing could succeed, the run idled 14+ min).
-SUPPLY_RETRY_REASONS = frozenset({"required item needs a production machine"})
+SUPPLY_RETRY_REASONS = frozenset(
+    {
+        "required item needs a production machine",
+        # electric_coal: the plant ran dry; boiler upkeep restarts it (power_coal_feed.dead_plant_restart).
+        "replacement_electric_drill_has_no_power",
+    }
+)
 # Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan) are
 # re-planning blockers too. Past AUTO_RETRY_LIMIT every re-planning blocker is still retried,
 # with no limit, when the published facts change (board plans and connections, material
