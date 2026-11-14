@@ -154,7 +154,10 @@ demand (default), iron and copper only:
                   "district"; a new cell's plates stop mattering once the district smelts)
   no new iron/copper cell once a smelting_district job is active or succeeded (district_started:
                   critical path first; aud-1114-0703 built cells 8 -> 12 from 19-22 to 25-28 min
-                  while the district job ran from 15-17 min)
+                  while the district job ran from 15-17 min), nor while a queued district node waits
+                  only for a job slot (district_waits_for_slot: every missing strict requires has an
+                  active job; aud-1114-0841 capacity jobs took each freed slot, district admitted
+                  17.6-20.9 min in 3 runs); a district proposed in the same autopilot pass drops them too
   expand k when T(0) - T(k) >= min_saving_seconds and payback (no max_ratio)
   coal          = fuel_cells_needed with the new cells <= max_cells, else the step shrinks   rule c
   no fixed count, no unlock closing (mining.closed_by_unlock is False), no "drill researching"
@@ -335,6 +338,18 @@ eval-4177156614 the actor took the district iron port 42 times and the copper tr
 112..130 for 10 minutes while the bus waited for plates on its tails, so the bus never
 succeeded and the iron/copper starter cells (retired only after `planned_main_bus`) were
 fuelled until the end of the run.
+
+Trunk fuel (`V2Bootstrap.trunk_fuel`): once the coal patch has a proven (`ready`) electric bank
+in `mining-outposts.json`, its plan belts and its traced trunk run are the hand-fuel coal source.
+A coal fetch (burner upkeep, the hand-fed boiler, any `ensure_item(coal)`) takes one guarded
+`take_many` (coal from belt sources only, `BELT_FUELS`) of up to the request (<= 50) from tiles
+holding at least `TRUNK_FUEL_TILE_MIN` (6) coal, i.e. a backed-up or saturated belt, never less
+than `min(count, FUEL_BATCH)`; it wins over a starter coal chest that holds less than the request,
+and `maintain_fuel` no longer waits for a starter chest batch while the trunk holds one. Fleet
+aud-1114-0841: after minute 18 the courier took 8 coal per trip from the starter coal chests and
+put 8 into one burner (8 is what had piled up), about a third of the actor time up to the bus;
+with a full fetch a burner gets `FUEL_FILL` per visit and the boiler a full fill. Pinned by
+`tests/test_v2_trunk_fuel.py`.
 
 ## Carried surplus (`carried_surplus.py`)
 

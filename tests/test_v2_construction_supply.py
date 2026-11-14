@@ -195,7 +195,8 @@ class ConstructionSupplyTests(unittest.TestCase):
         for field, values in {
             "count": [0, 51, True, 1.5],
             "world_id": [None, ""],
-            "item": ["coal", "iron-ore", "logistic-science-pack", "sulfuric-acid"],
+            # coal is allowed off belts only (BELT_FUELS, test_v2_trunk_fuel); wood never
+            "item": ["wood", "iron-ore", "logistic-science-pack", "sulfuric-acid"],
             "sources": [[], "bad", [source(i, x=i + 0.5) for i in range(1, 18)]],
         }.items():
             for value in values:

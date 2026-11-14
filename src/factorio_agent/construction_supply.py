@@ -59,6 +59,8 @@ CONSTRUCTION_ITEMS = frozenset(
         "pipe-to-ground",
     }
 )
+# Fuel a hand-fuel trip may take off a proven coal mining bank's belts (``V2Bootstrap.trunk_fuel``).
+BELT_FUELS = frozenset({"coal"})
 AMMO_ITEMS = frozenset(
     {
         "artillery-shell",
@@ -97,7 +99,7 @@ def validate_take_many(action):
         or set(action) - {"type", "item", "count", "world_id", "sources", "reason"}
         or action.get("type") != "take_many"
         or not isinstance(action.get("item"), str)
-        or action["item"] not in CONSTRUCTION_ITEMS
+        or action["item"] not in CONSTRUCTION_ITEMS | BELT_FUELS
         or type(action.get("count")) is not int
         or not 1 <= action["count"] <= MAX_ITEMS
         or not isinstance(action.get("world_id"), str)
@@ -126,6 +128,8 @@ def validate_take_many(action):
             or (row["kind"] == "belt" and row["name"] == "transport-belt")
         ):
             raise ValueError("take_many accepts only machine outputs, chests and ordinary transport belts")
+        if action["item"] in BELT_FUELS and row["kind"] != "belt":
+            raise ValueError("take_many takes fuel only from mine trunk belts")
         position = row["position"]["x"], row["position"]["y"]
         if row["unit_number"] in units or position in positions:
             raise ValueError("take_many sources must have distinct unit identities and positions")
@@ -141,6 +145,13 @@ FUEL_BATCH = 8  # coal pieces worth one fetch-and-fuel trip
 # (seed 2099054105: 119 coal inserts, 110 plate takes of 10 in 28 min).
 FUEL_FILL = 20  # cap; the amount follows coal production (haul_batch)
 FUEL_FETCH = 48  # cap for one coal fetch
+# Trunk fuel (``V2Bootstrap.trunk_fuel``): once the coal patch has a proven electric bank, its
+# collector and trunk belts are the hand-fuel coal source, one take_many of a full fetch. Fleet
+# aud-1114-0841: after minute 18 the courier took 8 coal per trip from the starter coal chests
+# (whatever had piled up) and put 8 into one burner, about a third of the actor's actions up to
+# the bus. A tile counts only while it holds this much coal (a backed-up or saturated belt), so a
+# trip never empties a trunk that is short.
+TRUNK_FUEL_TILE_MIN = 6
 COLLECT_BATCH = 10  # construction items worth one collection trip
 # A block's machine holding this many of the block's own output-port item cannot move it out (its
 # output belt is backed up): that pile is surplus a construction trip may take (eval-1575138435,
@@ -343,6 +354,92 @@ class V2Bootstrap(DeterministicBootstrap):
 
         return dict(observation, entities=[e for e in observation.get("entities", []) if available(e)])
 
+    def _trunk_fuel_tiles(self, observation) -> set:
+        """Tiles of the transport belts of every proven coal mining bank of this world (plan + traced trunk)."""
+        root = getattr(getattr(getattr(self, "game", None), "cfg", None), "runtime_dir", None)
+        if not isinstance(root, (str, Path)):
+            return set()
+        path = Path(root) / "mining-outposts.json"
+        try:
+            stamp = (observation.get("world_id"), path.stat().st_mtime_ns, path.stat().st_size)
+        except OSError:
+            return set()
+        cached = getattr(self, "_trunk_fuel_cache", None)
+        if cached is None or cached[0] != stamp:
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                state = {}
+            banks = []
+            if isinstance(state, dict) and state.get("world_id") == observation.get("world_id"):
+                banks = [
+                    b
+                    for b in state.get("banks") or ()
+                    if isinstance(b, dict) and b.get("ready") and (b.get("plan") or {}).get("resource") == "coal"
+                ]
+            cached = self._trunk_fuel_cache = (stamp, banks)
+        tiles = set()
+        if not cached[1]:
+            return tiles
+        from .mine_trunk import trace_trunk
+
+        for bank in cached[1]:
+            plan = bank.get("plan") or {}
+            for e in plan.get("entities") or ():
+                if e.get("name") == "transport-belt" and _position(e.get("position")):
+                    tiles.add((e["position"]["x"], e["position"]["y"]))
+            for port in (plan.get("ports") or ())[:1]:
+                if port.get("item") == "coal" and port.get("direction") == "output":
+                    for e in trace_trunk(observation, port):
+                        if e.get("name") == "transport-belt":
+                            tiles.add((e["position"]["x"], e["position"]["y"]))
+        return tiles
+
+    def _trunk_fuel_sources(self, observation) -> list[tuple[int, dict]]:
+        """``(coal, source)`` of trunk belts holding at least ``TRUNK_FUEL_TILE_MIN`` coal, fullest first."""
+        tiles = self._trunk_fuel_tiles(observation)
+        if not tiles:
+            return []
+        rows = []
+        for e in observation.get("entities", []):
+            if e.get("name") != "transport-belt" or not _position(e.get("position")):
+                continue
+            unit, p = e.get("unit_number"), e["position"]
+            if type(unit) is not int or unit < 1 or (p["x"], p["y"]) not in tiles:
+                continue
+            stock = (e.get("belt_inventory") or {}).get("coal", 0)
+            if type(stock) in (int, float) and stock >= TRUNK_FUEL_TILE_MIN:
+                rows.append((int(stock), {"name": e["name"], "position": dict(p), "unit_number": unit, "kind": "belt"}))
+        rows.sort(key=lambda r: (-r[0], r[1]["unit_number"]))
+        return rows[:MAX_SOURCES]
+
+    def trunk_coal(self, observation) -> int:
+        """Coal a trunk fuel take could collect now (``TRUNK_FUEL_TILE_MIN`` tiles only)."""
+        return sum(n for n, _ in self._trunk_fuel_sources(observation))
+
+    def trunk_fuel(self, observation, item, count) -> dict | None:
+        """One ``take_many`` of hand-fuel coal off the proven coal bank's belts, or None.
+
+        Only when the belts hold at least ``min(count, FUEL_BATCH)``: never a smaller trip.
+        """
+        if item not in BELT_FUELS or type(count) is not int or count < 1:
+            return None
+        world = observation.get("world_id")
+        if not isinstance(world, str) or not world:
+            return None
+        rows = self._trunk_fuel_sources(observation)
+        on_hand = sum(n for n, _ in rows)
+        if not rows or on_hand < min(count, FUEL_BATCH):
+            return None
+        return {
+            "type": "take_many",
+            "item": item,
+            "count": min(count, MAX_ITEMS, on_hand),
+            "world_id": world,
+            "sources": [source for _, source in rows],
+            "reason": f"collect hand-fuel {item} from the coal patch trunk",
+        }
+
     def production_rate(self, observation, item):
         """Recent items/minute of ``item`` (see :func:`production_rate`)."""
         samples = self.__dict__.setdefault("_rate_samples", {})
@@ -413,7 +510,7 @@ class V2Bootstrap(DeterministicBootstrap):
             # Less than a batch in hand while coal is still being mined: top up
             # in one trip once a batch has piled up, otherwise leave the few
             # pieces alone. Spending them one at a time is the loop to avoid.
-            if _produced_coal(observation, coal_cells) < FUEL_BATCH:
+            if _produced_coal(observation, coal_cells) < FUEL_BATCH and self.trunk_coal(observation) < FUEL_BATCH:
                 return None
             rate = self.production_rate(observation, "coal")
             return self.ensure_item(observation, "coal", carried + haul_batch(rate, 3 * FUEL_BATCH, FUEL_FETCH))
@@ -545,6 +642,7 @@ class V2Bootstrap(DeterministicBootstrap):
             # ensure_item use ordinary engine crafting for fresh full magazines.
             # Even a machine output could contain a manually stored used stack.
             return None
+        whole = observation  # trunk fuel reads the mining bank's own belts, which block ownership hides
         observation = self._unreserved_stock_observation(observation, item)
         if item not in CONSTRUCTION_ITEMS:
             depot = getattr(self, "fuel_depot", None)  # carried_surplus.CarriedSurplus.depot_take
@@ -552,6 +650,9 @@ class V2Bootstrap(DeterministicBootstrap):
             if stored is not None:
                 return stored  # surplus parked in a depot is used before any other chest
             action = super()._take_output(observation, item, count)
+            trunk = self.trunk_fuel(whole, item, count) if item in BELT_FUELS else None
+            if trunk is not None and (action is None or action.get("count", 0) < min(count, trunk["count"])):
+                return trunk  # the permanent coal source in one full fetch, not a chest's few pieces
             if (
                 item in FUELS
                 and action is not None

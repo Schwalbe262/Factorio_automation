@@ -625,6 +625,45 @@ def district_started(jobs) -> bool:
     return False
 
 
+QUEUED_NODE_STATUSES = frozenset({"pending", "ready"})
+
+
+def district_waits_for_slot(jobs, queue_nodes, capabilities) -> bool:
+    """A queued smelting_district node waits only for a job slot (``jobs._admission_error``).
+
+    Queued: a node of the capability is pending or ready (proposed, not yet a job; early start
+    included). Only a slot: every strict ``requires`` it lacks has an active job, so the early
+    start rule (``EARLY_FREE_SLOTS``) no longer refuses it. aud-1114-0841: the district was
+    proposed early at ~11.9 min, but new iron/copper starter capacity nodes
+    (``CAPACITY_PRIORITY``, above every roadmap step) took each job slot that freed up, so the
+    district was admitted only when the last outpost ended (17.6-20.9 min in runs 1341437772,
+    2257487917, 257467717; 16.4 in 2801362153 where no capacity job ran).
+    """
+    if not any(
+        node.get("capability") == DISTRICT_STEP_ID
+        and node.get("status", "pending") in QUEUED_NODE_STATUSES
+        and not node.get("paused")
+        for node in queue_nodes
+    ):
+        return False
+    succeeded = {j.get("capability") for j in jobs if j.get("status") == "succeeded"}
+    active = {j.get("capability") for j in jobs if j.get("status") not in TERMINAL_STATUSES | {"paused"}}
+    missing = set((capabilities.get(DISTRICT_STEP_ID) or {}).get("requires", [])) - succeeded
+    return missing <= active
+
+
+def _without_plate_capacity(nodes) -> list[dict]:
+    from .mining import BULK_RESOURCES
+
+    return [
+        n
+        for n in nodes
+        if not (
+            n.get("capability") == CAPACITY_CAPABILITY and (n.get("parameters") or {}).get("resource") in BULK_RESOURCES
+        )
+    ]
+
+
 def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
     """Queue nodes for need-driven starter capacity (see ``capacity_planning``).
 
@@ -671,11 +710,12 @@ def capacity_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
         # lookahead; an outpost alone does not replace them (its ore waits for the district's
         # first bank), only the retirement does (capacity_planning.PLATE_CELL_POLICY).
         outposts = (outposts - BULK_RESOURCES) | retired_by_jobs(jobs)
-        if district_started(jobs):
+        if district_started(jobs) or district_waits_for_slot(jobs, queue_nodes, capabilities):
             # Critical path first: once the district job builds (or has built), its plates and the
             # actor's time go to the district; a new burner cell would finish around the
             # district's own completion and retire with it (aud-1114-0703: iron 8 -> 12 cells
-            # from 19-22 min to 25-28 min while the district job ran from 15-17 min).
+            # from 19-22 min to 25-28 min while the district job ran from 15-17 min). A queued
+            # district that waits only for a job slot counts too: a capacity job would take it.
             outposts |= BULK_RESOURCES
         retire = observation.get("retirement_demand")
         items = retire.get("items") if isinstance(retire, Mapping) else None
@@ -851,6 +891,11 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     from .science_retirement import science_retirement_nodes  # obsolete startup science cell
 
     proposed += science_retirement_nodes(jobs, queue_nodes, observation, capabilities)[: max(0, limit - len(proposed))]
+    from .capacity_planning import demand_driven
+
+    if demand_driven() and district_waits_for_slot(jobs, [dict(n, status="ready") for n in proposed], capabilities):
+        # The district proposed in this same pass: no plate capacity beside it (capacity_nodes).
+        proposed = _without_plate_capacity(proposed)
     return proposed
 
 
