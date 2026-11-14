@@ -21,7 +21,10 @@ Rules:
 3. Feed: the item's source routed onto the lane head (a bus route): a splitter tap on the item's
    patch bank trunk first (``mine_trunk.plan_tap``, demand ``DEMAND_PER_MINUTE`` recorded in the
    trunk ledger so the bank grows for it), else a free board output port of the item
-   (``production_sources.free_board_ports``).
+   (``production_sources.free_board_ports``). The route ends on the lane head, else at a header
+   waypoint beside the band where a fixed head approach (:func:`head_approaches`) takes over:
+   the bus's own plate feeds cross the rows behind the heads. A prepare stops after
+   ``PLANNING_SECONDS``; a failed feed is a ``route`` need (``plan_needs``), never a bare plan.
 4. Build order: the board block ``bus_lane:<item>`` (trunk + feed route) and the tap block are
    published first; trunk and route are built, then the patch trunk is cut over
    (``mine_trunk.cutover``: everything carried, one exact trunk belt mined, splitter built).
@@ -39,6 +42,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 
 from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
@@ -51,7 +55,7 @@ from .production_sources import free_board_ports, route_tap_sites, tapped_board_
 from .site.busframe import Bus
 from .site.planmodel import Lane
 from .smelting import merge_entities
-from .transport import plan_connection, xy
+from .transport import compile_crossings, plan_connection, xy
 
 CAPABILITY = "bus_lane"
 OWNER = "bus_lane"
@@ -153,15 +157,17 @@ def with_lane(bus: Bus, lane: Lane) -> Bus:
 
 HEADER_ROW = -4  # bus-local row of the header corridor (district side of the head) the waypoints sit on
 WAYPOINT_OFFSETS = (2, 6, 12)  # tiles outside the band edge
-_VECTORS = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
+APPROACH_ROWS = (HEADER_ROW, -3, -5, -6)  # header rows a head approach may run along, best first
+PLANNING_SECONDS = 120.0  # wall-clock budget of one prepare (checked before every feed route)
+BUDGET_EXHAUSTED = "bus_lane_planning_budget_exhausted"
 
 
-def header_waypoints(bus: Bus) -> list[tuple[float, float, int]]:
-    """``(x, y, facing)`` points beside the bus head, outside the band on either side, facing the head.
+def header_waypoints(bus: Bus, row: int = HEADER_ROW) -> list[tuple[float, float, int, int]]:
+    """``(x, y, facing, lateral)`` points beside the bus head, outside the band on either side, facing the head.
 
-    The tiles right behind a head are the heads' approaches (kept clear for every reserved lane),
-    so a new lane's feed comes along the header row from beside the band (eval-1575138435: the
-    coal lane head took a feed from the west along that row; no corridor from the trunk tap direct).
+    The tiles right behind a head are the heads' approaches, so a new lane's feed comes along the
+    header row from beside the band (eval-1575138435: the coal lane head took a feed from the west
+    along that row; no corridor from the trunk tap direct).
     """
     from .site.busframe import compass_of, right_of
 
@@ -170,10 +176,75 @@ def header_waypoints(bus: Bus) -> list[tuple[float, float, int]]:
     for d in WAYPOINT_OFFSETS:
         for side in (-1, 1):
             lateral = (-bus.half - d) if side < 0 else (bus.half - 1 + d)
-            x, y = bus.local_point(HEADER_ROW + 0.5, lateral + 0.5)
+            x, y = bus.local_point(row + 0.5, lateral + 0.5)
             facing = FACING[compass_of((rx * -side, ry * -side))]
-            points.append((x, y, facing))
+            points.append((x, y, facing, lateral))
     return points
+
+
+def head_approaches(bus: Bus, lane, item: str, trunk_entities, foreign, span: int) -> list[dict]:
+    """Fixed head approaches of a new lane (pure), one per band side at most, best row first.
+
+    The bus's own plate feeds run across the rows right behind the heads (br-steel-1114 seeds
+    649402784, 3371980627: the copper feed along the row behind every other lane's head). A
+    route into the head then needs an underground whose exit is the head tile, which a route
+    never ends with (``compile_crossings`` keeps both mouths inside the route), and the head's
+    port apron meets the foreign belt (``production_port_apron_belt_identity_changed``): every
+    feed failed. An approach is planned here instead: from a header waypoint beside the band
+    (:func:`header_waypoints`) along a header row to the lane's column, then along the lane over
+    the head onto the trunk's second tile, the feed rows crossed underground (the exit mouth may
+    be the head tile). The feed route then only has to reach the waypoint (``end``, outside the
+    band). The trunk's first two tiles must be plain belts (they are replaced by the approach's).
+    """
+    facing = FACING[bus.direction]
+    first = [lane_tile(bus, lane, a) for a in (0, 1)]
+    plain = {
+        (e["position"]["x"], e["position"]["y"])
+        for e in trunk_entities
+        if e["name"] == "transport-belt" and e.get("direction", 0) == facing
+    }
+    if any((p["x"], p["y"]) not in plain for p in first):
+        return []
+
+    def world(along, lateral):
+        x, y = bus.local_point(along + 0.5, lateral + 0.5)
+        return {"x": x, "y": y}
+
+    found, sides = [], set()
+    for row in APPROACH_ROWS:
+        for x, y, inward, lateral in header_waypoints(bus, row):
+            s = 1 if lateral > 0 else -1
+            if s in sides:
+                continue
+            segments = [
+                {"position": world(row, lat), "direction": inward if lat != lane.offset else facing}
+                for lat in range(lateral - s, lane.offset - s, -s)
+            ]
+            segments += [{"position": world(a, lane.offset), "direction": facing} for a in range(row + 1, 2)]
+            route = {"ok": True, "segments": segments, "metrics": {"length": len(segments), "turns": 1}}
+            compiled = compile_crossings(route, foreign, maximum_span=span)
+            if not compiled.get("ok"):
+                continue
+            sides.add(s)
+            found.append(
+                {
+                    "end": {
+                        "kind": "item",
+                        "item": item,
+                        "position": {"x": x, "y": y},
+                        "facing": inward,
+                        "direction": "input",
+                    },
+                    "entities": compiled["entities"],
+                    "underground_pairs": list(compiled.get("underground_pairs", [])),
+                    "replaces": [(p["x"], p["y"]) for p in first],
+                    "side": "right" if s > 0 else "left",
+                    "row": row,
+                }
+            )
+        if len(sides) == 2:
+            break
+    return found
 
 
 def receipt(root, obs) -> dict | None:
@@ -239,10 +310,12 @@ def bus_lane_nodes(jobs, queue_nodes, observation, capabilities) -> list[dict]:
 class BusLane:
     """Plan, build, publish and prove one lane of ``item`` on the built planned bus."""
 
-    def __init__(self, game, builder, catalog, *, outposts, item, route=None, check=None):
+    def __init__(self, game, builder, catalog, *, outposts, item, route=None, check=None, clock=None):
         self.game, self.builder, self.catalog, self.outposts, self.item = game, builder, catalog, outposts, item
         self.route = route or plan_connection
         self.check = check or preflight
+        self.clock = clock or time.monotonic
+        self.deadline = float("inf")
         self.root = Path(game.cfg.runtime_dir)
         self.path = self.root / state_file(item)
         self.state = _read(self.path)
@@ -313,46 +386,9 @@ class BusLane:
             chosen.append(row)
         return chosen
 
-    def _feed_route(self, obs, bus: Bus, source, head, reserved, ignored, *, legs=False) -> dict:
-        """Source -> lane head (a bus route); with ``legs`` two legs through a header waypoint
-        (:func:`header_waypoints`) instead (the costly second pass, after every direct route failed)."""
-        if not legs:
-            return self.route(
-                self.game, self.builder, obs, source, head, reserved, ignored_units=ignored, bus_route=True
-            )
-        found = {"ok": False, "reason": "no_clean_trunk_corridor"}
-        for x, y, facing in header_waypoints(bus):
-            end = dict(head, position={"x": x, "y": y}, facing=facing)
-            first = self.route(self.game, self.builder, obs, source, end, reserved, ignored_units=ignored)
-            if not first.get("ok"):
-                continue
-            vx, vy = _VECTORS[facing]
-            start = dict(source, position={"x": x + vx, "y": y + vy}, facing=facing, direction="output")
-            start.pop("name", None)
-            second = self.route(
-                self.game,
-                self.builder,
-                obs,
-                start,
-                head,
-                list(reserved) + list(first["entities"]),
-                ignored_units=ignored,
-                bus_route=True,
-            )
-            if not second.get("ok"):
-                continue
-            try:
-                entities = merge_entities(first["entities"], second["entities"])
-            except ValueError:
-                continue
-            return dict(
-                second,
-                entities=entities,
-                underground_pairs=list(first.get("underground_pairs", [])) + list(second.get("underground_pairs", [])),
-                clear_obstacles=list(first.get("clear_obstacles", [])) + list(second.get("clear_obstacles", [])),
-                route_metrics={"legs": [first.get("route_metrics"), second.get("route_metrics")], "waypoint": [x, y]},
-            )
-        return found
+    def _feed_route(self, obs, source, end, reserved, ignored) -> dict:
+        """Source -> lane head or a head approach's waypoint (a bus route)."""
+        return self.route(self.game, self.builder, obs, source, end, reserved, ignored_units=ignored, bus_route=True)
 
     def prepare(self, obs, side: str | None = None) -> dict:
         """Pure planning: lane, trunk, feed source and route, whole preflight (no ``act``)."""
@@ -387,13 +423,19 @@ class BusLane:
             if e.get("name") in ("transport-belt", "underground-belt", "splitter")
         ]
         foreign = foreign_belts(obs, blocks) + unbuilt_taps
+        # One prepare may not hold the controller for many minutes (br-steel-1114 seed 3371980627:
+        # a 620 s bus_lane prepare left the controller unobserved; the fleet watcher stopped the run).
+        self.deadline = self.clock() + PLANNING_SECONDS
         failures = []
         for lane, assigned in lanes:
             planned = self._plan_lane(obs, board, blocks, with_lane(frame, lane), lane, assigned, foreign, span)
             if planned.get("ok"):
                 return planned
             failures.append(dict(planned, lane=lane.index))
+            if planned.get("reason") == BUDGET_EXHAUSTED:
+                break
         last = failures[-1]
+        needs = next((f["plan_needs"] for f in failures if f.get("plan_needs")), None)
         return {
             "ok": False,
             "reason": last.get("reason", "bus_lane_feed_route_failed"),
@@ -402,6 +444,7 @@ class BusLane:
             "route_failures": "; ".join(
                 f"lane {f['lane']}: {f.get('route_failures') or f.get('reason')}" for f in failures
             )[:600],
+            **({"plan_needs": needs} if needs else {}),
         }
 
     def _plan_lane(self, obs, board, blocks, bus, lane, assigned, foreign, span) -> dict:
@@ -422,67 +465,163 @@ class BusLane:
         sources = self._sources(obs, board, blocks, head)
         if not sources:
             return {"ok": False, "reason": "bus_lane_item_source_missing"}
+        # Ends: the head itself first, then the fixed head approaches (:func:`head_approaches`).
+        approaches = []
+        for row in head_approaches(bus, lane, self.item, trunk["entities"], foreign, span):
+            if surface_conflict(self.builder, obs, blocks, row["entities"]) is None:
+                approaches.append(row)
         failures = []
-        for legs, kind, source, tap in [(False, *row) for row in sources] + [(True, *row) for row in sources]:
-            extra = list(tap["entities"]) if tap else []
-            ignored = tuple((tap or {}).get("remove_units", []))
-            found = self._feed_route(obs, bus, source, head, trunk["entities"] + extra, ignored, legs=legs)
-            if not found.get("ok"):
-                failures.append({"source": kind, "reason": found.get("reason"), "at": source["position"]})
-                continue
-            try:
-                entities = merge_entities(trunk["entities"], found["entities"])
-                whole = merge_entities(entities, extra)
-            except ValueError:
-                failures.append({"source": kind, "reason": "bus_lane_route_conflicts_with_trunk"})
-                continue
-            check = self.check(self.game, self.builder, obs, whole, ignored_units=ignored)
-            if not check.get("ok"):
-                failures.append({"source": kind, "reason": check.get("reason", "bus_lane_preflight_failed")})
-                continue
-            tapped = {(e["name"], *xy(e)) for e in extra}
-            own = [e for e in entities if (e["name"], *xy(e)) not in tapped]
-            pairs = list(trunk.get("underground_pairs", [])) + list(found.get("underground_pairs", []))
-            tail = lane_tile(bus, lane, length - 1)
-            return {
-                "ok": True,
-                "world_id": obs["world_id"],
-                "catalog_fingerprint": self.catalog.fingerprint,
-                "item": self.item,
-                "lane": lane.to_dict(),
-                "assigned_spare_lane": assigned,
-                "trunk": {
-                    "item": self.item,
-                    "lane": lane.index,
-                    "head": head["position"],
-                    "tail": tail,
-                    "length": length,
-                },
-                "trunk_entities": trunk["entities"],
-                "trunk_pairs": list(trunk.get("underground_pairs", [])),
-                "plan": _plan(
-                    own,
-                    [head],
-                    underground_pairs=pairs,
-                    clear_obstacles=check.get("clear_obstacles", []),
-                    clearance_world_id=obs["world_id"],
-                    layout_policy="pcb-bus-lane-v1",
-                    owner=OWNER,
-                ),
-                "source": {"kind": kind, "port": source, "tap": tap},
-                "connection": {
-                    "item": self.item,
-                    "source": source["position"],
-                    "destination": head["position"],
-                    "owner": OWNER,
-                },
-                "route_metrics": found.get("route_metrics"),
-                "phase": "build",
-            }
+        for approach in [None, *approaches]:
+            end = head if approach is None else approach["end"]
+            replaced = set(approach["replaces"]) if approach else set()
+            lane_entities = [e for e in trunk["entities"] if xy(e) not in replaced]
+            if approach is not None:
+                lane_entities = merge_entities(lane_entities, approach["entities"])
+            for kind, source, tap in sources:
+                if self.clock() > self.deadline:
+                    return self._feed_failure(failures, head, sources, reason=BUDGET_EXHAUSTED)
+                extra = list(tap["entities"]) if tap else []
+                ignored = tuple((tap or {}).get("remove_units", []))
+                found = self._feed_route(obs, source, end, lane_entities + extra, ignored)
+                if not found.get("ok"):
+                    failures.append(
+                        {
+                            "source": kind,
+                            "reason": found.get("reason"),
+                            "at": source["position"],
+                            "to": end["position"],
+                            "approach": approach["side"] if approach else None,
+                        }
+                    )
+                    continue
+                failed = self._accept(obs, lane_entities, found, extra, ignored)
+                if isinstance(failed, str):
+                    failures.append({"source": kind, "reason": failed, "at": source["position"]})
+                    continue
+                entities, check = failed
+                return self._planned(
+                    obs,
+                    bus,
+                    lane,
+                    assigned,
+                    length,
+                    trunk,
+                    head,
+                    entities,
+                    extra,
+                    found,
+                    check,
+                    kind,
+                    source,
+                    tap,
+                    approach=approach,
+                )
+        return self._feed_failure(failures, head, sources)
+
+    def _accept(self, obs, lane_entities, found, extra, ignored):
+        """``(entities, check)`` of the lane with its feed route, or the reason it is refused."""
+        try:
+            entities = merge_entities(lane_entities, found["entities"])
+            whole = merge_entities(entities, extra)
+        except ValueError:
+            return "bus_lane_route_conflicts_with_trunk"
+        check = self.check(self.game, self.builder, obs, whole, ignored_units=ignored)
+        if not check.get("ok"):
+            return check.get("reason", "bus_lane_preflight_failed")
+        return entities, check
+
+    def _feed_failure(self, failures, head, sources, *, reason="bus_lane_feed_route_failed") -> dict:
+        """The lane's feed failure with a route need (never a bare ``plan`` need): the nearest
+        source to the head, and what would make the feed fit."""
+        nearest = sources[0][1]["position"] if sources else None
+        counts: dict = {}
+        for f in failures:
+            counts[str(f.get("reason"))] = counts.get(str(f.get("reason")), 0) + 1
         return {
             "ok": False,
-            "reason": "bus_lane_feed_route_failed",
+            "reason": reason,
             "route_failures": "; ".join(f"{f['source']}: {f['reason']}" for f in failures)[:300],
+            "plan_needs": {
+                "kind": "route",
+                "reason": reason,
+                "item": self.item,
+                "from": nearest,
+                "to": head["position"],
+                "tried": len(failures),
+                "rejected_by": counts,
+                "change": (
+                    f"a clean {self.item} corridor from its source to the lane head or a header waypoint beside "
+                    f"the band, or a {self.item} source nearer the bus head (a bank trunk tap or a free board port)"
+                ),
+            },
+        }
+
+    def _planned(
+        self,
+        obs,
+        bus,
+        lane,
+        assigned,
+        length,
+        trunk,
+        head,
+        entities,
+        extra,
+        found,
+        check,
+        kind,
+        source,
+        tap,
+        *,
+        approach,
+    ) -> dict:
+        tapped = {(e["name"], *xy(e)) for e in extra}
+        own = [e for e in entities if (e["name"], *xy(e)) not in tapped]
+        pairs = list(trunk.get("underground_pairs", [])) + list(found.get("underground_pairs", []))
+        trunk_entities = trunk["entities"]
+        if approach is not None:
+            # The approach's tiles on the lane join the bus plan only as plain trunk belts (an
+            # underground exit on the head belongs to the feed, with its pair, in this plan).
+            replaced = set(approach["replaces"])
+            trunk_entities = [e for e in trunk_entities if xy(e) not in replaced] + [
+                e for e in approach["entities"] if xy(e) in replaced and e["name"] == "transport-belt"
+            ]
+            pairs += approach["underground_pairs"]
+        return {
+            "ok": True,
+            "world_id": obs["world_id"],
+            "catalog_fingerprint": self.catalog.fingerprint,
+            "item": self.item,
+            "lane": lane.to_dict(),
+            "assigned_spare_lane": assigned,
+            "trunk": {
+                "item": self.item,
+                "lane": lane.index,
+                "head": head["position"],
+                "tail": lane_tile(bus, lane, length - 1),
+                "length": length,
+            },
+            "trunk_entities": trunk_entities,
+            "trunk_pairs": list(trunk.get("underground_pairs", [])),
+            "plan": _plan(
+                own,
+                [head],
+                underground_pairs=pairs,
+                clear_obstacles=check.get("clear_obstacles", []),
+                clearance_world_id=obs["world_id"],
+                layout_policy="pcb-bus-lane-v1",
+                owner=OWNER,
+            ),
+            "source": {"kind": kind, "port": source, "tap": tap},
+            "connection": {
+                "item": self.item,
+                "source": source["position"],
+                "destination": head["position"],
+                "owner": OWNER,
+            },
+            "route_metrics": found.get("route_metrics"),
+            "head_approach": {"side": approach["side"], "row": approach["row"]} if approach else None,
+            "phase": "build",
         }
 
     # ----- execution -------------------------------------------------------------------

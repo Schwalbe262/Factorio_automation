@@ -73,6 +73,7 @@ outlet, unchanged identity). Bricks: one ``production`` phase.
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import math
 from collections import Counter
@@ -467,6 +468,13 @@ class PlannedFurnaces:
         unbuilt = planned_unbuilt_hardware(GEOMETRY, obs, others, exclude=(kind.owner,))
 
         choice = head_choice(kind, rates)  # by the flow model at full reserved growth (belt_flow)
+        route = self.route
+        if kind.owner in board.get("blocks", {}):
+            # A plan is prepared only without a current state: a block of this owner on the board is
+            # a stale plan this one replaces. Its reservation and ports are not the new routes'
+            # obstacles (br-steel-1114 seed 2121061131: the old private-belt brick block refused
+            # every tap route into the new ports, transport_port_inside_unrelated_production_reservation).
+            route = functools.partial(self.route, released_block=kind.owner)
 
         def build(x0, y0):
             return furnace_block(kind, x0, y0, head=choice["head"])
@@ -476,7 +484,7 @@ class PlannedFurnaces:
             wants = self._wants(block, sources.get("raw"), sources.get("coal"))
             for placement in orientations(build, (LENGTH, BANK_DEPTH), block.rect, wants)[:ORIENTATIONS]:
                 bank = dict(placement.plan, site_transform=placement.transform.to_dict())
-                result = self._connect(obs, board, bus, block, bank, sources, span, rates, others, unbuilt)
+                result = self._connect(obs, board, bus, block, bank, sources, span, rates, others, unbuilt, route)
                 if not result["ok"]:
                     failures.append({"allocation": block.name, **result})
                     continue
@@ -504,7 +512,11 @@ class PlannedFurnaces:
                 }
         settle(self.site, obs["world_id"], kind.owner, None)
         rows = [
-            {k: f[k] for k in ("allocation", "reason", "item", "detail", "port", "escape") if f.get(k) is not None}
+            {
+                k: f[k]
+                for k in ("allocation", "reason", "item", "side", "failures", "detail", "port", "escape")
+                if f.get(k) is not None
+            }
             for f in failures
         ]
         # One row per allocation and reason (both turns usually fail alike), so the
@@ -531,7 +543,7 @@ class PlannedFurnaces:
             **({"plan_needs": needs} if needs is not None else {}),
         )
 
-    def _connect(self, obs, board, bus, block, bank, sources, span, rates, others, unbuilt) -> dict:
+    def _connect(self, obs, board, bus, block, bank, sources, span, rates, others, unbuilt, route) -> dict:
         """Taps, routes, power and preflight for one oriented bank on one block."""
         kind = self.kind
         growth = bank["growth_entities"]
@@ -566,10 +578,12 @@ class PlannedFurnaces:
                 entities=entities + keepouts,
                 demand={item: demand[item] for _role, _port, item, _key in tapped_roles},
                 span=span,
-                route=self.route,
+                route=route,
             )
             if not tapped["ok"]:
-                return {k: tapped.get(k) for k in ("ok", "reason", "item", "failures")}
+                # The side travels with the failure: the tap need names it (br-steel-1114 seed
+                # 2121061131: "a free bus tap row for stone on side ?").
+                return {k: tapped.get(k) for k in ("ok", "reason", "item", "side", "failures")}
             entities = [e for e in tapped["entities"] if e["name"] != RESERVED_TILE]
             taps, ignored = tapped["taps"], list(tapped["ignored_units"])
             order = tapped.get("route_order") or [item for _role, _port, item, _key in tapped_roles]
@@ -582,9 +596,7 @@ class PlannedFurnaces:
             if role in by_role:
                 continue
             source = sources[role]
-            found = self.route(
-                self.game, self.builder, obs, source, port, entities + keepouts, ignored_units=tuple(ignored)
-            )
+            found = route(self.game, self.builder, obs, source, port, entities + keepouts, ignored_units=tuple(ignored))
             if not found.get("ok"):
                 return _route_failure(found, item)
             length = (found.get("route_metrics") or {}).get("length")
@@ -679,7 +691,58 @@ class PlannedFurnaces:
             self._save()
         if not self._current(obs):
             return {"status": "blocked", "reason": "planned_furnaces_world_or_catalog_changed", "kind": self.kind.name}
+        self._replan_onto_bus(obs)
         return None
+
+    def stale_private_routes(self, obs) -> list[str]:
+        """Items the saved, unproven plan brings on a long private belt although the bus carries them now."""
+        if self.state.get("phase") != "planned" or self.state.get("supply_verified"):
+            return []
+        live = {(e["name"], *xy(e)) for e in obs.get("entities", [])}
+        belts = [e for e in self.state["plan"]["entities"] if e["name"] in ("transport-belt", "underground-belt")]
+        if all((e["name"], *xy(e)) in live for e in belts):
+            return []  # built already: its belts are paid, the block only waits for its proof
+        board = self._board(obs)
+        bus = planned_tap.published(board, obs["world_id"]) if board is not None else None
+        if bus is None:
+            return []
+        items = []
+        roles = (("raw", self.kind.raw), ("coal", "coal"))
+        for (role, item), metrics in zip(roles, self.state.get("route_metrics") or []):
+            if ((self.state.get("sources") or {}).get(role) or {}).get("kind") == BUS_TAP:
+                continue
+            length = (metrics or {}).get("length") if isinstance(metrics, dict) else None
+            if isinstance(length, (int, float)) and length > PRIVATE_ROUTE_TILES and planned_tap.carries(bus, item):
+                items.append(item)
+        return items
+
+    def _replan_onto_bus(self, obs) -> None:
+        """A saved plan not proven yet whose long private belts the bus now serves is re-planned on bus taps.
+
+        br-steel-1114 seed 2121061131: the brick block planned before the stone and coal lanes
+        (105 and 212 tile private belts) stalled building them while both lanes stood on the bus.
+        A built block is not frozen (AGENTS.md): the new plan replaces the old one once it fits;
+        otherwise the old plan keeps building. Tried once per set of such items (a re-plan is a
+        whole site search).
+        """
+        items = self.stale_private_routes(obs)
+        if not items or self.state.get("bus_replan_tried") == items:
+            return
+        old = self.state
+        self.state = {}
+        prepared = self.prepare(obs)
+        if not prepared.get("ok"):
+            self.state = dict(old, bus_replan_tried=items, bus_replan_failure=prepared.get("reason"))
+            self._save()
+            return
+        path = self.root / "pcb-board.json"
+        board = self._board(obs)
+        if board is not None:
+            stale = [c for c in old.get("connections", []) if c not in prepared.get("connections", [])]
+            board["connections"] = [c for c in board.get("connections", []) if c not in stale]
+            _atomic_json(path, board)
+        self.state = dict(prepared, replaced_private_routes=items)
+        self._save()
 
     def _publish(self, obs) -> dict | None:
         """The whole plan on the board, the taps in the bus state (idempotent); a blocked status or None."""

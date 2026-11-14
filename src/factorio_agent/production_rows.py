@@ -402,8 +402,28 @@ class ProductionRows:
         extra = math.ceil(target / per - 1e-9) - line["main"]["count"]
         if extra <= 0:
             return None
-        if extra > line["main"]["growth"]["remaining_slots"]:
-            return {"status": "blocked", "reason": "production_row_extension_exceeds_reserved_slots", "extra": extra}
+        remaining = line["main"]["growth"]["remaining_slots"]
+        if extra > remaining:
+            # br-steel-1114 seed 2121061131: the transport-belt row (one machine, no free slot) was
+            # asked for 8.8 and 17.6/min and stayed blocked without needs. The frame cannot grow in
+            # place: name the change (a second row or the row rebuilt in a larger frame).
+            reason = "production_row_extension_exceeds_reserved_slots"
+            return {
+                "status": "blocked",
+                "reason": reason,
+                "extra": extra,
+                "plan_needs": {
+                    "kind": "site",
+                    "reason": reason,
+                    "item": state["item"],
+                    "tried": extra,
+                    "limit": f"{extra} more machines > {remaining} reserved slots",
+                    "change": (
+                        f"a second {state['item']} row, or the row rebuilt in a frame with "
+                        f"{line['main']['count'] + extra} machine slots"
+                    ),
+                },
+            }
         try:
             canonical = extend_line(self.catalog, state["canonical"], extra)
         except ValueError as exc:

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from test_v2_green_site import KINDS as WORLD_KINDS
 from test_v2_green_site import WORLD, World, feed_route
@@ -460,6 +460,68 @@ class SharedMaterialsOnTheBusTests(unittest.TestCase):
                     self.assertTrue(all(length <= 40 for length in _lengths(state)), _lengths(state))
                     self.assertEqual(state["taps"][0]["side"], world.site.allocation(state["allocation"], WORLD).side)
 
+    def test_a_stale_private_belt_plan_moves_onto_the_bus_lanes(self):
+        # br-steel-1114 seed 2121061131: the brick block planned before the lanes (105 and 212 tile
+        # private belts) stalled; both lanes stood on the bus, the block never used them.
+        with TemporaryDirectory() as directory:
+            world, sources = self.world(directory)
+            old = self.planner(world, "brick")
+            old.route = route  # the old code took any corridor, however long
+            with patch.object(pf, "PRIVATE_ROUTE_TILES", 10**6):
+                old.state = old.prepare(world.obs)
+            self.assertTrue(old.state["ok"], old.state.get("failures"))
+            old._save()
+            self.assertEqual(old.stale_private_routes(world.obs), [])  # no lane on the bus yet
+            side = world.site.allocation(old.state["allocation"], WORLD).side
+            for item in ("stone", "coal"):  # the lanes take the outlets' board ports (the live map: route taps)
+                self.build_lane(world, {"item": item, "side": side})
+            self.assertIsNone(old._publish(world.obs))
+            self.assertEqual(old.stale_private_routes(world.obs), ["stone", "coal"])
+            brick = self.planner(world, "brick")
+            released = []
+            inner = brick.route
+
+            def spy(*args, **kwargs):
+                released.append(kwargs.get("released_block"))
+                return inner(*args, **kwargs)
+
+            brick.route = spy
+            self.assertIsNone(brick._ensure_state(world.obs))
+            self.assertEqual(brick.state["replaced_private_routes"], ["stone", "coal"])
+            self.assertEqual({s["kind"] for s in brick.state["sources"].values()}, {pf.BUS_TAP})
+            self.assertEqual(set(released), {"brick_production"})  # its own stale block is no obstacle
+            far = {(s["position"]["x"], s["position"]["y"]) for s in sources.values()}
+            self.assertIsNone(brick._publish(world.obs))  # the new plan replaces the old block on the board
+            mine = [c for c in world.board()["connections"] if c["owner"] == "brick_production"]
+            self.assertTrue(mine)
+            self.assertFalse({(c["source"]["x"], c["source"]["y"]) for c in mine} & far)  # old belts' records gone
+            calls = len(released)
+            self.assertIsNone(brick._ensure_state(world.obs))  # the new plan is current: no further re-plan
+            self.assertEqual(len(released), calls)
+
+    def test_a_failed_tap_route_names_its_side(self):
+        with TemporaryDirectory() as directory:
+            world, _sources = self.world(directory)
+            for item in ("stone", "coal"):
+                self.build_lane(world, {"item": item, "side": "left"})
+            brick = self.planner(world, "brick")
+            inner = brick.route
+
+            def no_tap_route(game, builder, obs, source, destination, reserved=(), **kwargs):
+                if ":" in str(source.get("name")):
+                    return {"ok": False, "reason": "transport_port_inside_unrelated_production_reservation"}
+                return inner(game, builder, obs, source, destination, reserved, **kwargs)
+
+            brick.route = no_tap_route
+            result = brick.prepare(world.obs)
+            needs = plan_needs.from_result("brick_production", result)
+            self.assertEqual((needs["kind"], needs["reason"]), ("tap", "planned_bus_tap_route_failed"))
+            self.assertIn(needs["side"], ("left", "right"))
+            self.assertNotIn("side ?", needs["change"])
+            self.assertEqual(
+                needs["rejected_by"], {"transport_port_inside_unrelated_production_reservation": needs["tried"]}
+            )
+
     def test_a_built_coal_tap_proves_the_coal_supply(self):
         with TemporaryDirectory() as directory:
             world, _sources = self.world(directory)
@@ -475,6 +537,41 @@ class SharedMaterialsOnTheBusTests(unittest.TestCase):
             obs["entities"][0]["belt_inventory"] = {"coal": 2}
             evidence = steel.coal_proof(obs)
             self.assertEqual(evidence["coal_source"]["kind"], pf.BUS_TAP)
+
+
+class ReleasedBlockTests(unittest.TestCase):
+    def test_a_replanned_blocks_stale_reservation_is_no_route_obstacle(self):
+        # br-steel-1114 seed 2121061131: the old brick block (ports on its east side) stood on the
+        # board; a new tap route into the block's west port met it as an unrelated reservation.
+        from factorio_agent import transport
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = {
+                "reserved_area": [[25, -129], [37, -99]],
+                "entities": [],
+                "ports": [
+                    {
+                        "kind": "item",
+                        "item": "stone",
+                        "direction": "input",
+                        "facing": 0,
+                        "position": {"x": 36.5, "y": -99.5},
+                    }
+                ],
+            }
+            board = {"world_id": WORLD, "blocks": {"brick_production": old}}
+            (root / "pcb-board.json").write_text(json.dumps(board), encoding="utf-8")
+            game = SimpleNamespace(cfg=SimpleNamespace(runtime_dir=root))
+            port = {"kind": "item", "item": "stone", "facing": 4, "position": {"x": 25.5, "y": -115.5}}
+            source = dict(port, direction="output", position={"x": 23.5, "y": -115.5}, name="brick_production:stone")
+            destination = dict(port, direction="input")
+            reserved = [{"name": "transport-belt", "position": destination["position"], "direction": 4}]
+            bounds = {"min_x": 0, "max_x": 50, "min_y": -140, "max_y": -90}
+            args = (game, GEOMETRY, {"world_id": WORLD, "entities": []}, source, destination, reserved, bounds)
+            refused = transport._production_keepouts(*args)
+            self.assertEqual(refused["reason"], "transport_port_inside_unrelated_production_reservation")
+            self.assertTrue(transport._production_keepouts(*args, released_block="brick_production")["ok"])
 
 
 def _lengths(state):

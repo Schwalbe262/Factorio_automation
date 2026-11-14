@@ -359,7 +359,17 @@ def _sealed_escape(source, destination, hard) -> dict | None:
 
 
 def _production_keepouts(
-    game, builder, obs, source, destination, reserved, bounds, *, released_unbuilt_receiver=None, bus_route=False
+    game,
+    builder,
+    obs,
+    source,
+    destination,
+    reserved,
+    bounds,
+    *,
+    released_unbuilt_receiver=None,
+    bus_route=False,
+    released_block=None,
 ):
     """Whole producer reservations, with only their exact bounded port aprons.
 
@@ -387,6 +397,8 @@ def _production_keepouts(
             return {"ok": False, "reason": "transport_production_board_world_changed"}
         blocks = []
         for name, block in board.get("blocks", {}).items():
+            if name == released_block:
+                continue
             mining = block.get("resource") in RESOURCES | {"crude-oil"} and any(
                 e.get("name") in ("burner-mining-drill", "electric-mining-drill", "pumpjack")
                 for e in block.get("entities", [])
@@ -536,7 +548,7 @@ def _production_keepouts(
             ):
                 return {"ok": False, "reason": "transport_unbuilt_receiver_release_identity_changed"}
             released = destination_owner
-        external = dict(board.get("blocks", {}))
+        external = {k: v for k, v in board.get("blocks", {}).items() if k != released_block}
         bus_block = (
             None
             if bus_route
@@ -680,11 +692,15 @@ def plan_connection(
     bus_route=False,
     max_detour_ratio=None,
     keep_clear=(),
+    released_block=None,
 ):
     """``_plan_connection``; a post-mortem dry run notes every route attempt (``evidence_capture``).
 
     Under the remedy option ``route_waypoints`` a cross-base route that finds no corridor is
-    planned as two legs through a waypoint (:func:`waypoint_connection`)."""
+    planned as two legs through a waypoint (:func:`waypoint_connection`).
+    ``released_block``: a board block the caller re-plans (its saved plan is being replaced):
+    its reservation, ports and unbuilt hardware are not the route's obstacles; its built
+    entities still are (observed)."""
     options = dict(
         ignored_units=ignored_units,
         released_unbuilt_receiver=released_unbuilt_receiver,
@@ -694,6 +710,8 @@ def plan_connection(
     )
     if keep_clear:
         options["keep_clear"] = tuple(tuple(p) for p in keep_clear)
+    if released_block is not None:
+        options["released_block"] = released_block
     result = _plan_connection(game, builder, obs, source, destination, reserved, **options)
     if not result.get("ok") and result.get("reason") == "no_clean_trunk_corridor":
         if remedy.option("route_waypoints"):
@@ -811,6 +829,7 @@ def _plan_connection(
     bus_route=False,
     max_detour_ratio=None,
     keep_clear=(),
+    released_block=None,
 ):
     """Route one belt from ``source`` to ``destination`` port.
 
@@ -865,6 +884,7 @@ def _plan_connection(
         bounds,
         released_unbuilt_receiver=released_unbuilt_receiver,
         bus_route=bus_route,
+        released_block=released_block,
     )
     if not production.get("ok"):
         return production
