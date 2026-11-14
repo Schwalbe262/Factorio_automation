@@ -2,9 +2,12 @@
 
 Fresh maps (site service + planned bus): `brick_production` is the
 site-planned furnace block `planned_furnaces.PlannedFurnaces(kind="brick")`,
-the same paired bank as steel with the stone-brick recipe, stone from
-`material-sources.json` `stone`, coal from `brick-coal`, no bus tap (see
-STEEL.md, "Fresh maps"). Roadmap: after both dedicated material banks. The
+the same paired bank as steel with the stone-brick recipe; stone and coal from
+bus taps at the block's slot once the bus carries them, else short private
+routes from `material-sources.json` `stone` / `brick-coal`. A failing or too long
+private route names the missing bus lane as a need (stone first, then coal), and
+`bus_lane` feeds that lane from the patch (see STEEL.md, "Fresh maps").
+Roadmap: after both dedicated material banks. The
 rest of this file is the development-map path.
 
 `brick_core(catalog, x=82, y=-18)` plans two opposing stone furnaces with

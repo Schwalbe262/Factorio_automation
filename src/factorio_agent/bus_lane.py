@@ -30,8 +30,9 @@ Rules:
    ``shared_main_bus`` is republished, so ``planned_tap`` gives consumers taps on it
    (``planned_tap.carries``) and the bus proof walks it like the plate lanes.
 6. Trigger (:func:`bus_lane_nodes`): a blocked job whose needs name ``ACROSS_BAND`` for an item
-   (``chemical_production``: coal for sites beside the bus) while the bus has a reserved or a
-   spare lane for it (observe receipt ``bus_lanes``, :func:`receipt`); once per item.
+   (``chemical_production``: coal for sites beside the bus) or ``OFF_BUS`` (``planned_furnaces``:
+   stone/coal for steel and brick blocks whose private belts fail or run too long) while the bus
+   has a reserved or a spare lane for it (observe receipt ``bus_lanes``, :func:`receipt`); once per item.
 """
 
 from __future__ import annotations
@@ -62,7 +63,10 @@ SOURCES = 8  # feed sources routed per prepare, nearest the lane head first
 ROUTE_TAP_SITES = 600  # splitter sites listed per tapped route (pure); only the nearest are checked and routed
 ROUTE_TAPS_FILE = "route-taps.json"  # route taps cut by bus lanes: tile -> splitter (owners' proofs accept it)
 ACROSS_BAND = "item_source_across_bus_band"
-TRIGGER_REASONS = frozenset({ACROSS_BAND})
+# A shared raw material (stone, coal) a furnace block beside the bus cannot get by a short private
+# belt: it travels on the bus (planned_furnaces.bus_lane_needs).
+OFF_BUS = "shared_material_not_on_bus"
+TRIGGER_REASONS = frozenset({ACROSS_BAND, OFF_BUS})
 OPEN = ("pending", "ready", "running", "blocked", "waiting", "submitted")
 
 
@@ -98,10 +102,14 @@ def _read(path: Path) -> dict:
 def tappable(bus: Bus, lane, side: str | None, built_offsets=()) -> bool:
     """A tap of ``lane`` towards ``side`` fits ``planned_tap.layout``: the tile past its partner is no
     unbuilt lane (the branch turns on the partner tile and cannot tunnel at once; eval-1575138435:
-    coal lane 4 between reserved lanes, every east tap ``tap_branch_cannot_tunnel_under_lanes``)."""
+    coal lane 4 between reserved lanes, every east tap ``tap_branch_cannot_tunnel_under_lanes``),
+    and the partner tile is no built trunk (``tap_partner_tile_is_a_built_trunk``: the stone lane 5
+    beside a built coal lane 4 has no west tap)."""
     if side is None:
         return True
     s = 1 if side == "right" else -1
+    if lane.offset + s in set(built_offsets):
+        return False
     lanes = {other.offset for other in bus.lanes} - set(built_offsets)
     return lane.offset + s not in lanes and lane.offset + 2 * s not in lanes
 
