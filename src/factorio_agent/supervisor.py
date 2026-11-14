@@ -120,6 +120,9 @@ def _replannable(reason: str) -> bool:
         # The same action failed three times (a move onto water, a refused build): the next
         # plan sees the world as it is now; never a dead end (plan_needs.from_executor_failure).
         or reason.startswith(plan_needs.EXECUTOR_FAILURE)
+        # A planner that raised (jobs "planner_fault:<error>") is planned again on the next stall or new facts:
+        # the code or the world may have changed, and it must not wait for another job's success.
+        or reason.startswith("planner_fault:")
         or reason.endswith(REPLAN_SUFFIXES)
         or reason in REPLAN_REASONS
         or _site_blocked(reason)

@@ -992,6 +992,11 @@ class CoverageTests(unittest.TestCase):
             self.assertTrue(_replannable(reason), reason)
         self.assertTrue(plan_needs.is_planning_failure("industrial_planning_budget_exhausted"))
 
+    def test_a_planner_fault_is_planned_again_without_another_success(self):
+        from factorio_agent.supervisor import _replannable
+
+        self.assertTrue(_replannable("planner_fault:ValueError:conflicting shared port configuration"))
+
 
 if __name__ == "__main__":
     unittest.main()
