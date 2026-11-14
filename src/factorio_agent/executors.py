@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from .capability_registry import get_handler, handler_for
+from .core.deterministic_bootstrap import FUEL_WAIT
 from .jobs import (
     CAPABILITIES,
     IDLE_RESEARCH_INTERVAL_TICKS,
@@ -1012,6 +1013,8 @@ class StarterExecutors:
         if not required.issubset(obs.get("technologies", {})):
             return {"status": "blocked", "reason": "industrial_natural_unlocks_missing"}
         upkeep = self.bootstrap.maintain_fuel(filtered)
+        if upkeep and not upkeep.get("type") and upkeep.get("status") == "waiting":
+            upkeep = {**upkeep, FUEL_WAIT: True}  # as bootstrap.next_action: the job keeps working
         return upkeep or {"status": "succeeded", "reason": "industrial supplies retain ordinary starter fuel upkeep"}
 
     def survey_slice(self):

@@ -14,6 +14,10 @@ import math
 from typing import Any
 
 
+# Key on a starter-upkeep wait that only waits for burner fuel to pile up (no action is possible).
+FUEL_WAIT = "fuel_wait"
+
+
 def _report(status: str, reason: str, **evidence: Any) -> dict[str, Any]:
     return {"status": status, "reason": reason, "evidence": evidence}
 
@@ -137,6 +141,10 @@ class DeterministicBootstrap:
                 }
         fuel = self.maintain_fuel(observation)
         if fuel is not None:
+            if not fuel.get("type") and fuel.get("status") == "waiting":
+                # Marked so a job's shared upkeep keeps building while the coal piles up
+                # (handlers.upkeep.shared_upkeep, FUEL_WAIT).
+                return {**fuel, FUEL_WAIT: True}
             return fuel
         for resource, receiver in [
             ("iron-ore", "stone-furnace"),
