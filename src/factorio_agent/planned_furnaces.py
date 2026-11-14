@@ -790,8 +790,13 @@ class PlannedFurnaces:
         if not underground_proof(obs, plan):
             self.last_proof_failure = {"reason": "underground_pair_unverified"}
             return False
+        from .bus_lane import route_tap_tiles, tapped_belt_stands
+
+        tapped = route_tap_tiles(self.root, obs.get("world_id"))
         for wanted in plan["entities"]:
             live = actual.get((wanted["name"], *xy(wanted)))
+            if live is None and tapped_belt_stands(actual, tapped, wanted):
+                continue  # a bus lane's route tap replaced this belt (bus_lane.record_route_tap)
             if live is None:
                 self.last_proof_failure = {"reason": "planned_entity_missing", "entity": wanted["name"]}
                 return False
@@ -835,7 +840,7 @@ class PlannedFurnaces:
         if not self._standing(obs, plan, actual):
             return None
         for wanted in plan["entities"]:
-            live = actual[(wanted["name"], *xy(wanted))]
+            live = actual.get((wanted["name"], *xy(wanted))) or {}
             if wanted["name"] in ("inserter", "fast-inserter") and (
                 not live.get("electric_network_connected") or live.get("energy", 0) <= 0
             ):

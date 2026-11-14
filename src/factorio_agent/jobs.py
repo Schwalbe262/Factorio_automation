@@ -122,6 +122,13 @@ CAPABILITIES = {
         "native_recipes": ["electric-mining-drill", "splitter"],
         "effect": "a mining bank on the next lasting patch of the ore, a paired furnace block beside it fed by a coal trunk tap, and its plates onto the planned bus through a feed upstream of the lane's taps",
     },
+    # Bus lane extension (bus_lane.py): proposed when a consumer's item lies across the bus band.
+    "bus_lane": {
+        "parameters": {"item": "a non-plate bus material (coal, stone, steel-plate, plastic-bar, ...)"},
+        "requires": ["planned_main_bus"],
+        "native_recipes": ["underground-belt", "splitter"],
+        "effect": "a reserved (or a spare) lane of the built planned bus gets a short trunk fed from the item's patch trunk tap or a free board port; crossings passed underground; published as a bus trunk so consumers beside the bus tap it",
+    },
     # Feed head rework (head_rework.py): proposed when a district bank's shared head limits growth.
     "feed_head_rework": {
         "parameters": {"block": "smelting_district", "resource": "iron-ore|copper-ore"},
@@ -574,6 +581,7 @@ def summary(obs: dict, ledger: Ledger) -> dict:
         "wood_burner_feed": obs.get("wood_burner_feed"),
         "trunk_return_feeds": obs.get("trunk_return_feeds"),
         "feed_head_rework": obs.get("feed_head_rework"),
+        "bus_lanes": obs.get("bus_lanes"),  # lanes of the built planned bus (bus_lane.bus_lane_nodes)
         # The generated roadmap tail (progression.tail_steps) and its stage gates (rocket_stages.receipt).
         "rocket_plan": obs.get("rocket_plan"),
         "rocket_stages": obs.get("rocket_stages"),

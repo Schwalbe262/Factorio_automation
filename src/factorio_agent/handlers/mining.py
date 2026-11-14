@@ -101,6 +101,23 @@ def validate_remote_smelting(parameters):
     validate_parameters(parameters)
 
 
+def bus_lane_step(ex, obs, parameters):
+    early, _ = shared_upkeep(ex, obs, "bus_lane")
+    if early is not None:
+        return early
+    return ex.bus_lane(parameters["item"]).step(obs, parameters)
+
+
+def bus_lane_proof(ex, obs, result, parameters):
+    return ex.bus_lane(parameters["item"]).proof(obs, parameters)
+
+
+def validate_bus_lane(parameters):
+    from ..bus_lane import validate_parameters
+
+    validate_parameters(parameters)
+
+
 def validate_mining_outpost(parameters):
     from ..outposts import validate_parameters
 
@@ -220,6 +237,7 @@ register(
 )
 register("mining_outpost", step=mining_outpost_step, proof=mining_outpost_proof, validate=validate_mining_outpost)
 register("remote_smelting", step=remote_smelting_step, proof=remote_smelting_proof, validate=validate_remote_smelting)
+register("bus_lane", step=bus_lane_step, proof=bus_lane_proof, validate=validate_bus_lane)
 register("paired_mining", step=paired_mining_step, proof=paired_mining_proof)
 register(
     "dedicated_materials",

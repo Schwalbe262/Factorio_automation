@@ -768,6 +768,11 @@ def autopilot_nodes(jobs, queue_nodes, observation, capabilities, *, limit=3) ->
     proposed += remote_smelting_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
         : max(0, limit - len(proposed))
     ]
+    from .bus_lane import bus_lane_nodes  # an item a consumer cannot get across the bus band: its bus lane
+
+    proposed += bus_lane_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[
+        : max(0, limit - len(proposed))
+    ]
     from .mine_trunk import mine_trunk_nodes  # patch bank grows in place when its trunk's taps outgrow it
 
     proposed += mine_trunk_nodes(jobs, list(queue_nodes) + proposed, observation, capabilities)[

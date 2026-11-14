@@ -292,6 +292,7 @@ DRY_RUN = {
     "power_coal_tap": DryRun(lambda ex, obs, p: ex.power_coal_tap.prepare(obs)),
     "trunk_return_feed": DryRun(lambda ex, obs, p: ex.trunk_return_feed.prepare(obs, p["resource"])),
     "remote_smelting": DryRun(lambda ex, obs, p: ex.remote_smelting(p["resource"]).prepare(obs, p)),
+    "bus_lane": DryRun(lambda ex, obs, p: ex.bus_lane(p["item"]).prepare(obs, p.get("side"))),
     "oil_gathering": DryRun(
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).prepare(obs),
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).step(obs),

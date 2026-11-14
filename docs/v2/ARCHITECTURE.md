@@ -77,6 +77,7 @@ jobs.run_jobs: per pass one observe and at most one drill-cell survey (bootstrap
 | Space | `mine_trunk.py` | one mining block per patch: consumers tap the patch bank's output trunk with priority splitters (`planned_tap` geometry), lane count from bandwidth, 2-2 balancer record, demand ledger `mine-trunks.json` -> `mining_outpost` growth node (LAYOUT_PRINCIPLES.md "Mine output trunk") |
 | Space | `planned_furnaces.py` | steel/brick furnace blocks on a planned world: paired bank with another recipe on a `SiteService` block, iron from a planned tap, coal/stone from dedicated material ports, reserved growth slots; `steel_supply`/`steel_production`/`steel_coal_supply`/`brick_production` delegate here (`industrial.IndustrialOperations.planned`) |
 | Space | `remote_smelting.py` | `remote_smelting`: a plate ore that cannot grow at home (`mining_outpost` blocked: no bank site, no ore corridor) gets a block at the next lasting patch (`choose_patches`: ore life at the planned draw, distance): policy bank (`outposts.prepare_on_patch`), `planned_furnaces.furnace_block` on a free site or district block on the bank's side of the bus, coal from a coal trunk tap, plates onto the bus trunk through a feed (`planned_tap.feed_layout`, upstream of the lane's taps); node `remote_smelting_nodes` |
+| Space | `bus_lane.py` | bus lane extension on a built planned bus: a reserved (or spare) lane of a non-plate item gets a short trunk fed from the item's patch-trunk tap, a free board port or a route tap on a built route of the item (feed via the header row when the heads' approaches are taken); joins `planned-main-bus.json` once the item reaches its tail; proposed when a consumer's needs say `item_source_across_bus_band` (`chemical_production` coal east of the band); lane chosen so a tap reaches the consumers' side |
 | Space | `pipe_bridge.py` | a pipe-to-ground pair under one tile of a straight pipe run so a feed or tap belt crosses it; the owner's saved plan, fluid graph and board copy are rewritten first (`OWNER_STATES`), pipes mined by unit |
 | Space | `planned_products.py` | engines and magazines on a planned world: `engine_production`/`ammo_production` hand over to generic `produce` rows (engine row: steel from the steel block port, gears + pipes by twin sub-rows from one iron tap); ammo refill from the row's chest |
 | Space | `plate_supply.py` | plate resolver for science: bus taps when a planned bus is published (`plate_bus`, `bus_budget`), else the district's registered output ports (old `smelter-lanes.json` only as a same-world fallback), never a port another owner took |
@@ -191,7 +192,8 @@ drills), `dedicated_materials` (trunk-tap failure named in `change`),
 `engine_production` / `ammo_production` (produce rows on a planned world, `produce` rungs),
 `oil_gathering` (`site:wider_survey`, survey rings to 1024 tiles, scouting; `OIL_GATHERING.md`),
 `basic_petroleum` (refinery anchors from `block_sites`, `site:more_blocks`, crude route rungs incl. waypoint),
-`remote_smelting` (route rungs incl. waypoint for its coal and plate belts).
+`remote_smelting` (route rungs incl. waypoint for its coal and plate belts),
+`bus_lane` (route rungs incl. waypoint for its feed belt).
 Route rungs use one shared lever (`remedy.ROUTE_RELAX` read by
 `transport.plan_connection`). The `clear` rung (`remedy.CLEAR_REBUILD`, needs kind `built`)
 repairs a built block whose proof keeps failing although every planned entity stands

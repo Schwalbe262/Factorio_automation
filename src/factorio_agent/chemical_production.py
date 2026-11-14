@@ -12,6 +12,7 @@ from factorio_agent.core.deterministic_builder import _plan
 from factorio_agent.core.deterministic_state import _atomic_json
 from factorio_agent.core.world_catalog import _yield
 from .board import entity
+from . import plan_needs
 from .manufacturing import connect_power_groups
 from .petroleum import compile_pipe_crossings, pipeline_extent, basic_petroleum_rates
 from .planning import overlap, preflight, survey_slots
@@ -30,6 +31,16 @@ from .transport import (
 PRODUCTS = {"plastic-bar": "plastics", "sulfur": "sulfur-processing"}
 SOURCE_KEYS = {"petroleum-gas": "petroleum-gas", "water": "water", "coal": "plastic-coal"}
 FLUID_CROSSING_TYPES = {"transport-belt", "underground-belt", "electric-pole", "inserter"}
+BUS_TAP = "planned_bus_tap"  # a belt input taken from a built lane of the planned bus
+# Needs reason of a belt input whose only sources lie across the bus band (``bus_lane`` proposes the lane).
+ACROSS_BAND = "item_source_across_bus_band"
+
+
+def _bus_carries(root, obs, item) -> bool:
+    """The published planned bus of this world has a built trunk of ``item``."""
+    from . import block_sites, planned_tap
+
+    return planned_tap.carries(block_sites.planned_bus(root, obs), item)
 
 
 def _payload(v):
@@ -884,6 +895,12 @@ class ChemicalProduction:
             saved = self.state.get("products", {}).get(product, {}).get("sources", {}).get(item)
             if saved and self.overrides[item] is not None and self.overrides[item] != saved:
                 return {"ok": False, "reason": "chemical_bound_source_override_changed", "item": item}
+            if not fluid and self.overrides[item] is None and (saved or {}).get("kind", BUS_TAP) == BUS_TAP:
+                # A block beside the planned bus takes its belt input from the bus lane (owner layout
+                # rule): the tap is planned with the site (``block_sites.bus_taps``).
+                if saved or _bus_carries(self.path.parent, obs, item):
+                    result[item] = {"kind": BUS_TAP, "item": item}
+                    continue
             source_key = SOURCE_KEYS[item]
             if item == "water" and product == "sulfur" and "sulfur-water" in registry.get("sources", {}):
                 source_key = "sulfur-water"
@@ -937,7 +954,7 @@ class ChemicalProduction:
             result[item] = deepcopy(source)
         native = self.game.query(
             """local sources=helpers.json_to_table("""
-            + _payload(result)
+            + _payload({k: v for k, v in result.items() if v.get("kind") != BUS_TAP})
             + """);local snapshots={}
 for item,q in pairs(sources)do local e=target(q.position,q.name)
  if not e or e.force~=f or e.surface~=s or e.unit_number~=q.unit_number or e.position.x~=q.position.x or e.position.y~=q.position.y then return {ok=false,reason="chemical_source_identity_changed",item=item}end
@@ -1033,10 +1050,14 @@ end;return {ok=true,snapshots=snapshots}"""
         from . import block_sites
 
         # Planned world: anchors from the master plan; the source-relative ones only without a site service.
-        sited = block_sites.anchors(
+        found = block_sites.blocks(
             self.site, obs, self.owner(product), lambda ax, ay: chemical_core(self.catalog, product, ax, ay)
         )
+        sited = None if found is None else [(anchor, block.name) for anchor, block in found]
+        blocks_at = dict(found or ())  # anchor -> allocation (side and along range of a bus tap)
         allocations = dict(sited or ())
+        bus = block_sites.planned_bus(self.path.parent, obs)
+        coal_rate = chemical_rates(self.catalog, product)["inputs_per_minute"].get("coal", 0)
         if sited is not None:
             anchors = list(allocations)
             if not anchors:
@@ -1088,6 +1109,42 @@ end;return {ok=true,snapshots=snapshots}"""
                 continue
             legal_sites += 1
             es = core["entities"][:]
+            coal_route = None
+            taps, tap_entities, ignored = [], [], ()
+            from_bus = bool(core["coal_port"]) and ready["sources"]["coal"].get("kind") == BUS_TAP
+            pipe_core = core
+            if from_bus:
+                # The coal tap and its short belt first: the pipes then keep off them (a pipe is no
+                # belt crossing; eval-1575138435: the gas pipe walled the tap port's one-tile approach).
+                tapped = block_sites.bus_taps(
+                    self.game,
+                    self.builder,
+                    obs,
+                    bus,
+                    blocks_at.get((x, y)),
+                    owner=self.owner(product),
+                    ports=[core["coal_port"]],
+                    entities=es,
+                    demand={"coal": coal_rate},
+                )
+                if not tapped.get("ok"):
+                    failures.append(
+                        dict(
+                            candidate_failure(candidate, "coal_tap", tapped, item="coal"),
+                            rows_rejected=tapped.get("rows_rejected") or {},
+                            tap_failures=[
+                                {k: f.get(k) for k in ("reason", "along")} for f in (tapped.get("failures") or [])[-3:]
+                            ],
+                        )
+                    )
+                    continue
+                taps, ignored = tapped["taps"], tuple(tapped["ignored_units"])
+                tap_entities = merge_entities(*(t["entities"] for t in taps)) if taps else []
+                es = block_sites.own_entities(tapped["entities"], taps)
+                coal_route = {
+                    "underground_pairs": [p for r in tapped["routes"] for p in r.get("underground_pairs", [])]
+                }
+                pipe_core = dict(core, entities=merge_entities(es, tap_entities))
             fluid_plans = {}
             handoffs = {}
             prior = []
@@ -1098,7 +1155,7 @@ end;return {ok=true,snapshots=snapshots}"""
 
                     kwargs["owned_prior"] = trusted_prior(obs["world_id"], core, fluid_plans)
                 route = plan_typed_fluid_connection(
-                    self.game, self.builder, obs, ready["sources"][item], destination, core, prior, **kwargs
+                    self.game, self.builder, obs, ready["sources"][item], destination, pipe_core, prior, **kwargs
                 )
                 if not route.get("ok"):
                     failures.append(
@@ -1158,8 +1215,7 @@ end;return {ok=true,snapshots=snapshots}"""
                 es = merge_entities(es, route["entities"])
             if len(fluid_plans) != len(core["fluid_ports"]):
                 continue
-            coal_route = None
-            if core["coal_port"]:
+            if core["coal_port"] and not from_bus:
                 coal_route = belt_connection(
                     self.game, self.builder, obs, ready["sources"]["coal"], core["coal_port"], es
                 )
@@ -1177,13 +1233,23 @@ end;return {ok=true,snapshots=snapshots}"""
                     continue
                 es = merge_entities(es, coal_route["entities"])
             power = connect_power_groups(
-                self.game, self.builder, obs, [core], es + core["output_access"] + core["expansion_keepouts"]
+                self.game,
+                self.builder,
+                obs,
+                [core],
+                es + tap_entities + core["output_access"] + core["expansion_keepouts"],
             )
             if not power.get("ok"):
                 failures.append(candidate_failure(candidate, "power", power))
                 continue
             es = merge_entities(es, power["entities"])
-            check = preflight(self.game, self.builder, obs, es + core["output_access"] + core["expansion_keepouts"])
+            check = preflight(
+                self.game,
+                self.builder,
+                obs,
+                merge_entities(es, tap_entities) + core["output_access"] + core["expansion_keepouts"],
+                **({"ignored_units": ignored} if ignored else {}),
+            )
             if not check.get("ok"):
                 failures.append(candidate_failure(candidate, "whole_preflight", check))
                 continue
@@ -1236,6 +1302,7 @@ end;return {ok=true,snapshots=snapshots}"""
                 "core": core,
                 "plan": plan,
                 "sources": ready["sources"],
+                "taps": taps,
                 "fluid_plans": fluid_plans,
                 "fluid_handoffs": handoffs,
                 "bindings": {},
@@ -1264,12 +1331,29 @@ end;return {ok=true,snapshots=snapshots}"""
             "candidate_failures": failures[-6:],
         }
         block_sites.keep(self.site, obs, self.owner(product), None)
-        return {
+        out = {
             "ok": False,
             "reason": "no_permanent_chemical_site_with_complete_typed_inputs",
             "failures": failures[-6:],
             "evidence": evidence,
         }
+        coal_failed = [f for f in failures if f.get("stage") in ("coal_route", "coal_tap")]
+        if coal_failed and blocks_at and bus is not None:
+            if ready["sources"]["coal"].get("kind") != BUS_TAP:
+                # Sites beside the bus, a coal belt that finds no way to them: the bus band lies between
+                # (routes never cross it, ``transport.bus_band``): a coal lane on the bus serves them.
+                out["plan_needs"] = plan_needs.make(
+                    "route",
+                    ACROSS_BAND,
+                    block="chemical_production",
+                    item="coal",
+                    side=next((getattr(b, "side", None) for b in blocks_at.values() if getattr(b, "side", None)), None),
+                    tried=len(coal_failed),
+                    change="a built bus lane of coal (bus_lane) beside the chemical sites",
+                )
+            else:
+                out["plan_needs"] = block_sites.tap_needs(self.owner(product), coal_failed[-1])
+        return out
 
     def _bind(self, obs, entry):
         actual = {(e["name"], *xy(e)): e for e in obs["entities"]}
@@ -1382,6 +1466,22 @@ end;return {ok=true,snapshots=snapshots}"""
                 return {"status": "blocked", "reason": "chemical_post_defense_preflight_failed", "preflight": check}
             entry["construction_authorized"] = True
             self._save()
+        taps = entry.get("taps") or []
+        if taps:
+            # The coal tap on the bus lane: published with the bus, built first (planned_tap.cutover).
+            from . import planned_tap
+
+            blocked = planned_tap.publish(self.path.parent, obs["world_id"], taps)
+            if blocked:
+                return blocked
+            before = [t.get("built") for t in taps]
+            cut = planned_tap.cutover(
+                self.path.parent, self.builder, obs, taps, clear_obstacles=entry["plan"].get("clear_obstacles", [])
+            )
+            if [t.get("built") for t in taps] != before:
+                self._save()
+            if cut is not None:
+                return cut
         result = self.builder.ensure_plan(obs, entry["plan"])
         if result.get("status") != "succeeded":
             return result

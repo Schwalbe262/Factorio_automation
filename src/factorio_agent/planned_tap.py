@@ -28,9 +28,10 @@ extended (paid trunk belts, foreign belts crossed underground like the
 original trunk, capped at the bus length); beyond the bus length the tap is
 a precise blocker (``tap_beyond_bus_length``).
 
-Not yet: a later trunk on a reserved lane must pass under existing taps'
-splitter / branch tiles on that lane; ``planned_bus.trunk_plan`` only crosses
-plain belts, so building more lanes needs that rule first.
+A later trunk on a reserved or spare lane (``bus_lane``) passes under every belt on
+its tiles, the bus's own tap and feed hardware included (``planned_bus.trunk_plan``
+with the observed and the unbuilt tap belts); branch rows only tunnel under unbuilt
+lanes, so their lane tiles are free surface.
 
 Splitter priorities (``planned_bus.tap_priorities``): output priority to the
 branch, input priority none (one input). The side is derived from the

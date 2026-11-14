@@ -285,6 +285,14 @@ def execute(argv=None, services=None):
                     obs["feed_head_rework"] = rework
             except Exception as exc:  # an estimate must never break observe
                 obs["feed_head_rework_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            from .bus_lane import receipt as bus_lane_receipt
+
+            try:  # lanes of the built planned bus (bus_lane.bus_lane_nodes)
+                lanes = bus_lane_receipt(root, obs)
+                if lanes is not None:
+                    obs["bus_lanes"] = lanes
+            except Exception as exc:  # a receipt must never break observe
+                obs["bus_lanes_error"] = f"{type(exc).__name__}: {exc}"[:200]
             obs["factory_constraints"] = factory_constraints(root, obs, services.catalog(root, game))
             from .normal_research import ready_options
 

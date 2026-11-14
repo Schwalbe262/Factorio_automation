@@ -334,11 +334,23 @@ def _production_keepouts(game, builder, obs, source, destination, reserved, boun
         bus = board.get("shared_main_bus", {})
         for row in bus.get("reservations", []):
             if row.get("area"):
+                # An unbuilt lane's head is its declared input: the feed of a new lane ends there (bus_lane).
+                heads = [
+                    {
+                        "kind": "item",
+                        "item": lane["material"],
+                        "position": lane["head"],
+                        "facing": bus.get("flow_direction"),
+                        "direction": "input",
+                    }
+                    for lane in bus.get("lanes", [])
+                    if lane.get("material") == row.get("item") and lane.get("status") != "built" and lane.get("head")
+                ]
                 blocks.append(
                     {
                         "reserved_area": row["area"],
                         "entities": bus.get("entities", []),
-                        "ports": [p for p in bus.get("ports", []) if p.get("item") == row.get("item")],
+                        "ports": [p for p in bus.get("ports", []) if p.get("item") == row.get("item")] + heads,
                         "reservation_name": "shared-main-bus:" + str(row.get("item")),
                     }
                 )
