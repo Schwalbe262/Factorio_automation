@@ -51,6 +51,9 @@ RETRY_CLEARED_BY = {
     "feed_head_bandwidth_below_next_slot_demand": frozenset({"feed_head_rework"}),
     # normal_research: no block makes one of the technology's packs yet.
     "research_pack_producer_missing": frozenset({"logistic_science", "chemical_science"}),
+    # defense_perimeter.ensure_coverage: the gun-turret research (pulled forward by
+    # progression.defense_urgency_nodes) clears it; until then the job keeps no slot.
+    "native_gun_turret_and_normal_magazine_recipes_required": frozenset({"research"}),
 }
 # Re-planning blockers (a route, a whole-plan preflight or a site search that found nothing):
 # the world, neighbours and the planning budget change the answer without any job success.
@@ -67,7 +70,13 @@ MISSING_PRODUCER_RATE = 6  # items/min of a produce row proposed for a machine-o
 # by upkeep, idle furnaces holding the item): retried after a quiet interval like a stall
 # (eval-1575138435, 375 min: engine_production and oil_gathering blocked on steel while two idle
 # furnaces held 163 steel; every job terminal, nothing could succeed, the run idled 14+ min).
-SUPPLY_RETRY_REASONS = frozenset({"required item needs a production machine"})
+SUPPLY_RETRY_REASONS = frozenset(
+    {
+        "required item needs a production machine",
+        # electric_coal: the plant ran dry; boiler upkeep restarts it (power_coal_feed.dead_plant_restart).
+        "replacement_electric_drill_has_no_power",
+    }
+)
 # Site / connection blockers (no site, no corridor, a port sealed by an unbuilt plan) are
 # re-planning blockers too. Past AUTO_RETRY_LIMIT every re-planning blocker is still retried,
 # with no limit, when the published facts change (board plans and connections, material

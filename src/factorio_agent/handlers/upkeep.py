@@ -5,6 +5,8 @@ Not a capability module: nothing here registers a handler.
 
 from __future__ import annotations
 
+from ..core.deterministic_bootstrap import FUEL_WAIT
+
 # These capabilities also survey registered pipes and belts before their own step.
 INFRASTRUCTURE_REPAIR_CAPABILITIES = (
     "basic_petroleum",
@@ -29,7 +31,11 @@ def shared_upkeep(ex, obs, capability):
     ex.builder._sync(obs)
     filtered = ex.starter_observation(obs)
     result = ex.starter_upkeep(obs)
-    if result.get("status") != "succeeded":
+    # A plain wait for burner fuel to pile up (no take or insert is possible yet) does not stop the
+    # job: in fleet aud-1114-0841 "waiting for automated coal output" held the district and the bus
+    # 4.6 min per run on average (the mining outposts 5.1 min) while coal cells refilled. The next pass
+    # checks fuel first again, so the coal trip still happens as soon as a batch is there.
+    if result.get("status") != "succeeded" and not result.get(FUEL_WAIT):
         return result, filtered
     background = ex._continue_background_construction(obs, capability)
     if background:

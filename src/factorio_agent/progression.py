@@ -973,6 +973,21 @@ def defense_growth_nodes(jobs, queue_nodes, observation, capabilities) -> list[d
 URGENT_DEFENSE_STEPS = ("research_gun_turret", "defense_perimeter")
 URGENT_DEFENSE_PRIORITY = TOP_PRIORITY + 10
 URGENT_DEFENSE_LEVEL = 1
+# A job stopped because its site needs turret coverage it cannot craft yet
+# (``defense_perimeter.ensure_coverage``): the gun-turret research is due now.
+TURRET_RECIPE_BLOCKS = frozenset({"native_gun_turret_and_normal_magazine_recipes_required"})
+TURRET_DEMAND_STATUSES = frozenset({"blocked", "waiting", "running", "paused"})
+
+
+def turret_demand(jobs) -> list[str]:
+    """Capabilities of the jobs that stopped on missing turret recipes (``TURRET_RECIPE_BLOCKS``)."""
+    return sorted(
+        {
+            str(job.get("capability"))
+            for job in jobs
+            if job.get("status") in TURRET_DEMAND_STATUSES and str(job.get("reason") or "") in TURRET_RECIPE_BLOCKS
+        }
+    )
 
 
 def defense_urgency_nodes(jobs, queue_nodes, observation, capabilities, *, steps=None) -> list[dict]:
@@ -984,16 +999,27 @@ def defense_urgency_nodes(jobs, queue_nodes, observation, capabilities, *, steps
     (``attack_sources``). Without that the roadmap order stands (the steps wait for
     logistic science and steam expansion). One node at a time, the same node ids
     as the roadmap's, so the roadmap never proposes them twice.
+
+    A job stopped on missing turret recipes (``turret_demand``: a growth outpost whose site has
+    enemies within the quiet radius) pulls only the gun-turret research forward, without a risk
+    level: fleets aud-1114-0752/0841 left such outposts and material banks blocked from ~24 min
+    while the research waited for its roadmap place (queued at 42.8 min).
     """
+    jobs = list(jobs)
     risk = observation.get("adaptive_defense_risk")
     level = risk.get("level") if isinstance(risk, Mapping) else None
+    urgent_steps = URGENT_DEFENSE_STEPS
     if type(level) is not int or level < URGENT_DEFENSE_LEVEL:
-        return []
+        demand = turret_demand(jobs)
+        if not demand:
+            return []
+        urgent_steps = URGENT_DEFENSE_STEPS[:1]
+        risk = {"risk": "turret demand", "sizing": "jobs need turret coverage: " + ", ".join(demand)}
     progress = _Progress(tuple(jobs), frozenset(_names(observation.get("technologies"))))
     succeeded = progress.succeeded_capabilities
     queued_ids = {node.get("id") for node in queue_nodes}
     steps = steps if steps is not None else _by_id(roadmap_for(observation))
-    for step_id in URGENT_DEFENSE_STEPS:
+    for step_id in urgent_steps:
         step = steps.get(step_id)
         if step is None or step.capability not in capabilities:
             return []
