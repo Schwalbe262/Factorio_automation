@@ -14,13 +14,52 @@ tests show failing it.
 | 3 | Ratios from the catalog: crafts/min of a machine = 60 x crafting speed / recipe energy; demand propagates down the tree with product amounts (a belt craft yields 2). One machine per intermediate serves every consumer; the start is one product machine (start small). | `cluster.tree`, `cluster.propagate`; `needs_more_machines` when a node would need two |
 | 4 | Belt lanes are a resource: two sourced items share one input belt, one lane each, side-loaded from two feeders at the belt head; rows use a second belt with long-handed inserters for more inputs. | `cluster_block` head; `blocks/sizing.plan_lanes` for rows; audit `lane_mixed`, `lane_capacity_exceeded` |
 | 5 | Bus practice: taps are splitters with output priority to the branch, branches tunnel under other lanes; copper cable never goes on the bus (it is made next to the circuit machine). | `planned_tap.layout`, `planned_bus.branch_priorities` |
-| 6 | Growth in place: rows reserve slots along their belts (`blocks/row.extend_row`). A cluster has no slots: `cluster.grow_decision(plan, n)` re-evaluates every edge for `n` product machines without touching the built plan; an edge that turns into `belt` means the next stage is a row block fed by a lane next to it. | `grow_decision`; `production_layout.extend_line` refuses a cluster |
+| 6 | Growth in place: rows reserve slots along their belts (`blocks/row.extend_row`); a block's district frame holds its sibling row's room (`Allocation.growth`, "Planned floor" below). A cluster has no slots: `cluster.grow_decision(plan, n)` re-evaluates every edge for `n` product machines without touching the built plan; an edge that turns into `belt` means the next stage is a row block fed by a lane next to it. | `grow_decision`; `production_layout.extend_line` refuses a cluster |
 | 7 | Throughput is a constraint: inserter rate per machine edge, lane capacity per input port, declared crafts never above nameplate. | `audit_cluster`: `inserter_throughput_insufficient`, `lane_capacity_exceeded`, `declared_rate_above_nameplate` |
 | 8 | Input order follows the bus: `cluster_block(plate_order=)` puts the first item on the north feeder (left lane) so a caller can follow its bus lane order. | caller |
 
 Shape bounds (`cluster_audit`): at most `MAX_BELTS_PER_SLOT = 16` belts per
 built or reserved machine slot, and machine tiles (reserved slots counted) at
 least `MIN_DENSITY = 0.12` of the bounding box.
+
+## Planned floor: where blocks go along the bus (`site/floorplan.py`)
+
+Cause (eval-1575138435): blocks were placed first come, first served (`allocator.first_fit`,
+alternating sides), so suppliers and consumers landed on opposite sides of the bus (a private belt
+cannot cross the bus band: it goes round the bus end), growth landed in a new slot elsewhere, and
+six unused advanced-circuit candidates held the bus tail.
+
+* Plan time (`plan_site(floor_blocks=)`, from `floor_blocks.floor_blocks(catalog, lane_order)`:
+  roadmap blocks, then the rocket bill's blocks, real footprints from the block generators where
+  they are pure): every block gets a slot (side, along range) in roadmap order by a score: head
+  distance x earliness, feed length to every partner that exchanges a privately routed item
+  (round the bus end across it), a penalty for tapping a bus lane upstream of its producer, a
+  penalty for a frame without its growth room. Footprints are the full block (rows, cores,
+  furnace banks and science frames keep their slots inside), so the growth allowance is the room
+  for a sibling row (`production_row_<item>__belt` beside `production_row_<item>`). An over-full
+  bus gives up optional growth room before blocks; blocks that fit nowhere keep an unplaced slot
+  (relations only).
+* Run time (`allocator.allocate` -> `floorplan.choose`): a block takes its slot, compacted behind
+  what really stands upstream and moved along the bus in order when it does not fit (terrain, a
+  larger layout); a sibling row goes into its family's frame (`Allocation.growth`, restored when
+  the sibling is released); a block the floor does not know takes the best scored free land off
+  unclaimed slots; on a full bus later blocks' slots give way, then other blocks' unused growth
+  room (`Allocation.took`, given back on release). The allocator's collision, gap and terrain
+  checks are unchanged; `extend` grows into the held room.
+* Candidates: `allocate_candidates` marks them `settled=False`; `keep_only` settles the chosen
+  one; `SiteService.release_unsettled` (after every job step) releases the rest, never a block
+  under a board block or named by a runtime state file.
+* Old plans: `MasterPlan.floor` is a versioned addition (`floor: {"version": 1, "slots"}`; the
+  plan format stays version 2). A plan without a floor gets one on load: built and allocated
+  blocks become fixed slots where they stand, only unallocated blocks get new slots; legacy
+  candidate groups (two or more `<name>#i` without the `settled` flag) are released first.
+* Measure: `python -B tools/floor_sweep.py --catalog runtime/v2/<name>/catalog.json --seeds 20`
+  (first-fit vs floor, with and without +-25% size jitter, on `site.fakeworld` maps; 2026-11-14,
+  20 seeds, eval-1575138435 catalog): roadmap feed length 21644 -> 9298 tiles (mean 185 -> 80),
+  all feeds mean 160 -> 104, bus crossings of private feeds 155 -> 91, sibling rows in frame
+  4/67 -> 21/57, allocation failures 182 -> 175 (the rocket tail does not fit a 320-tile bus in
+  either mode). Open: 8 bus-lane consumers upstream of their producer (tail rows that took a
+  slot given up on a full bus); shallow blocks still take the whole district depth.
 
 ## Belt lanes and bandwidth (`belt_flow.py`, `bandwidth_audit.py`)
 

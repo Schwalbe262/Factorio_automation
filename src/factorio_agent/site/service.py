@@ -54,11 +54,20 @@ class SiteService:
     """
 
     def __init__(
-        self, game, *, half_size: int = HALF_SIZE, config: SiteConfig | None = None, surveyor=None, updater=None
+        self,
+        game,
+        *,
+        half_size: int = HALF_SIZE,
+        config: SiteConfig | None = None,
+        surveyor=None,
+        updater=None,
+        floor_blocks=None,
     ):
         self.game = game
         self.half_size = half_size
         self.config = config or SiteConfig()
+        # site.floorplan.FloorBlock list (factorio_agent.floor_blocks); None: no planned floor.
+        self.floor_blocks = None if floor_blocks is None else tuple(floor_blocks)
         self.root = Path(game.cfg.runtime_dir)
         self._surveyor = surveyor or (lambda g, rect: survey_area(g, rect).world)
         self._updater = updater or (lambda world, g, rect: update(world, g, rect))
@@ -91,14 +100,31 @@ class SiteService:
         self._world = WorldMap.from_json(json.dumps(stored_map["map"]))
         self._plan = MasterPlan.from_dict(stored_plan["plan"])
         self.world_id = world_id
+        if self._plan.floor is None and self.floor_blocks is not None:
+            self._plan_floor_late()
         return True
+
+    def _plan_floor_late(self) -> None:
+        """Floor for a plan written before floors existed (or with another floor version).
+
+        Built and allocated blocks are never moved: each becomes a fixed slot of its block; only
+        blocks without an allocation get a slot on the land still free (board hardware marked).
+        """
+        self._release_stale(legacy_only=True, save=False)
+        self.mark_board_hardware()
+        try:
+            warnings = self._plan.plan_floor(self._world, self.floor_blocks)
+        finally:
+            self._world.clear_plans(BOARD_HARDWARE_OWNER)
+        self._plan.warnings = tuple(self._plan.warnings) + tuple(warnings)
+        self.save()
 
     def _build(self, world_id, start: tuple[int, int]) -> None:
         h = self.half_size
         rect = Rect(start[0] - h, start[1] - h, start[0] + h, start[1] + h)
         world = self._surveyor(self.game, rect)
         self.surveys += 1
-        self._plan = plan_site(world, start=start, config=self.config)
+        self._plan = plan_site(world, start=start, config=self.config, floor_blocks=self.floor_blocks)
         self._world = world
         self.world_id = world_id
         self.save()
@@ -231,7 +257,13 @@ class SiteService:
                 try:
                     found.append(
                         self._plan.allocate(
-                            self._world, kind, along, depth, name=f"{name}#{index}", returns_to_bus=returns_to_bus
+                            self._world,
+                            kind,
+                            along,
+                            depth,
+                            name=f"{name}#{index}",
+                            returns_to_bus=returns_to_bus,
+                            settled=False,
                         )
                     )
                 except SiteError:
@@ -242,8 +274,91 @@ class SiteService:
         return found
 
     def keep_only(self, prefix: str, keep: str | None, world_id=None) -> None:
-        """Release every allocation starting with ``prefix`` except ``keep``."""
+        """Release every allocation starting with ``prefix`` except ``keep``, which is settled."""
         self.release_prefix(prefix, world_id, keep=keep)
+        if keep is not None and self.allocation(keep, world_id) is not None:
+            if self._plan.settle(keep).settled is True:
+                self.save()
+
+    # ----- unused candidates ---------------------------------------------------
+    def release_unsettled(self) -> list[str]:
+        """Release candidate blocks nobody chose (``Allocation.settled`` False; see :meth:`_release_stale`).
+
+        Called after every job step (``StarterExecutors.step``): a controller allocates its
+        candidates and settles one within the same step, so a candidate still unsettled after the
+        step was left behind by a failure path or an exception (eval-1575138435: six
+        ``advanced_circuit_production#0..5`` filled the rest of the bus). Does nothing before the
+        plan is loaded. Returns the released names.
+        """
+        if self._plan is None or self._world is None:
+            return []
+        return self._release_stale(legacy_only=False, save=True)
+
+    def _release_stale(self, *, legacy_only: bool, save: bool) -> list[str]:
+        """Release stale candidates: ``settled`` False (unless ``legacy_only``), or ``settled`` None
+        (a plan written before the flag) when two or more ``<name>#<i>`` siblings remain (a settled
+        group keeps exactly one). Never a block whose land holds a registered board block or whose
+        name any runtime state file mentions (a chosen block whose settle was missed)."""
+        plan = self._plan
+        groups: dict[str, list] = {}
+        for a in plan.allocations:
+            if "#" in a.name:
+                groups.setdefault(a.name.rsplit("#", 1)[0], []).append(a)
+        stale = []
+        for members in groups.values():
+            for a in members:
+                if a.settled is False and not legacy_only:
+                    stale.append(a)
+                elif a.settled is None and len(members) >= 2:
+                    stale.append(a)
+        if not stale:
+            return []
+        protected = self._referenced({a.name for a in stale}) | self._on_board_blocks(stale)
+        released = []
+        for a in stale:
+            if a.name in protected:
+                continue
+            plan.release(self._world, a.name)
+            released.append(a.name)
+        if released and save:
+            self.save()
+        return released
+
+    def _referenced(self, names: set[str]) -> set[str]:
+        """Names that occur in a runtime JSON file other than the site plan/map (controller states)."""
+        found: set[str] = set()
+        for path in sorted(self.root.glob("*.json")):
+            if path.name in (MAP_FILE, PLAN_FILE) or len(found) == len(names):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            found |= {n for n in names if f'"{n}"' in text}
+        return found
+
+    def _on_board_blocks(self, allocations) -> set[str]:
+        """Allocations whose rect overlaps a registered board block's ``reserved_area``."""
+        try:
+            board = json.loads((self.root / BOARD_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return set()
+        if not isinstance(board, dict) or board.get("world_id") != self.world_id:
+            return set()
+        areas = []
+        for block in (board.get("blocks") or {}).values():
+            area = block.get("reserved_area") if isinstance(block, dict) else None
+            try:
+                (x0, y0), (x1, y1) = area
+                areas.append((float(x0), float(y0), float(x1), float(y1)))
+            except (TypeError, ValueError):
+                continue
+        hit = set()
+        for a in allocations:
+            r = a.rect
+            if any(x0 < r.x1 and r.x0 < x1 and y0 < r.y1 and r.y0 < y1 for x0, y0, x1, y1 in areas):
+                hit.add(a.name)
+        return hit
 
     def release_prefix(self, prefix: str, world_id=None, keep: str | None = None) -> int:
         plan = self.plan(world_id)

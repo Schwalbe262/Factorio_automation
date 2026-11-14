@@ -100,7 +100,9 @@ def _check_allocations(plan) -> list[str]:
         for other in plan.allocations:
             if other.name == allocation.name or other.side != allocation.side:
                 continue
-            if other.along0 - gap < allocation.along1 and allocation.along0 < other.along1 + gap:
+            # Spans include the held growth room (Allocation.growth).
+            end, other_end = allocation.along1 + allocation.growth, other.along1 + other.growth
+            if other.along0 - gap < end and allocation.along0 < other_end + gap:
                 problems.append(f"{allocation.owner} is within the corridor gap of {other.owner}")
     return problems
 
