@@ -252361,3 +252361,10 @@ Goal: normally harden recurring losses and maintain radar/research/repairs. Hypo
 - causes (game min lost): bus proof impure on diving tap branch (3 runs, ~49; fixed c2dad94), plate-bound bus (5 runs, ~62; open), water pipe through a steam-engine end (1 run, 38; fixed b7eef43), supply cell frame before a district port (1 run, 21; fixed 69d45ee), row splitter on an unbuilt trunk tile (16; open), row underground taken (12.5; open); stop traceback fixed 9f833da.
 - payback iron cells (511a385): 6 -> 12 cells, last cell median 19.5 min, district 27.2 -> 26.3: late cells compete with the district build.
 - next: worker on report alignment, payback horizon = district completion, broken-built-block remedy (clear rung).
+
+## 2026-11-14 12:00 Part 58: remote smelting proven live; early fixes measured
+- actions: merged 43127db (remote_smelting + bus feeds), 652b939/dc5ee38/905760e/b31e454 (report columns, plate cells end at the district, built-block repair on the clear rung, bus tap race), 86ca80b (input-source retry on new facts, tap hub aprons), f2b50e6/c14000c/3b5b5e8 (resumable what-if, bus keepouts, pole relocation).
+- metrics: aud-1114-0841 (c29746a) district 25.8 (11/12), bus 29.5 (11/12), red 7/12, idle 946 s; aud-1114-0752 (c98f4a4) 26.9 (10/12), 31.8 (8/12), idle 2682 s.
+- result: GUI map: plastics 458.1, sulfur 464.3, remote_smelting done 509.3 with the bus iron lane full. Early-blocker fixes confirmed by the bus reach 8 -> 11.
+- failure reason: plastic blocked (coal west of the bus band, sites east); pace still +5.8 / +9.5 over the 20 min target.
+- next: bus coal lane on an existing bus; coal remote bank; critical-chain analysis of 0841; turret research priority; electric_coal power loss.
