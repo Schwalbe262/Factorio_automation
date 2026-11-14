@@ -241,6 +241,22 @@ def _state_of(controller, *args):
     return state
 
 
+def _steam_saved(stage, obs):
+    """A steam stage's saved plan as a build in progress until its proof holds (its state has no phase).
+
+    eval-1575138435 (stage 3, 509-560 min): a transient obstruction on one planned pipe blocked the
+    built-half stage; every ladder re-plan from scratch found no bank slot (its own half-built bank in
+    the way) and the job never resumed although the tile was free again."""
+    state = getattr(stage, "state", None)
+    if not isinstance(state, Mapping) or not state.get("plan"):
+        return None
+    try:
+        done = stage.proof(obs) is not None
+    except (KeyError, TypeError, ValueError):
+        done = False
+    return dict(state, phase="verified" if done else "build")
+
+
 def _row_saved(ex, obs, parameters):
     from .production_rows import row_key
 
@@ -351,7 +367,11 @@ DRY_RUN = {
     # Engines and magazines are produce rows on a planned world (planned_products).
     "engine_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "ENGINE_ROW")),
     "ammo_production": DryRun(lambda ex, obs, p: _row_prepare(ex, obs, "AMMO_ROW")),
-    "steam_expansion": DryRun(lambda ex, obs, p: ex._steam_stage(p).prepare(obs)),
+    "steam_expansion": DryRun(
+        lambda ex, obs, p: ex._steam_stage(p).prepare(obs),
+        lambda ex, obs, p: ex._steam_stage(p).step(obs),
+        saved=lambda ex, obs, p: _steam_saved(ex._steam_stage(p), obs),
+    ),
     "power_coal_tap": DryRun(
         lambda ex, obs, p: ex.power_coal_tap.prepare(obs),
         lambda ex, obs, p: ex.power_coal_tap.step(obs),
@@ -363,7 +383,11 @@ DRY_RUN = {
         lambda ex, obs, p: ex.remote_smelting(p["resource"]).step(obs, p),
         saved=lambda ex, obs, p: _state_of(ex.remote_smelting(p["resource"])),
     ),
-    "bus_lane": DryRun(lambda ex, obs, p: ex.bus_lane(p["item"]).prepare(obs, p.get("side"))),
+    "bus_lane": DryRun(
+        lambda ex, obs, p: ex.bus_lane(p["item"]).prepare(obs, p.get("side")),
+        lambda ex, obs, p: ex.bus_lane(p["item"]).step(obs, p),
+        saved=lambda ex, obs, p: _state_of(ex.bus_lane(p["item"])),
+    ),
     "oil_gathering": DryRun(
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).prepare(obs),
         lambda ex, obs, p: ex._oil_source(p.get("source_key")).step(obs),
@@ -383,7 +407,11 @@ DRY_RUN = {
     "fluid_product": DryRun(lambda ex, obs, p: ex._fluid_products().prepare(obs, p)),
     "fluid_distribution": DryRun(lambda ex, obs, p: ex._fluid_distribution(p).prepare(obs)),
     "advanced_circuit_production": DryRun(lambda ex, obs, p: _sized_prepare(ex, ex.advanced_circuits, p)(obs)),
-    "chemical_production": DryRun(lambda ex, obs, p: ex.chemicals.prepare(obs, p)),
+    "chemical_production": DryRun(
+        lambda ex, obs, p: ex.chemicals.prepare(obs, p),
+        lambda ex, obs, p: ex.chemicals.step(obs, p),
+        saved=lambda ex, obs, p: ((_state_of(ex.chemicals) or {}).get("products") or {}).get(p.get("product")),
+    ),
     "chemical_science": DryRun(lambda ex, obs, p: _sized_prepare(ex, ex.blue, p)(obs)),
     "gas_distribution": DryRun(lambda ex, obs, p: ex.gas_distribution.prepare(obs)),
 }
