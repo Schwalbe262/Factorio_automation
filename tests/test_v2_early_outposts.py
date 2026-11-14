@@ -165,13 +165,15 @@ class LaneAndSlotTests(unittest.TestCase):
         self.submit("research", "bootstrap_research", {"technology": EMD})
         # The three outposts share one slot (all-1113-2107: the coal outpost waited 5 minutes for one).
         self.submit("cell", "supply_cell", {"products": ["transport-belt"]})
-        with self.assertRaisesRegex(ValueError, "early start keeps a job slot free"):
+        self.submit("coal-cells", "starter_capacity", {"resource": "coal", "cells": 3})
+        with self.assertRaisesRegex(ValueError, "at most 4 jobs may be active"):
             self.submit("district", "smelting_district")
         for resource in ("iron-ore", "copper-ore", "coal"):
             self.assertEqual(
                 run_slice(self.root, self.game, Executor(PARKED), resource, seconds=1)["status"], "waiting"
             )
-        # Three parked outposts: research + cell hold two slots, an early district keeps the last one free.
+        # Three parked outposts: research, cell and capacity hold three slots; the district takes the last
+        # one, since logistics waits behind the research job for the research lane.
         self.submit("district", "smelting_district")
         self.assertEqual(MAX_ACTIVE_JOBS, 4)
 
@@ -181,23 +183,40 @@ class LaneAndSlotTests(unittest.TestCase):
         self.submit("iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60})
         self.submit("copper", "mining_outpost", {"resource": "copper-ore", "rate_per_minute": 60})
         self.submit("coal", "mining_outpost", {"resource": "coal", "rate_per_minute": 30})  # was refused
-        with self.assertRaisesRegex(ValueError, "jobs may be active|early start"):
-            self.submit("district", "smelting_district")
+        # research + cell + the outposts' one slot: the district fits (logistics waits for the research lane)
+        self.submit("district", "smelting_district")
+        with self.assertRaisesRegex(ValueError, "jobs may be active"):
+            self.submit("coal-cells", "starter_capacity", {"resource": "coal", "cells": 3})
 
     def test_an_early_job_takes_the_last_slot_once_every_missing_requirement_is_active(self):
         """aud-1114-0436: supply cell, logistics and outposts active; the district waited until logistics ended."""
         self.submit("cell", "supply_cell", {"products": ["transport-belt"]})
         self.submit("iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60})
-        self.submit("research", "bootstrap_research", {"technology": EMD})
-        # Logistics, which the district runs ahead of, is not admitted yet: the slot stays free for it.
+        self.submit("coal-cells", "starter_capacity", {"resource": "coal", "cells": 3})
+        # Logistics, which the district runs ahead of, could start now: the last slot stays free for it.
         with self.assertRaisesRegex(ValueError, "early start keeps a job slot free"):
             self.submit("district", "smelting_district")
-        run_slice(self.root, self.game, Executor({"status": "succeeded"}), "research")
+        run_slice(self.root, self.game, Executor({"status": "succeeded"}), "coal-cells")
         self.submit("logistics", "bootstrap_logistics")
         # Both missing requirements (bootstrap_logistics, mining_outpost) are active: the 4th slot is the district's.
         self.submit("district", "smelting_district")
         with self.assertRaisesRegex(ValueError, "at most 4 jobs may be active"):
-            self.submit("coal", "starter_capacity", {"resource": "coal", "cells": 3})
+            self.submit("copper-cells", "starter_capacity", {"resource": "copper-ore", "cells": 3})
+
+    def test_an_early_job_runs_beside_research_that_holds_its_requirement_back(self):
+        """aud-1114-0930: the district was admitted only with logistics, after the drill research (+2.9 min)."""
+        self.submit("cell", "supply_cell", {"products": ["transport-belt"]})
+        self.submit("iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60})
+        self.submit("research", "bootstrap_research", {"technology": EMD})
+        # Logistics cannot start while the drill research owns the lane; that job frees its slot for it.
+        self.submit("district", "smelting_district")
+        run_slice(self.root, self.game, Executor({"status": "succeeded"}), "research")
+        # The lane is free: the freed slot is kept for logistics, not taken by other work.
+        with self.assertRaisesRegex(ValueError, "kept for bootstrap_logistics.*jobs may be active"):
+            self.submit("coal-cells", "starter_capacity", {"resource": "coal", "cells": 3})
+        self.submit("logistics", "bootstrap_logistics")
+        with self.assertRaisesRegex(ValueError, "at most 4 jobs may be active"):
+            self.submit("coal-cells", "starter_capacity", {"resource": "coal", "cells": 3})
 
     def test_a_parked_job_does_not_run_its_deadline_while_its_research_is_missing(self):
         self.submit("iron", "mining_outpost", {"resource": "iron-ore", "rate_per_minute": 60})

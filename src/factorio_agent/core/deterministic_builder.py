@@ -538,11 +538,25 @@ return {ok=true,only_actor=own_actor and not other and terrain}
             # the rest waits only for coming research, so the job holds no job slot.
             research = [why.startswith("waiting for research") for why in deferred.values()]
             order = [why == KEEP_ORDER_REASON for why in deferred.values()]
+            research_only = any(research) and all(r or o for r, o in zip(research, order))
+            precraft = getattr(defer, "precraft", None) if research_only else None
+            if callable(precraft):
+                # Parked: craft the ingredients of the research-locked items now (early_start rule 10).
+                locked = {item for item, why in deferred.items() if why.startswith("waiting for research")}
+                needs: Counter = Counter()
+                for entity in entities:
+                    if find(entity) is None:
+                        item = entity.get("item") or self._placement_item(entity["name"])
+                        if item in locked:
+                            needs[item] += 1
+                action = precraft(observation, dict(needs))
+                if action is not None:
+                    return action
             return _report(
                 "waiting",
                 ("waiting for deferred plan entities: " + reasons)[:300],
                 deferred=sorted(deferred),
-                research_only=any(research) and all(r or o for r, o in zip(research, order)),
+                research_only=research_only,
             )
         return _report(
             "succeeded",

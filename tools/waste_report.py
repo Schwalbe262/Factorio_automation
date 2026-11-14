@@ -154,6 +154,48 @@ def _end_tick(run, root):
     return max(ticks) if ticks else 0
 
 
+RESEARCH_OWNERS = frozenset({"starter_research", "bootstrap_research", "bootstrap_logistics", "research"})
+
+
+def _proposal_ticks(run, root: Path) -> dict:
+    """Job key -> game tick its queue node was created (``work_queue.json`` wall time on the event clock)."""
+    try:
+        nodes = json.loads((root / "work_queue.json").read_text(encoding="utf-8")).get("nodes") or []
+    except (OSError, ValueError, AttributeError):
+        return {}
+    clock = getattr(run, "clock", [])
+    found = {}
+    for node in nodes:
+        if isinstance(node, dict) and node.get("job_key") and isinstance(node.get("created_at"), (int, float)):
+            tick = cp._tick_at(clock, node["created_at"], {})
+            if isinstance(tick, int):
+                found[node["job_key"]] = tick
+    return found
+
+
+def _dispatch_cause(run, proposed, ready, submitted, capability) -> str:
+    """Where a late submit lost its time: the node came late (queue refill, a gate) or waited for admission."""
+    if not isinstance(proposed, int):
+        return "proposal time unknown (research gates not checked)"
+    late = max(0, proposed - ready) / TICKS
+    waited = max(0, submitted - max(proposed, ready)) / TICKS
+    cause = f"proposed +{late:.0f}s, admitted {waited:.0f}s after that"
+    if capability in RESEARCH_OWNERS and waited > DISPATCH_SLACK:
+        holders = sorted(
+            {
+                run.capability(k)
+                for k, start in run.start.items()
+                if run.capability(k) in RESEARCH_OWNERS
+                and start < submitted
+                and (run.end.get(k) or (10**12,))[0] > max(proposed, ready)
+            }
+            - {capability}
+        )
+        if holders:
+            cause += " (research lane: " + ", ".join(holders) + ")"
+    return cause + " (research gates not checked)"
+
+
 def analyse(root: Path) -> dict:
     run = cp.Run(root)
     seed = root.name.rsplit("-", 1)[-1]
@@ -393,6 +435,7 @@ def analyse(root: Path) -> dict:
 
     # Dispatch latency of on-path roadmap steps only (a fixed priority keeps a step off the path on purpose):
     # ready = the later of every `requires` capability's and every `after` step's first success.
+    proposed = _proposal_ticks(run, root)
     first_success = {}
     step_done = {}
     for key, (tick, status, _r) in run.end.items():
@@ -418,13 +461,15 @@ def analyse(root: Path) -> dict:
         latency = (submitted - max(ready)) / TICKS
         if latency > DISPATCH_SLACK:
             names = ", ".join(list(requires) + list(step.after))
+            first = min(keys, key=lambda k: run.start[k])
             w.add(
                 "dispatch_latency",
                 latency - DISPATCH_SLACK,
                 {
                     "tick": max(ready),
                     "job": step.id,
-                    "reason": f"submitted {latency:.0f}s after {names} were done (research gates not checked)",
+                    "reason": f"submitted {latency:.0f}s after {names} were done; "
+                    + _dispatch_cause(run, proposed.get(first), max(ready), submitted, step.capability),
                 },
             )
 

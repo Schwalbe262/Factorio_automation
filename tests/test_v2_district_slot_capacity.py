@@ -28,9 +28,12 @@ def decision(resource, target, current):
 
 class DistrictSlotTests(unittest.TestCase):
     def test_waits_for_a_slot_only_once_every_missing_requirement_is_active(self):
+        # logistics (a strict requirement) has no job and could start: the early start keeps the slot free
+        self.assertFalse(pg.district_waits_for_slot(BASE + OUTPOSTS, [DISTRICT_NODE], CAPABILITIES))
+        # aud-1114-0930: logistics waits behind the drill research for the research lane; that
+        # job frees its own slot for it, so the district waits only for a slot (capacity held back)
         jobs = BASE + OUTPOSTS + [job("bootstrap_research", "running", technology="electric-mining-drill")]
-        # logistics (a strict requirement) has no job yet: the early start keeps the slot free anyway
-        self.assertFalse(pg.district_waits_for_slot(jobs, [DISTRICT_NODE], CAPABILITIES))
+        self.assertTrue(pg.district_waits_for_slot(jobs, [DISTRICT_NODE], CAPABILITIES))
         jobs = BASE + OUTPOSTS + [job("bootstrap_logistics", "running")]
         self.assertTrue(pg.district_waits_for_slot(jobs, [DISTRICT_NODE], CAPABILITIES))
         self.assertFalse(pg.district_waits_for_slot(jobs, [], CAPABILITIES))

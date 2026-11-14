@@ -72,7 +72,7 @@ MAX_WORK = 8
 LANE_ITEMS_PER_TILE = 4.0  # a belt tile lane holds four items
 FUEL_ITEM = "coal"
 SHORTFALL = ("capacity_shortfall", "single_lane_feed", "lane_starvation")  # bandwidth_audit.SHORTFALL
-LOW_QUEUE = 2  # supervisor.LOW_QUEUE: below it the roadmap autopilot runs
+LOW_QUEUE = 2  # diagnostic only: the autopilot runs every cycle now (Supervisor._autopilot)
 GROWTH_PASS = True  # Supervisor._growth merges proposals every cycle (else only the queue-gated autopilot)
 
 WORKING = frozenset({"working", "normal", "low_power", "low_input_fluid", "preparing_rocket_launch"})
@@ -732,7 +732,7 @@ def _lane(node: Mapping) -> str:
 
 
 def queue_gate(jobs, queue_nodes) -> dict:
-    """Whether the supervisor's roadmap autopilot runs now (``Supervisor._queue_low``) and what holds dispatch."""
+    """How many queued nodes could dispatch (``queue_low``: fewer than two) and what holds dispatch."""
     from .jobs import MAX_ACTIVE_JOBS, slots_used
 
     active = [j for j in jobs or () if isinstance(j, Mapping) and j.get("status") in ACTIVE_JOB]

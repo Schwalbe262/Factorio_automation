@@ -179,6 +179,23 @@ class AutopilotTests(unittest.TestCase):
             ],
         )
 
+    def test_gas_header_comes_before_the_plastic_cell(self):
+        # gas_distribution refuses a gas outlet a chemical plan already owns; plastic first left
+        # sulfur without gas on the GUI map. The header is a real input of the plastic cell.
+        jobs = done_through("chemical_coal_supply")
+        nodes = ids(self.propose(jobs, limit=10))
+        self.assertIn("auto_gas_distribution", nodes)
+        self.assertNotIn("auto_chemical_production_plastic", nodes)
+        jobs.append(job("gas_distribution"))
+        self.assertIn("auto_chemical_production_plastic", ids(self.propose(jobs, limit=10)))
+
+    def test_first_steam_pair_needs_electric_coal_not_green_science(self):
+        jobs = done_through("research_fast_inserter")  # electric_coal done, no logistic_science job
+        self.assertNotIn("logistic_science", [j["capability"] for j in jobs])
+        self.assertIn("auto_steam_expansion", ids(self.propose(jobs, limit=10)))
+        without = [j for j in jobs if j["capability"] != "electric_coal"]
+        self.assertNotIn("auto_steam_expansion", ids(self.propose(without, limit=10)))
+
     def test_research_step_waits_for_available_research_listing(self):
         jobs = done_through("automation_science")
         available = {"available_research": {"technologies": [{"technology": "steel-processing"}]}}
@@ -228,7 +245,9 @@ class AutopilotTests(unittest.TestCase):
         ]
         observation = {"available_research": {"technologies": listed}, "tick": 400000}
         nodes = ids(self.propose(jobs, queue, observation=observation, limit=3))
-        self.assertEqual(nodes[:2], ["auto_logistic_science", "auto_steel_production"])
+        # The first steam pair no longer waits for green science (it needs only electric_coal),
+        # so it is proposed beside them in roadmap order.
+        self.assertEqual(nodes[:3], ["auto_logistic_science", "auto_steam_expansion", "auto_steel_production"])
         self.assertNotIn("auto_research_electric_energy_distribution_1", nodes)
 
     def test_completed_roadmap_proposes_nothing(self):

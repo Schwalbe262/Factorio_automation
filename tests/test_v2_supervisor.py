@@ -1453,11 +1453,35 @@ class AutopilotTests(Fixture):
         self.assertEqual(self.s.work.ready()["id"], "auto_starter")
         self.assertEqual(calls[0]["limit"], 3)
 
-    def test_full_queue_does_not_ask_autopilot(self):
-        calls = self.install([node("auto_starter")])
-        self.s.work.merge([node("a"), node("b", "power", ["a"])], CAPS, self.cli.validate_requests, 1)
-        self.assertFalse(self.s._autopilot(self.s._snapshot()))
-        self.assertEqual(calls, [])
+    def many(self):
+        patcher = patch.dict(CAPS, MANY)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cli.validate_requests = lambda rows: None
+
+    def test_full_queue_still_asks_autopilot_and_a_higher_step_dispatches_first(self):
+        # aud-1114-0930: two low-priority nodes waiting for a slot kept the autopilot off, so
+        # ammo_production (ready at the bus) was proposed 7.6 min late and admitted behind them.
+        self.many()
+        rows = [node("auto_c3", "c3", priority=50), node("auto_dup", "c1")]
+        calls = self.install(rows)
+        self.s.work.merge([node("a", "c0", priority=-500), node("b", "c1")], CAPS, self.cli.validate_requests, 1)
+        self.s.work.refresh([], CAPS)
+        self.assertEqual(self.s.work.queued_count(), 2)  # the old LOW_QUEUE gate: autopilot off
+        self.assertTrue(self.s._autopilot(self.s._snapshot()))
+        self.assertEqual(len(calls), 1)
+        ids = [q["id"] for q in self.s.work.data["nodes"]]
+        self.assertIn("auto_c3", ids)
+        self.assertNotIn("auto_dup", ids)  # same capability and parameters as queued "b": dropped
+        self.assertEqual(self.s.work.ready()["id"], "auto_c3")
+
+    def test_autopilot_rows_already_carried_by_the_queue_make_no_merge(self):
+        self.many()
+        self.install([node("auto_again", "c1")])
+        self.s.work.merge([node("b", "c1")], CAPS, self.cli.validate_requests, 1)
+        with patch.object(self.s, "_merge") as merge:
+            self.assertFalse(self.s._autopilot(self.s._snapshot()))
+        merge.assert_not_called()
 
     def test_missing_progression_module_or_function_means_no_autopilot(self):
         with patch.dict(sys.modules, {"factorio_agent.progression": None}):
