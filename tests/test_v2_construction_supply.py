@@ -125,7 +125,39 @@ class ConstructionSupplyTests(unittest.TestCase):
         obs["entities"].append(entity(5, 1))
         self.assertEqual(len(self.bootstrap._take_output(obs, "iron-plate", 50)["sources"]), 3)
         small = {"world_id": "world", "entities": [entity(3, 4)]}
-        self.assertEqual(self.bootstrap._take_output(small, "iron-plate", 3)["count"], 3)
+        # The trip goes anyway: it takes what piled up there (4), up to one batch, not just the 3.
+        self.assertEqual(self.bootstrap._take_output(small, "iron-plate", 3)["count"], 4)
+
+    def test_a_plate_trip_is_never_tiny(self):
+        # aud-1114-0930: runs of 1-plate takes, each followed by a 1-plate supply-cell feed.
+        two = {"world_id": "world", "entities": [entity(3, 1), entity(4, 1)]}
+        self.assertIsNone(self.bootstrap._take_output(two, "iron-plate", 1))  # waits for SMALL_TRANSFER + 1
+        three = {"world_id": "world", "entities": [entity(3, 2), entity(4, 1)]}
+        self.assertEqual(self.bootstrap._take_output(three, "iron-plate", 1)["count"], 3)
+        piled = {"world_id": "world", "entities": [entity(3, 30), entity(4, 30)]}
+        self.assertEqual(self.bootstrap._take_output(piled, "iron-plate", 1)["count"], 10)  # one batch (COLLECT_BATCH)
+        other = {"world_id": "world", "entities": [dict(entity(3, 0), belt_inventory={"pipe": 2})]}
+        self.assertEqual(self.bootstrap._take_output(other, "pipe", 2)["count"], 2)  # not a plate: unchanged
+
+    def test_coal_fetch_sweeps_every_coal_chest_in_one_take(self):
+        # aud-1114-0930: 1373 takes of ~11 coal from one starter coal chest, the neighbours as full.
+        def chest(unit, coal):
+            return {
+                "unit_number": unit,
+                "name": "wooden-chest",
+                "position": {"x": unit + 0.5, "y": 0.5},
+                "inventory": {"coal": coal},
+            }
+
+        obs = {"world_id": "world", "entities": [chest(1, 9), chest(2, 12), chest(3, 8)]}
+        result = self.bootstrap._take_output(obs, "coal", 40)
+        self.assertEqual((result["type"], result["count"]), ("take_many", 29))
+        self.assertEqual([s["unit_number"] for s in result["sources"]], [2, 1, 3])
+        self.assertEqual({s["kind"] for s in result["sources"]}, {"chest"})
+        validate_take_many(result)
+        self.assertEqual(self.bootstrap._take_output(obs, "coal", 5)["count"], 5)
+        one = {"world_id": "world", "entities": [chest(1, 9)]}
+        self.assertEqual(self.bootstrap._take_output(one, "coal", 40)["type"], "take")  # one chest: ordinary take
 
     def test_plate_trips_grow_with_measured_production(self):
         # Seed 2099054105: 110 trips of 10 iron plates in 28 minutes. A trip
@@ -195,7 +227,7 @@ class ConstructionSupplyTests(unittest.TestCase):
         for field, values in {
             "count": [0, 51, True, 1.5],
             "world_id": [None, ""],
-            # coal is allowed off belts only (BELT_FUELS, test_v2_trunk_fuel); wood never
+            # coal is allowed off belts and chests only (BELT_FUELS, test_v2_trunk_fuel); wood never
             "item": ["wood", "iron-ore", "logistic-science-pack", "sulfuric-acid"],
             "sources": [[], "bad", [source(i, x=i + 0.5) for i in range(1, 18)]],
         }.items():

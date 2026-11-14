@@ -119,9 +119,12 @@ class TrunkFuelTests(unittest.TestCase):
         self.obs["entities"] = [drill, chest, coal_drill]  # no trunk: wait for the chest batch
         self.assertIsNone(self.bootstrap.maintain_fuel(self.obs))
 
-    def test_fuel_take_many_only_from_belts(self):
+    def test_fuel_take_many_only_from_belts_and_chests(self):
+        # Never out of a machine (a burner's or furnace's own slots): belts and coal chests only.
         action = self.bootstrap.trunk_fuel(self.obs, "coal", 24)
         action["sources"][0] = dict(action["sources"][0], kind="chest", name="wooden-chest")
+        validate_take_many(action)  # the starter coal chests (V2Bootstrap.chest_fuel)
+        action["sources"][0] = dict(action["sources"][0], kind="output", name="stone-furnace")
         with self.assertRaises(ValueError):
             validate_take_many(action)
 

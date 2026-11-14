@@ -128,8 +128,8 @@ def validate_take_many(action):
             or (row["kind"] == "belt" and row["name"] == "transport-belt")
         ):
             raise ValueError("take_many accepts only machine outputs, chests and ordinary transport belts")
-        if action["item"] in BELT_FUELS and row["kind"] != "belt":
-            raise ValueError("take_many takes fuel only from mine trunk belts")
+        if action["item"] in BELT_FUELS and row["kind"] not in ("belt", "chest"):
+            raise ValueError("take_many takes fuel only from mine trunk belts and coal chests")
         position = row["position"]["x"], row["position"]["y"]
         if row["unit_number"] in units or position in positions:
             raise ValueError("take_many sources must have distinct unit identities and positions")
@@ -164,6 +164,12 @@ SURPLUS_OUTPUT_STOCK = 20
 HAUL_MINUTES = 0.5
 PLATE_BATCH = 50  # cap for one plate trip (MAX_ITEMS)
 PLATES = frozenset({"iron-plate", "copper-plate"})
+# A transfer of this many items or fewer is a "tiny" one (``tools/waste_report.py`` action_loop,
+# count<=2). Fleet aud-1114-0930 (12 seeds, first 32 min): 266 of 726 supply-cell iron feeds,
+# 286 of 305 wood feeds and 97 of 102 startup science inserts were tiny, typically a 1-plate
+# take followed by a 1-plate feed, 91 times in a row. A trip that goes anyway takes what has piled
+# up there (up to its batch) and a feed carries the trip's surplus, so the next visits fold in.
+SMALL_TRANSFER = 2
 RATE_WINDOW_TICKS = 3600  # production rate is measured over the last game minute or more
 
 
@@ -440,6 +446,42 @@ class V2Bootstrap(DeterministicBootstrap):
             "reason": f"collect hand-fuel {item} from the coal patch trunk",
         }
 
+    def chest_fuel(self, observation, item, count) -> dict | None:
+        """One ``take_many`` of coal from every chest holding it (the starter coal cells), or None.
+
+        The ordinary take empties one chest; fleet aud-1114-0930 (12 seeds, first 32 min) took 1373
+        times about 11 coal from one starter coal chest while the neighbouring chests held as much,
+        and each fetch fed one burner (1394 fuel inserts of 10.5 coal). Two or more chests only.
+        ``observation`` is the unreserved one (block-owned chests are already left out).
+        """
+        if item not in BELT_FUELS or type(count) is not int or count < 1:
+            return None
+        world = observation.get("world_id")
+        if not isinstance(world, str) or not world:
+            return None
+        rows = []
+        for e in observation.get("entities", []):
+            unit, p = e.get("unit_number"), e.get("position")
+            if e.get("name") not in CHEST_NAMES or type(unit) is not int or unit < 1 or not _position(p):
+                continue
+            stock = (e.get("inventory") or {}).get(item, 0)
+            if type(stock) in (int, float) and math.isfinite(stock) and stock >= 1:
+                rows.append(
+                    (int(stock), {"name": e["name"], "position": dict(p), "unit_number": unit, "kind": "chest"})
+                )
+        if len(rows) < 2:
+            return None
+        rows.sort(key=lambda r: (-r[0], r[1]["unit_number"]))
+        rows = rows[:MAX_SOURCES]
+        return {
+            "type": "take_many",
+            "item": item,
+            "count": min(count, MAX_ITEMS, sum(n for n, _ in rows)),
+            "world_id": world,
+            "sources": [source for _, source in rows],
+            "reason": f"collect hand-fuel {item} from the coal cells' chests",
+        }
+
     def production_rate(self, observation, item):
         """Recent items/minute of ``item`` (see :func:`production_rate`)."""
         samples = self.__dict__.setdefault("_rate_samples", {})
@@ -653,6 +695,9 @@ class V2Bootstrap(DeterministicBootstrap):
             trunk = self.trunk_fuel(whole, item, count) if item in BELT_FUELS else None
             if trunk is not None and (action is None or action.get("count", 0) < min(count, trunk["count"])):
                 return trunk  # the permanent coal source in one full fetch, not a chest's few pieces
+            chests = self.chest_fuel(observation, item, count) if item in BELT_FUELS else None
+            if chests is not None and (action is None or action.get("count", 0) < chests["count"]):
+                action = chests  # every coal chest in one fetch, not one chest's few pieces
             if (
                 item in FUELS
                 and action is not None
@@ -728,10 +773,17 @@ class V2Bootstrap(DeterministicBootstrap):
         batch = COLLECT_BATCH
         if item in PLATES:
             batch = haul_batch(self.production_rate(observation, item), COLLECT_BATCH, PLATE_BATCH)
-        if on_hand < min(count, batch) and all(row[0] for row in candidates):
+        # A plate trip is never tiny (SMALL_TRANSFER): with plates being made it waits for a few more.
+        least = max(count, SMALL_TRANSFER + 1) if item in PLATES else count
+        if on_hand < min(least, batch) and all(row[0] for row in candidates):
             return None
         if any(not row[1] for row in candidates):
             count = max(count, batch)  # surplus on the permanent supply: one full trip, not just the shortfall
+        elif item in PLATES:
+            # The trip goes anyway: take what has piled up at the furnaces, up to one batch, so
+            # the next small requests are served from the hands (aud-1114-0930: 2088 iron takes
+            # in 12 runs, runs of 1-plate takes each followed by a 1-plate supply-cell feed).
+            count = max(count, min(on_hand, batch))
         return {
             "type": "take_many",
             "item": item,
