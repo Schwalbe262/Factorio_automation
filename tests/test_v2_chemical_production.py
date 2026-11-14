@@ -681,6 +681,112 @@ class ChemicalControllerTests(unittest.TestCase):
         self.assertEqual(failed["reason"], "chemical_no_site_allocation")
         self.assertEqual(plan_needs.from_result("chemical_production", failed)["kind"], "site")
 
+    def _east_site(self):
+        from factorio_agent import block_sites
+        from factorio_agent.chemical_production import chemical_core
+        from factorio_agent.site.geometry import Rect
+
+        block_sites.footprint(lambda x, y: chemical_core(self.catalog, "plastic-bar", x, y))
+
+        class Site:
+            def allocate_candidates(self, kind, w, h, *, name, count, returns_to_bus, world_id):
+                return [SimpleNamespace(name=name + "#0", side="right", rect=Rect(40, -60, 40 + w, -60 + h))]
+
+            def keep_only(self, prefix, keep, world_id=None):
+                pass
+
+        self.c.site = Site()
+
+    def test_a_built_bus_coal_lane_feeds_the_cell_by_a_tap_planned_before_the_pipes(self):
+        # eval-1575138435: the plastic sites east of the bus had coal only west of the band;
+        # a coal lane on the bus serves them through an ordinary planned-bus tap.
+        from factorio_agent.chemical_production import BUS_TAP
+
+        self._east_site()
+        self.sources.return_value = dict(
+            deepcopy(self.ready), sources={"petroleum-gas": self.gas, "coal": {"kind": BUS_TAP, "item": "coal"}}
+        )
+        order = []
+        tap = {
+            "name": "chemical_production_plastic-bar:coal",
+            "item": "coal",
+            "entities": [entity("splitter", 30.0, -50.5, 0), entity("transport-belt", 31.5, -49.5, 0)],
+            "underground_pairs": [],
+            "port": {"kind": "item", "item": "coal", "position": {"x": 33.5, "y": -48.5}, "facing": 4},
+            "built": False,
+        }
+        coal_belt = entity("transport-belt", 34.5, -48.5, 4)
+
+        def taps(game, builder, obs, bus, allocation, *, owner, ports, entities, demand):
+            order.append("tap")
+            self.assertEqual(allocation.side, "right")
+            self.assertEqual(ports[0]["item"], "coal")
+            return {
+                "ok": True,
+                "entities": list(entities) + tap["entities"] + [coal_belt],
+                "taps": [tap],
+                "routes": [{"entities": [coal_belt], "underground_pairs": []}],
+                "ignored_units": [],
+            }
+
+        piped = []
+
+        def connection(game, builder, obs, source, destination, core, prior, **kwargs):
+            order.append("pipe")
+            piped.append(core)
+            points = [entity("pipe", x, source["position"]["y"]) for x in (1.5, 2.5, 3.5, 4.5)]
+            return {
+                "ok": True,
+                "entities": points,
+                "underground_pairs": [],
+                "first_neighbor": dict(points[0], fluidbox_index=1),
+            }
+
+        self.connection.side_effect = connection
+        with (
+            patch("factorio_agent.block_sites.bus_taps", side_effect=taps),
+            patch("factorio_agent.block_sites.planned_bus", return_value={"trunks": [{"item": "coal"}]}),
+        ):
+            entry = self.c.prepare(self.obs, self.params)
+        self.assertTrue(entry["ok"], entry)
+        self.assertEqual(order[:2], ["tap", "pipe"])
+        self.assertIn(coal_belt, piped[0]["entities"])  # the pipe keeps off the coal belt
+        self.assertEqual(entry["taps"], [tap])
+        self.assertIn(coal_belt, entry["plan"]["entities"])
+        self.assertFalse(any(e["name"] == "splitter" for e in entry["plan"]["entities"]))  # tap hardware is the bus's
+
+    def test_coal_with_no_way_across_the_bus_band_names_a_bus_lane(self):
+        from factorio_agent import plan_needs
+        from factorio_agent.chemical_production import ACROSS_BAND
+
+        self._east_site()
+        failure = {"ok": False, "reason": "no_clean_trunk_corridor"}
+        with (
+            patch("factorio_agent.chemical_production.belt_connection", return_value=failure),
+            patch("factorio_agent.block_sites.planned_bus", return_value={"trunks": [{"item": "iron-plate"}]}),
+        ):
+            result = self.c.prepare(self.obs, self.params)
+        needs = plan_needs.from_result("chemical_production", dict(result, status="blocked"))
+        self.assertEqual(
+            (needs["kind"], needs["reason"], needs["item"], needs["side"]), ("route", ACROSS_BAND, "coal", "right")
+        )
+
+    def test_the_coal_source_is_the_bus_lane_once_the_bus_carries_coal(self):
+        from factorio_agent.chemical_production import BUS_TAP
+
+        self.sources_patch.stop()
+        self.game.query = Mock(return_value={"ok": True, "snapshots": {}})
+        with patch("factorio_agent.chemical_production._bus_carries", return_value=False):
+            self.assertEqual(self.c._sources(self.obs, "plastic-bar")["sources"]["coal"], self.coal)
+        with patch("factorio_agent.chemical_production._bus_carries", return_value=True):
+            got = self.c._sources(self.obs, "plastic-bar")
+        self.assertEqual(got["sources"]["coal"], {"kind": BUS_TAP, "item": "coal"})
+        self.assertNotIn('"coal"', self.game.query.call_args[0][0].split("helpers.json_to_table(")[1][:200])
+        # A product bound to the registry belt keeps it.
+        self.c.state = {"products": {"plastic-bar": {"sources": {"petroleum-gas": self.gas, "coal": self.coal}}}}
+        with patch("factorio_agent.chemical_production._bus_carries", return_value=True):
+            self.assertEqual(self.c._sources(self.obs, "plastic-bar")["sources"]["coal"], self.coal)
+
     def test_prepare_readonly_paid_core_complete_sources_and_natural_technology(self):
         with patch("factorio_agent.chemical_production._atomic_json") as write:
             entry = self.c.prepare(self.obs, self.params)

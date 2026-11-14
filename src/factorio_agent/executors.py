@@ -651,6 +651,15 @@ class StarterExecutors:
             )
         return self._remote[resource]
 
+    def bus_lane(self, item):
+        """``BusLane`` of ``item`` (one lane per item, ``bus-lane-<item>.json``)."""
+        cache = self.__dict__.setdefault("_bus_lanes", {})
+        if item not in cache:
+            from .bus_lane import BusLane
+
+            cache[item] = BusLane(self.game, self.builder, self.catalog, outposts=self.outposts, item=item)
+        return cache[item]
+
     def _steam_stage(self, parameters):
         """``SteamExpansion`` of a power growth stage (``power_growth.stage_of``; stage 1 is ``steam_expansion``)."""
         from .power_growth import stage_of
