@@ -30,6 +30,10 @@ from .power_grid import plan_connection
 
 
 EAST = 4
+# Starter cell entities (burner drill -> furnace or chest) that may be cleared out of the
+# electric footprint (ElectricCoal._clearable_starter), at most this many.
+STARTER_CELL_NAMES = frozenset({"burner-mining-drill", "stone-furnace", "wooden-chest", "iron-chest"})
+MAX_CLEARED_STARTER = 4
 LEGACY_TRUNK_POLICY = "pcb-trunks-v1"
 # Template, layout policy and fuel inserter (dx, dy, direction) relative to
 # the burner drill centre. Both generators only ever emit east-facing cells.
@@ -207,33 +211,17 @@ class ElectricCoal:
             for spec in layout["displaced"]
         ]
         # Only the old drill and the displaced fuel inserter, both removed by
-        # this controller, may stand in the electric footprint.
+        # this controller, may stand in the electric footprint, and starter cell
+        # entities no block owns (``_clearable_starter``), mined first as well.
         ignore = [original["unit_number"]] + [row["unit_number"] for row in displaced if row["unit_number"]]
-        payload = json.dumps(json.dumps({"ignore": ignore, "new": replacement}, separators=(",", ":")))
-        survey = self.game.query(
-            """
-local args=helpers.json_to_table("""
-            + payload
-            + """);local n=args.new;local proto=prototypes.entity[n.name]
-local ignore={};for _,id in ipairs(args.ignore) do ignore[id]=true end
-local left=n.position.x-1.5;local top=n.position.y-1.5;local right=left+3;local bottom=top+3
-for _,e in pairs(s.find_entities_filtered{area={{left+.01,top+.01},{right-.01,bottom-.01}}}) do
- if e.type~="resource" and not (e.unit_number and ignore[e.unit_number]) and e~=a and not e.prototype.collision_mask.colliding_with_tiles_only then
-  return {ok=false,reason="electric_upgrade_footprint_obstructed",entity=e.name,position={x=e.position.x,y=e.position.y}}
- end
-end
-for x=left,right-1 do for y=top,bottom-1 do
- for layer in pairs(proto.collision_mask.layers) do if s.get_tile(x,y).collides_with(layer) then return {ok=false,reason="electric_upgrade_terrain_obstructed"} end end
-end end
-local radius=proto.mining_drill_radius;local amount=0
-for _,ore in pairs(s.find_entities_filtered{area={{n.position.x-radius,n.position.y-radius},{n.position.x+radius,n.position.y+radius}},type="resource"}) do
- if ore.name~="coal" then return {ok=false,reason="electric_upgrade_mixed_resource"} end;amount=amount+ore.amount
-end
-if amount<=0 then return {ok=false,reason="electric_upgrade_no_coal"} end
-local v=proto.vector_to_place_result;local drop={x=n.position.x-(v.y or v[2]),y=n.position.y+(v.x or v[1])}
-return {ok=true,drop=drop,remaining=amount}
-"""
-        )
+        for _ in range(MAX_CLEARED_STARTER + 1):
+            survey = self._footprint_survey(ignore, replacement)
+            clear = self._clearable_starter(obs, survey)
+            if clear is None:
+                break
+            spec = {"name": clear["name"], "position": deepcopy(clear["position"])}
+            displaced.append({"spec": spec, "unit_number": clear["unit_number"]})
+            ignore.append(clear["unit_number"])
         if not survey.get("ok"):
             return survey
         recipient = matching_belt(old["entities"], survey["drop"])
@@ -263,6 +251,65 @@ return {ok=true,drop=drop,remaining=amount}
             "retained_drop_belt": recipient,
             "layout_variant": layout["variant"],
         }
+
+    def _footprint_survey(self, ignore, replacement):
+        """Native survey of the electric footprint: the first obstruction, terrain, ore and the drop tile."""
+        payload = json.dumps(json.dumps({"ignore": ignore, "new": replacement}, separators=(",", ":")))
+        return self.game.query(
+            """
+local args=helpers.json_to_table("""
+            + payload
+            + """);local n=args.new;local proto=prototypes.entity[n.name]
+local ignore={};for _,id in ipairs(args.ignore) do ignore[id]=true end
+local left=n.position.x-1.5;local top=n.position.y-1.5;local right=left+3;local bottom=top+3
+for _,e in pairs(s.find_entities_filtered{area={{left+.01,top+.01},{right-.01,bottom-.01}}}) do
+ if e.type~="resource" and not (e.unit_number and ignore[e.unit_number]) and e~=a and not e.prototype.collision_mask.colliding_with_tiles_only then
+  return {ok=false,reason="electric_upgrade_footprint_obstructed",entity=e.name,position={x=e.position.x,y=e.position.y}}
+ end
+end
+for x=left,right-1 do for y=top,bottom-1 do
+ for layer in pairs(proto.collision_mask.layers) do if s.get_tile(x,y).collides_with(layer) then return {ok=false,reason="electric_upgrade_terrain_obstructed"} end end
+end end
+local radius=proto.mining_drill_radius;local amount=0
+for _,ore in pairs(s.find_entities_filtered{area={{n.position.x-radius,n.position.y-radius},{n.position.x+radius,n.position.y+radius}},type="resource"}) do
+ if ore.name~="coal" then return {ok=false,reason="electric_upgrade_mixed_resource"} end;amount=amount+ore.amount
+end
+if amount<=0 then return {ok=false,reason="electric_upgrade_no_coal"} end
+local v=proto.vector_to_place_result;local drop={x=n.position.x-(v.y or v[2]),y=n.position.y+(v.x or v[1])}
+return {ok=true,drop=drop,remaining=amount}
+"""
+        )
+
+    def _clearable_starter(self, obs, survey):
+        """The observed starter cell entity obstructing the footprint, when no block owns it; else None.
+
+        Fleet aud-1114-0841 seed 1971789367: a starter cell's burner drill placed before the feed's
+        upgrade site was reserved (``board.coal_upgrade_area``) stood in the footprint, and
+        electric_coal blocked for good with ``electric_upgrade_footprint_obstructed``. A starter
+        cell is hand-served busywork the planner may rebuild elsewhere; it is mined (paid,
+        identity-guarded) with the displaced fuel inserter. Board blocks and power plans are kept.
+        """
+        if survey.get("ok") or survey.get("reason") != "electric_upgrade_footprint_obstructed":
+            return None
+        if survey.get("entity") not in STARTER_CELL_NAMES:
+            return None
+        live = self.find(obs, {"name": survey["entity"], "position": survey.get("position")})
+        if live is None or type(live.get("unit_number")) is not int:
+            return None
+        key = (live["name"], live["position"]["x"], live["position"]["y"])
+        plans = [self.builder.state.get(name) or {} for name in ("power_plan", "coal_plan")]
+        owned = {
+            (e["name"], e["position"]["x"], e["position"]["y"]) for plan in plans for e in plan.get("entities") or ()
+        }
+        root = Path(self.game.cfg.runtime_dir)
+        try:
+            board = json.loads((root / "pcb-board.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            board = {}
+        blocks = board.get("blocks") if board.get("world_id") == obs.get("world_id") else None
+        for block in (blocks or {}).values():
+            owned |= {(e["name"], e["position"]["x"], e["position"]["y"]) for e in block.get("entities") or ()}
+        return None if key in owned else live
 
     def _plan_power(self, obs, layout, old, replacement):
         """Plan the pole chain to the electric drill with ``plan_connection``.
@@ -337,7 +384,7 @@ return {ok=true,drop=drop,remaining=amount}
                 "count": 1,
                 "expected_entity_unit": actual["unit_number"],
                 "expected_entity_world_id": obs["world_id"],
-                "reason": "recover burner fuel inserter inside the electric drill footprint before cutover",
+                "reason": f"recover {actual['name']} inside the electric drill footprint before cutover",
             }
         return None
 
